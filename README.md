@@ -1,3 +1,4 @@
+
 # ZoodSub - Telegram Mini App (TWA)
 
 ZoodSub is a modern Telegram Mini App designed for selling premium digital subscriptions (Spotify, Netflix, etc.) with instant delivery. 
@@ -18,18 +19,28 @@ The project is built with a modern, scalable stack:
 
 1. **Clone the repository:**
    ```bash
-   git clone [https://github.com/your-repo/zoodsub.git](https://github.com/your-repo/zoodsub.git)
+   git clone [https://github.com/your-repo/zoodsub.git](https://github.com/Ilia-Shakeri/zoodsub.git)
    cd zoodsub
-Configure Environment Variables:
-Update the docker-compose.yml file with your BOT_TOKEN and WEBHOOK_URL, or pass them via a .env file.
 
-Start the Infrastructure:
+2. **Configure Environment Variables:**
+Update the `docker-compose.yml` file with your `BOT_TOKEN` and `WEBHOOK_URL`, or pass them via a `.env` file.
+3. **Start the Infrastructure:**
+   ```bash
+   docker-compose up -d --build
+   ```
 
-Bash
-docker-compose up -d --build
-Run the Frontend locally (for development):
 
-Bash
-cd frontend
-npm install
-npm run dev
+4. **Run the Frontend locally (for development):**
+   ```bash
+   cd frontend
+   npm install
+   npm run dev
+   ```
+
+
+
+## DevOps Notes
+
+* The backend Docker container runs as a non-root user for enhanced security.
+* In production, the FastAPI webhook endpoint should be secured behind a reverse proxy (like Nginx or Traefik) with SSL/TLS enabled.
+
