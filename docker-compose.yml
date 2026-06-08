@@ -1,0 +1,41 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgres:15-alpine
+    restart: always
+    environment:
+      POSTGRES_USER: zoodsub_user
+      POSTGRES_PASSWORD: zoodsub_password
+      POSTGRES_DB: zoodsub_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    restart: always
+    ports:
+      - "6379:6379"
+    volumes:
+      - redisdata:/data
+
+  backend:
+    build: 
+      context: ./backend
+    restart: always
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql://zoodsub_user:zoodsub_password@db:5432/zoodsub_db
+      - REDIS_URL=redis://redis:6379/0
+      - BOT_TOKEN=YOUR_TELEGRAM_BOT_TOKEN # We will replace this later
+      - WEBHOOK_URL=https://your-domain.com/webhook # We will replace this later
+    depends_on:
+      - db
+      - redis
+
+volumes:
+  pgdata:
+  redisdata:
