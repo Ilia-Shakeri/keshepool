@@ -5,6 +5,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import { 
   Zap, 
   Users, 
@@ -21,10 +22,10 @@ import {
   Music,
   Crown,
   CheckCircle2,
-  AlertCircle
+  MonitorPlay,
+  Smartphone,
+  CreditCard
 } from "lucide-react";
-
-// Import Dialog components from your UI library
 import {
   Dialog,
   DialogContent,
@@ -36,15 +37,59 @@ import {
   DialogClose
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+import Image from "next/image";
+
+// Define our product mock data
+const PRODUCTS = [
+  {
+    id: "spotify",
+    title: "اسپاتیفای پرمیوم", 
+    brand: "اسپاتیفای",
+    subtitle: "اکانت ۱ ماهه • بدون قطعی • ریجن ترکیه",
+    price: "۱۶۰,۰۰۰",
+    rawPrice: 160000,
+    icon: <Music className="w-5 h-5 text-white" />,
+    gradient: "from-green-400 to-green-600",
+    shadow: "shadow-green-500/30"
+  },
+  {
+    id: "netflix",
+    title: "نتفلیکس پرمیوم", 
+    brand: "نتفلیکس",
+    subtitle: "اکانت ۱ ماهه • کیفیت 4K • پروفایل اختصاصی",
+    price: "۲۵۰,۰۰۰",
+    rawPrice: 250000,
+    icon: <MonitorPlay className="w-5 h-5 text-white" />,
+    gradient: "from-red-500 to-red-700",
+    shadow: "shadow-red-500/30"
+  },
+  {
+    id: "apple",
+    title: "اپل موزیک", 
+    brand: "اپل",
+    subtitle: "اکانت ۳ ماهه • ریجن آمریکا • فامیلی",
+    price: "۱۸۰,۰۰۰",
+    rawPrice: 180000,
+    icon: <Smartphone className="w-5 h-5 text-white" />,
+    gradient: "from-slate-400 to-slate-600",
+    shadow: "shadow-slate-500/30"
+  }
+];
 
 export default function Home() {
+  // Initialize Next.js router for page navigation
+  const router = useRouter();
+
   // State for the spinning wheel animation
   const [isSpinning, setIsSpinning] = useState(false);
   const [spinResult, setSpinResult] = useState<string | null>(null);
 
-  // State to manage the active dialog modals
+  // State to manage the purchase modal and product carousel
   const [isPurchaseModalOpen, setIsPurchaseModalOpen] = useState(false);
-  const [activeTabModal, setActiveTabModal] = useState<string | null>(null);
+  const [currentProductIndex, setCurrentProductIndex] = useState(0);
+
+  // Retrieve current product based on index
+  const activeProduct = PRODUCTS[currentProductIndex];
 
   useEffect(() => {
     // Initialize Telegram Web App SDK
@@ -65,19 +110,26 @@ export default function Home() {
   // Handler for the spin wheel button
   const handleSpin = () => {
     if (isSpinning) return;
-    
     setIsSpinning(true);
     setSpinResult(null);
 
     // Simulate an API call or a spinning delay (3 seconds)
     setTimeout(() => {
       setIsSpinning(false);
-      setSpinResult("شما 20٪ تخفیف برنده شدید!"); // "You won a 20% discount!"
+      setSpinResult("شما 20٪ تخفیف برنده شدید!"); 
     }, 3000);
   };
 
+  // Handlers for product carousel navigation
+  const handleNextProduct = () => {
+    setCurrentProductIndex((prev) => (prev + 1) % PRODUCTS.length);
+  };
+
+  const handlePrevProduct = () => {
+    setCurrentProductIndex((prev) => (prev === 0 ? PRODUCTS.length - 1 : prev - 1));
+  };
+
   return (
-    // The container allows vertical scrolling naturally with pb-32 to clear the fixed footer
     <div className="min-h-screen bg-[#0f172a] text-slate-100 font-sans pb-32 relative selection:bg-cyan-500 selection:text-white overflow-y-auto">
       
       {/* Top Header Bar */}
@@ -90,15 +142,31 @@ export default function Home() {
             <MoreVertical className="w-6 h-6" />
           </button>
         </div>
-        <h1 className="text-xl font-bold text-white flex items-center gap-2 tracking-wide">
-          زودساب
-        </h1>
+        
+        <div className="flex items-center gap-3">
+          {/* Modernized Persian Title */}
+          <h1 className="text-xl font-extrabold tracking-wide flex items-center">
+            <span className="text-purple-400 drop-shadow-md">زود</span>
+            <span className="text-cyan-400 drop-shadow-md">ساب</span>
+          </h1>
+          
+          {/* Enlarged, Box-less Logo */}
+          <div className="relative w-28 h-10"> 
+            <Image 
+              src="/logo.png" 
+              alt="ZoodSub Logo" 
+              fill
+              className="object-contain" 
+              priority
+            />
+          </div>
+        </div>
       </header>
 
       <main className="p-4 space-y-6 max-w-lg mx-auto">
         
         {/* Main Product Card */}
-        <div className="bg-gradient-to-b from-[#1e1b4b] via-[#312e81] to-[#0f172a] rounded-3xl p-6 text-white shadow-2xl relative overflow-hidden border border-indigo-500/20 mt-2">
+        <div className="bg-gradient-to-b from-[#1e1b4b] via-[#312e81] to-[#0f172a] rounded-3xl p-6 text-white shadow-2xl relative overflow-hidden border border-indigo-500/20 mt-2 transition-all duration-500">
           
           {/* Background Glow Effect */}
           <div className="absolute top-0 right-0 w-32 h-32 bg-cyan-500/10 rounded-full blur-3xl pointer-events-none"></div>
@@ -110,21 +178,21 @@ export default function Home() {
             </span>
             <div className="flex items-center gap-2">
               <div className="text-right">
-                <h2 className="text-sm font-bold text-white">اسپاتیفای</h2>
+                <h2 className="text-sm font-bold text-white">{activeProduct.brand}</h2>
                 <p className="text-[10px] text-cyan-400 font-mono tracking-widest uppercase">Premium</p>
               </div>
-              <div className="bg-gradient-to-br from-green-400 to-green-600 p-2 rounded-full shadow-lg shadow-green-500/30">
-                <Music className="w-5 h-5 text-white" />
+              <div className={`bg-gradient-to-br ${activeProduct.gradient} p-2 rounded-full shadow-lg ${activeProduct.shadow} transition-colors duration-500`}>
+                {activeProduct.icon}
               </div>
             </div>
           </div>
 
           {/* Title & Subtitle */}
-          <div className="text-center mb-6 relative z-10">
-            <h1 className="text-4xl font-extrabold mb-2 text-white drop-shadow-md">اسپاتیفای پرمیوم</h1>
-            <p className="text-sm text-indigo-200/70">اکانت ۱ ماهه • بدون قطعی • ریجن ترکیه</p>
+          <div className="text-center mb-6 relative z-10 h-32 flex flex-col justify-center">
+            <h1 className="text-4xl font-extrabold mb-2 text-white drop-shadow-md">{activeProduct.title}</h1>
+            <p className="text-sm text-indigo-200/70">{activeProduct.subtitle}</p>
             <div className="mt-4 text-3xl font-bold text-cyan-400 flex items-center justify-center gap-2">
-              ۱۶۰,۰۰۰ <span className="text-base font-normal text-cyan-400/60">تومان</span>
+              {activeProduct.price} <span className="text-base font-normal text-cyan-400/60">تومان</span>
             </div>
           </div>
 
@@ -136,15 +204,15 @@ export default function Home() {
             
             <div className="space-y-4 pt-4 text-sm font-medium">
               <div className="flex justify-between items-center text-cyan-400 hover:bg-slate-800/50 p-2 rounded-lg transition-colors cursor-pointer">
-                <span>۱۶۰,۰۰۰ تومان</span>
+                <span>{activeProduct.price} تومان</span>
                 <span className="flex items-center gap-2">خرید عادی <Zap className="w-4 h-4 fill-current" /></span>
               </div>
               <div className="flex justify-between items-center text-purple-400 hover:bg-slate-800/50 p-2 rounded-lg transition-colors cursor-pointer">
-                <span>۱۳۰,۰۰۰ تومان</span>
+                <span>{(activeProduct.rawPrice * 0.85).toLocaleString('fa-IR')} تومان</span>
                 <span className="flex items-center gap-2">با ۲ دعوت <Users className="w-4 h-4 fill-current" /></span>
               </div>
               <div className="flex justify-between items-center text-pink-500 hover:bg-slate-800/50 p-2 rounded-lg transition-colors cursor-pointer">
-                <span>۱۰۰,۰۰۰ تومان</span>
+                <span>{(activeProduct.rawPrice * 0.70).toLocaleString('fa-IR')} تومان</span>
                 <span className="flex items-center gap-2">با ۵ دعوت <Flame className="w-4 h-4 fill-current" /></span>
               </div>
             </div>
@@ -161,15 +229,16 @@ export default function Home() {
               <DialogHeader>
                 <DialogTitle className="text-right text-xl font-bold text-cyan-400">تایید سفارش</DialogTitle>
                 <DialogDescription className="text-right text-slate-400 mt-2">
-                  شما در حال خرید اسپاتیفای پرمیوم ۱ ماهه به مبلغ ۱۶۰,۰۰۰ تومان هستید. آیا مطمئنید؟
+                  شما در حال خرید {activeProduct.title} به مبلغ {activeProduct.price} تومان هستید.
+                  آیا مطمئنید؟
                 </DialogDescription>
               </DialogHeader>
               <div className="flex flex-col gap-3 mt-4">
-                <Button className="w-full bg-green-600 hover:bg-green-500 text-white py-6 rounded-xl text-lg font-bold" onClick={() => {
-                  alert("Redirecting to payment gateway..."); // Replace with actual payment logic
+                <Button className="w-full bg-green-600 hover:bg-green-500 text-white py-6 rounded-xl text-lg font-bold flex gap-2" onClick={() => {
+                  alert("Redirecting to secure payment gateway...");
                   setIsPurchaseModalOpen(false);
                 }}>
-                  انتقال به درگاه پرداخت
+                  <CreditCard className="w-5 h-5" /> انتقال به درگاه پرداخت
                 </Button>
                 <DialogClose asChild>
                   <Button variant="ghost" className="w-full text-slate-400 hover:text-white hover:bg-slate-800 py-6 rounded-xl">
@@ -180,12 +249,23 @@ export default function Home() {
             </DialogContent>
           </Dialog>
 
-          {/* Carousel Arrows (Visual interaction only for now) */}
+          {/* Carousel Arrows */}
           <div className="flex justify-center gap-6 mt-6 relative z-10">
-            <button className="bg-slate-800/50 hover:bg-slate-700 hover:scale-110 p-3 rounded-full transition-all border border-slate-600/30 active:scale-95">
+            <button 
+              onClick={handleNextProduct}
+              className="bg-slate-800/50 hover:bg-slate-700 hover:scale-110 p-3 rounded-full transition-all border border-slate-600/30 active:scale-95"
+            >
               <ChevronRight className="w-5 h-5 text-slate-300" />
             </button>
-            <button className="bg-slate-800/50 hover:bg-slate-700 hover:scale-110 p-3 rounded-full transition-all border border-slate-600/30 active:scale-95">
+            <div className="flex items-center gap-2">
+              {PRODUCTS.map((_, idx) => (
+                <div key={idx} className={`h-1.5 rounded-full transition-all ${idx === currentProductIndex ? 'w-4 bg-cyan-400' : 'w-1.5 bg-slate-600'}`} />
+              ))}
+            </div>
+            <button 
+              onClick={handlePrevProduct}
+              className="bg-slate-800/50 hover:bg-slate-700 hover:scale-110 p-3 rounded-full transition-all border border-slate-600/30 active:scale-95"
+            >
               <ChevronLeft className="w-5 h-5 text-slate-300" />
             </button>
           </div>
@@ -229,7 +309,8 @@ export default function Home() {
         {/* Additional Content Block to ensure scrolling functionality */}
         <div className="bg-slate-800 rounded-3xl p-5 shadow-lg border border-slate-700 mb-8">
           <h3 className="font-bold text-lg text-white text-right mb-4 flex items-center justify-end gap-2">
-            چرا زودساب؟ <CheckCircle2 className="w-5 h-5 text-cyan-400" />
+            چرا زودساب؟
+            <CheckCircle2 className="w-5 h-5 text-cyan-400" />
           </h3>
           <ul className="text-right space-y-3 text-sm text-slate-300">
             <li className="flex items-center justify-end gap-2">تحویل کاملا خودکار و آنی <Zap className="w-4 h-4 text-yellow-500" /></li>
@@ -243,36 +324,36 @@ export default function Home() {
       {/* Bottom Navigation */}
       <div className="fixed bottom-0 left-0 w-full px-4 pb-4 z-50 pointer-events-none">
         
-        {/* Floating Invite Banner - Interactive */}
+        {/* Floating Invite Banner - Now routes to the invite page */}
         <button 
-          onClick={() => setActiveTabModal('invite')}
+          onClick={() => router.push('/invite')}
           className="w-full pointer-events-auto bg-indigo-950/95 backdrop-blur-md mx-auto max-w-lg rounded-2xl p-3 mb-3 flex justify-between items-center border border-indigo-500/50 shadow-xl shadow-indigo-500/10 hover:bg-indigo-900 transition-all active:scale-95"
         >
           <Gift className="w-6 h-6 text-cyan-400 animate-pulse" />
           <span className="font-bold text-sm text-cyan-100">دوستات رو دعوت کن و تخفیف بگیر!</span>
         </button>
 
-        {/* Navigation Bar */}
+        {/* Navigation Bar - Buttons now push to distinct routes */}
         <nav className="pointer-events-auto bg-slate-900/95 backdrop-blur-xl border border-slate-700 mx-auto max-w-lg rounded-3xl p-2 flex justify-between items-center shadow-2xl">
           <button 
-            onClick={() => setActiveTabModal('profile')}
-            className="flex flex-col items-center gap-1 p-2 w-16 hover:text-cyan-400 text-slate-400 transition-colors active:scale-95"
+            onClick={() => router.push('/profile')}
+            className="flex flex-col items-center gap-1 p-2 w-16 text-slate-400 hover:text-cyan-400 transition-colors active:scale-95"
           >
             <User className="w-5 h-5" />
             <span className="text-[10px] font-medium">پروفایل</span>
           </button>
           
           <button 
-            onClick={() => setActiveTabModal('orders')}
-            className="flex flex-col items-center gap-1 p-2 w-16 hover:text-cyan-400 text-slate-400 transition-colors active:scale-95"
+            onClick={() => router.push('/orders')}
+            className="flex flex-col items-center gap-1 p-2 w-16 text-slate-400 hover:text-cyan-400 transition-colors active:scale-95"
           >
             <FileText className="w-5 h-5" />
             <span className="text-[10px] font-medium">سفارشات</span>
           </button>
 
           <button 
-            onClick={() => setActiveTabModal('support')}
-            className="flex flex-col items-center gap-1 p-2 w-16 hover:text-cyan-400 text-slate-400 transition-colors active:scale-95"
+            onClick={() => router.push('/support')}
+            className="flex flex-col items-center gap-1 p-2 w-16 text-slate-400 hover:text-cyan-400 transition-colors active:scale-95"
           >
             <Send className="w-5 h-5" />
             <span className="text-[10px] font-medium">پشتیبانی</span>
@@ -287,30 +368,6 @@ export default function Home() {
           </button>
         </nav>
       </div>
-
-      {/* Reusable Dialog for Navigation Tabs */}
-      <Dialog open={activeTabModal !== null} onOpenChange={(isOpen) => !isOpen && setActiveTabModal(null)}>
-        <DialogContent className="bg-slate-900 border border-slate-700 text-white rounded-2xl">
-          <DialogHeader>
-            <DialogTitle className="text-right text-xl font-bold text-cyan-400">
-              {activeTabModal === 'invite' && 'دعوت از دوستان'}
-              {activeTabModal === 'profile' && 'پروفایل کاربری'}
-              {activeTabModal === 'orders' && 'سفارشات من'}
-              {activeTabModal === 'support' && 'پشتیبانی'}
-            </DialogTitle>
-          </DialogHeader>
-          <div className="py-6 text-center text-slate-300 flex flex-col items-center justify-center gap-4">
-            <AlertCircle className="w-12 h-12 text-slate-500" />
-            <p>این بخش در حال توسعه است.</p>
-            <p className="text-sm text-slate-500">Coming Soon!</p>
-          </div>
-          <DialogFooter>
-            <Button className="w-full bg-slate-800 hover:bg-slate-700 text-white" onClick={() => setActiveTabModal(null)}>
-              بستن
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
 
     </div>
   );
