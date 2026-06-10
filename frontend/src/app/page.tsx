@@ -14,20 +14,26 @@ import Image from "next/image";
 import { PRODUCTS } from "@/lib/products";
 
 export default function Home() {
-  // State for the spinning wheel animation
+  // State variables for the spin wheel mechanics and UI feedback
   const [isSpinning, setIsSpinning] = useState(false);
   const [spinResult, setSpinResult] = useState<string | null>(null);
+  const [spinDisplayNumber, setSpinDisplayNumber] = useState<number>(0);
 
-  // State to manage the purchase modal and product carousel
+  // State variables for the product carousel and purchase modal
   const [isPurchaseModalOpen, setIsPurchaseModalOpen] = useState(false);
   const [currentProductIndex, setCurrentProductIndex] = useState(0);
 
-  // Retrieve current product and its default variant based on index
+  // State variables for account provisioning logic
+  const [activationMethod, setActivationMethod] = useState<'random' | 'personal'>('random');
+  const [accountEmail, setAccountEmail] = useState('');
+  const [accountPassword, setAccountPassword] = useState('');
+
+  // Retrieve current active product and its default subscription variant
   const activeProduct = PRODUCTS[currentProductIndex] || PRODUCTS[0];
   const defaultVariant = activeProduct.variants[0];
 
   useEffect(() => {
-    // Initialize Telegram Web App SDK safely
+    // Safely initialize the Telegram Web App SDK on the client side
     const initTelegramApp = async () => {
       if (typeof window !== "undefined") {
         try {
@@ -42,50 +48,76 @@ export default function Home() {
     initTelegramApp();
   }, []);
 
-  // Handler for the spin wheel button
+  // Execute the spin wheel logic with visual number rolling
   const handleSpin = () => {
     if (isSpinning) return;
     setIsSpinning(true);
     setSpinResult(null);
 
-    // Simulate an API call or a spinning delay (3 seconds)
-    setTimeout(() => {
-      setIsSpinning(false);
-      setSpinResult("شما ۲۰٪ تخفیف برنده شدید!"); 
-    }, 3000);
+    // Create a visual rolling effect before showing the final result
+    const duration = 3000;
+    const intervalTime = 100;
+    let elapsed = 0;
+
+    const rollInterval = setInterval(() => {
+      elapsed += intervalTime;
+      // Display random numbers between 5 and 50 during the spin
+      setSpinDisplayNumber(Math.floor(Math.random() * 10 + 1) * 5);
+      
+      if (elapsed >= duration) {
+        clearInterval(rollInterval);
+        setIsSpinning(false);
+        // Calculate final actual discount (5% to 50% in steps of 5)
+        const finalDiscount = Math.floor(Math.random() * 10 + 1) * 5;
+        setSpinResult(`شما ${finalDiscount}٪ تخفیف برنده شدید!`);
+        setSpinDisplayNumber(finalDiscount);
+      }
+    }, intervalTime);
   };
 
-  // Handlers for product carousel navigation
+  // Navigate to the next product in the array
   const handleNextProduct = () => {
     setCurrentProductIndex((prev) => (prev + 1) % PRODUCTS.length);
   };
 
+  // Navigate to the previous product in the array
   const handlePrevProduct = () => {
     setCurrentProductIndex((prev) => (prev === 0 ? PRODUCTS.length - 1 : prev - 1));
   };
 
-  // Safe wrapper for Web App termination context
+  // Securely close the Telegram Mini App instance
   const handleCloseApplication = () => {
     if (typeof window !== "undefined" && window.Telegram?.WebApp?.close) {
       window.Telegram.WebApp.close();
     }
   };
 
-  // Transmit transaction request context through native Telegram WebApp gateway layer
+  // Process the checkout flow and enforce input validation
   const handleCheckoutProcess = () => {
+    // Basic validation guardrail for personal account routing
+    if (activationMethod === 'personal' && (!accountEmail || !accountPassword)) {
+      alert("لطفاً ایمیل و رمز عبور اکانت خود را برای فعالسازی وارد کنید.");
+      return;
+    }
+
     const paymentTargetUrl = "https://your-domain.com/pay/gateway";
     if (typeof window !== "undefined" && window.Telegram?.WebApp?.openLink) {
       window.Telegram.WebApp.openLink(paymentTargetUrl);
     } else {
       window.open(paymentTargetUrl, "_blank");
     }
+    
+    // Reset form state securely upon successful transaction bridge
     setIsPurchaseModalOpen(false);
+    setAccountEmail('');
+    setAccountPassword('');
+    setActivationMethod('random');
   };
 
   return (
     <div className="min-h-screen bg-[#0f172a] text-slate-100 font-sans pb-32 relative selection:bg-cyan-500 selection:text-white overflow-y-auto">
       
-      {/* Top Header Bar */}
+      {/* Top Navigation Header */}
       <header className="flex justify-between items-center p-4 bg-slate-900/80 backdrop-blur-md sticky top-0 z-40 border-b border-slate-800/50">
         <div className="flex items-center gap-2 text-slate-400">
           <button onClick={handleCloseApplication} className="hover:text-white transition-colors">
@@ -96,13 +128,14 @@ export default function Home() {
           </button>
         </div>
         
-        <div className="flex items-center gap-3">
-          <h1 className="text-xl font-extrabold tracking-wide flex items-center">
+        {/* Adjusted Logo and Title Alignment */}
+        <div className="flex items-center gap-1">
+          <h1 className="text-2xl font-extrabold tracking-wide flex items-center">
             <span className="text-purple-400 drop-shadow-md">زود</span>
             <span className="text-cyan-400 drop-shadow-md">ساب</span>
           </h1>
           
-          <div className="relative w-28 h-10"> 
+          <div className="relative w-36 h-12"> 
             <Image 
               src="/logo.png" 
               alt="ZoodSub Logo" 
@@ -116,7 +149,7 @@ export default function Home() {
 
       <main className="p-4 space-y-6 max-w-lg mx-auto">
         
-        {/* Main Product Card */}
+        {/* Dynamic Product Card Carousel */}
         <div className="bg-gradient-to-b from-[#1e1b4b] via-[#312e81] to-[#0f172a] rounded-3xl p-6 text-white shadow-2xl relative overflow-hidden border border-indigo-500/20 mt-2 transition-all duration-500">
           
           <div className="absolute top-0 right-0 w-32 h-32 bg-cyan-500/10 rounded-full blur-3xl pointer-events-none"></div>
@@ -171,19 +204,67 @@ export default function Home() {
                 خرید این اکانت <ChevronLeft className="w-5 h-5" />
               </button>
             </DialogTrigger>
-            <DialogContent className="bg-slate-900 border border-slate-700 text-white rounded-2xl">
+            
+            <DialogContent className="bg-slate-900 border border-slate-700 text-white rounded-3xl w-[90%] max-w-md mx-auto overflow-y-auto max-h-[90vh]">
               <DialogHeader>
                 <DialogTitle className="text-right text-xl font-bold text-cyan-400">تایید سفارش</DialogTitle>
                 <DialogDescription className="text-right text-slate-400 mt-2">
-                  شما در حال خرید {activeProduct.title} ({defaultVariant.duration}) به مبلغ {defaultVariant.priceLabel} تومان هستید. آیا مطمئنید؟
+                  شما در حال خرید {activeProduct.title} ({defaultVariant.duration}) به مبلغ {defaultVariant.priceLabel} تومان هستید.
                 </DialogDescription>
               </DialogHeader>
-              <div className="flex flex-col gap-3 mt-4">
+
+              {/* Dynamic Account Provisioning Method Selection */}
+              <div className="mt-4 border-t border-slate-800 pt-4">
+                <label className="text-sm font-bold text-slate-300 block text-right mb-3">نوع فعالسازی اکانت:</label>
+                <div className="grid grid-cols-2 gap-3 mb-4">
+                  <button 
+                    onClick={() => setActivationMethod('random')} 
+                    className={`p-3 rounded-xl text-xs font-bold transition-all border flex flex-col items-center justify-center gap-2 ${activationMethod === 'random' ? 'bg-cyan-500/20 text-cyan-400 border-cyan-400 shadow-[0_0_15px_rgba(34,211,238,0.3)]' : 'bg-slate-800 text-slate-400 border-slate-700'}`}
+                  >
+                    <Zap className="w-5 h-5" />
+                    اکانت آماده (تحویل فوری)
+                  </button>
+                  <button 
+                    onClick={() => setActivationMethod('personal')} 
+                    className={`p-3 rounded-xl text-xs font-bold transition-all border flex flex-col items-center justify-center gap-2 ${activationMethod === 'personal' ? 'bg-cyan-500/20 text-cyan-400 border-cyan-400 shadow-[0_0_15px_rgba(34,211,238,0.3)]' : 'bg-slate-800 text-slate-400 border-slate-700'}`}
+                  >
+                    <Users className="w-5 h-5" />
+                    روی اکانت شخصی خودم
+                  </button>
+                </div>
+                
+                {/* Conditional rendering for personal account payload */}
+                {activationMethod === 'personal' && (
+                  <div className="flex flex-col gap-3 mb-2 animate-in fade-in zoom-in duration-300">
+                    <input 
+                      type="email" 
+                      placeholder="ایمیل اکانت (example@gmail.com)" 
+                      className="w-full bg-slate-950 border border-slate-700 rounded-xl p-3 text-sm text-left text-white focus:outline-none focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 transition-all placeholder:text-right" 
+                      onChange={e => setAccountEmail(e.target.value)} 
+                      value={accountEmail} 
+                    />
+                    <input 
+                      type="password" 
+                      placeholder="رمز عبور اکانت" 
+                      className="w-full bg-slate-950 border border-slate-700 rounded-xl p-3 text-sm text-left text-white focus:outline-none focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 transition-all placeholder:text-right" 
+                      onChange={e => setAccountPassword(e.target.value)} 
+                      value={accountPassword} 
+                    />
+                    <p className="text-[10px] text-slate-500 text-right pr-1">اطلاعات ورود شما نزد ما کاملاً محفوظ و رمزنگاری می‌شود.</p>
+                  </div>
+                )}
+              </div>
+
+              <div className="flex flex-col gap-3 mt-4 relative z-10">
                 <Button className="w-full bg-green-600 hover:bg-green-500 text-white py-6 rounded-xl text-lg font-bold flex gap-2" onClick={handleCheckoutProcess}>
                   <CreditCard className="w-5 h-5" /> انتقال به درگاه پرداخت
                 </Button>
                 <DialogClose asChild>
-                  <Button variant="ghost" className="w-full text-slate-400 hover:text-white hover:bg-slate-800 py-6 rounded-xl">
+                  <Button variant="ghost" className="w-full text-slate-400 hover:text-white hover:bg-slate-800 py-6 rounded-xl border border-transparent hover:border-slate-700" onClick={() => {
+                    setAccountEmail('');
+                    setAccountPassword('');
+                    setActivationMethod('random');
+                  }}>
                     انصراف
                   </Button>
                 </DialogClose>
@@ -199,7 +280,7 @@ export default function Home() {
               <ChevronRight className="w-5 h-5 text-slate-300" />
             </button>
             <div className="flex items-center gap-2 max-w-[150px] overflow-hidden justify-center">
-              {/* Pagination indicators with slicing logic */}
+              {/* Pagination indicators calculating dynamic visible slice */}
               {PRODUCTS.slice(
                 Math.max(0, currentProductIndex - 2), 
                 Math.min(PRODUCTS.length, currentProductIndex + 3)
@@ -219,6 +300,7 @@ export default function Home() {
           </div>
         </div>
 
+        {/* Upgraded Spin Wheel Component */}
         <div className="bg-slate-800 rounded-3xl p-5 shadow-lg border border-slate-700 flex flex-col gap-4">
           <div className="flex items-center justify-between w-full">
             <button 
@@ -233,19 +315,41 @@ export default function Home() {
               <span className="bg-pink-500/10 text-pink-400 border border-pink-500/20 text-[10px] px-2 py-1 rounded-full font-bold mb-1 inline-block">
                 گردونه شانس
               </span>
-              <h3 className="font-bold text-sm text-white">تخفیف تا ۱۰۰٪</h3>
+              <h3 className="font-bold text-sm text-white">تخفیف تا ۵۰٪</h3>
               <p className="text-[10px] text-slate-400 mt-1">هر روز یک اسپین رایگان!</p>
             </div>
           </div>
 
-          <div className={`bg-slate-900 rounded-xl p-3 flex items-center justify-center gap-3 shadow-inner relative border border-slate-700 transition-all duration-300 ${isSpinning ? 'animate-pulse' : ''}`}>
-            <div className="bg-slate-800 rounded-lg p-2"><Crown className={`w-6 h-6 text-yellow-500 ${isSpinning ? 'animate-spin' : ''}`} /></div>
-            <div className="bg-slate-800 rounded-lg p-2"><Music className={`w-6 h-6 text-green-400 ${isSpinning ? 'animate-bounce' : ''}`} /></div>
-            <div className="bg-slate-800 rounded-lg p-2"><Flame className={`w-6 h-6 text-pink-500 ${isSpinning ? 'animate-pulse' : ''}`} /></div>
+          <div className={`bg-slate-900 rounded-xl p-6 flex items-center justify-center gap-6 shadow-inner relative border border-slate-700 overflow-hidden transition-all duration-300 ${isSpinning ? 'ring-2 ring-purple-500/50' : ''}`}>
+            
+            {/* Visual background effect during spin */}
+            {isSpinning && (
+              <div className="absolute inset-0 bg-gradient-to-r from-purple-500/10 via-pink-500/10 to-purple-500/10 animate-pulse"></div>
+            )}
+
+            <div className="bg-slate-800 rounded-lg p-3 z-10">
+              <Crown className={`w-8 h-8 text-yellow-500 transition-all duration-300 ${isSpinning ? 'animate-bounce scale-110' : ''}`} />
+            </div>
+            
+            <div className="z-10 text-center min-w-[80px]">
+              {isSpinning || spinResult ? (
+                <div className="text-3xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-pink-400 to-purple-400 drop-shadow-md">
+                  {spinDisplayNumber}%
+                </div>
+              ) : (
+                <div className="text-3xl font-extrabold text-slate-500">
+                  ??
+                </div>
+              )}
+            </div>
+
+            <div className="bg-slate-800 rounded-lg p-3 z-10">
+              <Flame className={`w-8 h-8 text-pink-500 transition-all duration-300 ${isSpinning ? 'animate-pulse scale-110' : ''}`} />
+            </div>
           </div>
 
           {spinResult && (
-            <div className="bg-green-500/10 border border-green-500/30 text-green-400 p-3 rounded-xl text-center text-sm font-bold animate-in fade-in zoom-in duration-300">
+            <div className="bg-green-500/10 border border-green-500/30 text-green-400 p-4 rounded-xl text-center text-sm font-bold animate-in fade-in zoom-in duration-300 shadow-inner">
               🎉 {spinResult}
             </div>
           )}

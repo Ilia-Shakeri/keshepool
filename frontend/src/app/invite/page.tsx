@@ -60,7 +60,7 @@ export default function InvitePage() {
         </div>
         
         <p className="text-center text-sm text-slate-300 leading-relaxed mb-4 px-2">
-          با دعوت از هر دوست، <span className="text-cyan-400 font-bold">۲۰,۰۰0 تومان</span> اعتبار هدیه بگیرید و دوست شما نیز ۱۰٪ تخفیف خرید اول دریافت میکند.
+          با دعوت از هر دوست، <span className="text-cyan-400 font-bold">۲۰,۰۰۰ تومان</span> اعتبار هدیه بگیرید و دوست شما نیز ۱۰٪ تخفیف خرید اول دریافت میکند.
         </p>
         
         <div className="w-full">
