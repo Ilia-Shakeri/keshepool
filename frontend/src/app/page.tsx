@@ -22,8 +22,9 @@ export default function Home() {
   const [isPurchaseModalOpen, setIsPurchaseModalOpen] = useState(false);
   const [currentProductIndex, setCurrentProductIndex] = useState(0);
 
-  // Retrieve current product based on index
+  // Retrieve current product and its default variant based on index
   const activeProduct = PRODUCTS[currentProductIndex];
+  const defaultVariant = activeProduct.variants[0];
 
   useEffect(() => {
     // Initialize Telegram Web App SDK
@@ -50,7 +51,7 @@ export default function Home() {
     // Simulate an API call or a spinning delay (3 seconds)
     setTimeout(() => {
       setIsSpinning(false);
-      setSpinResult("شما 20٪ تخفیف برنده شدید!"); 
+      setSpinResult("شما ۲۰٪ تخفیف برنده شدید!"); 
     }, 3000);
   };
 
@@ -121,26 +122,26 @@ export default function Home() {
             <h1 className="text-4xl font-extrabold mb-2 text-white drop-shadow-md">{activeProduct.title}</h1>
             <p className="text-sm text-indigo-200/70">{activeProduct.subtitle}</p>
             <div className="mt-4 text-3xl font-bold text-cyan-400 flex items-center justify-center gap-2">
-              {activeProduct.price} <span className="text-base font-normal text-cyan-400/60">تومان</span>
+              {defaultVariant.priceLabel} <span className="text-base font-normal text-cyan-400/60">تومان</span>
             </div>
           </div>
 
           <div className="bg-slate-900/60 backdrop-blur-md rounded-2xl p-4 mb-6 border border-slate-700/50">
             <div className="flex justify-between items-center pb-3 border-b border-slate-700/50 text-xs text-slate-400">
-              <span>پلن‌های تخفیفی</span>
+              <span>پلن‌های تخفیفی ({defaultVariant.duration})</span>
             </div>
             
             <div className="space-y-4 pt-4 text-sm font-medium">
               <div className="flex justify-between items-center text-cyan-400 hover:bg-slate-800/50 p-2 rounded-lg transition-colors cursor-pointer">
-                <span>{activeProduct.price} تومان</span>
+                <span>{defaultVariant.priceLabel} تومان</span>
                 <span className="flex items-center gap-2">خرید عادی <Zap className="w-4 h-4 fill-current" /></span>
               </div>
               <div className="flex justify-between items-center text-purple-400 hover:bg-slate-800/50 p-2 rounded-lg transition-colors cursor-pointer">
-                <span>{(activeProduct.rawPrice * 0.85).toLocaleString('fa-IR')} تومان</span>
+                <span>{(defaultVariant.rawPrice * 0.85).toLocaleString('fa-IR')} تومان</span>
                 <span className="flex items-center gap-2">با ۲ دعوت <Users className="w-4 h-4 fill-current" /></span>
               </div>
               <div className="flex justify-between items-center text-pink-500 hover:bg-slate-800/50 p-2 rounded-lg transition-colors cursor-pointer">
-                <span>{(activeProduct.rawPrice * 0.70).toLocaleString('fa-IR')} تومان</span>
+                <span>{(defaultVariant.rawPrice * 0.70).toLocaleString('fa-IR')} تومان</span>
                 <span className="flex items-center gap-2">با ۵ دعوت <Flame className="w-4 h-4 fill-current" /></span>
               </div>
             </div>
@@ -156,7 +157,7 @@ export default function Home() {
               <DialogHeader>
                 <DialogTitle className="text-right text-xl font-bold text-cyan-400">تایید سفارش</DialogTitle>
                 <DialogDescription className="text-right text-slate-400 mt-2">
-                  شما در حال خرید {activeProduct.title} به مبلغ {activeProduct.price} تومان هستید. آیا مطمئنید؟
+                  شما در حال خرید {activeProduct.title} ({defaultVariant.duration}) به مبلغ {defaultVariant.priceLabel} تومان هستید. آیا مطمئنید؟
                 </DialogDescription>
               </DialogHeader>
               <div className="flex flex-col gap-3 mt-4">
@@ -183,11 +184,11 @@ export default function Home() {
               <ChevronRight className="w-5 h-5 text-slate-300" />
             </button>
             <div className="flex items-center gap-2 max-w-[150px] overflow-hidden justify-center">
-              {/* Added a slicing logic here so the indicator dots don't overflow with 23 items */}
+              {/* Pagination indicators with slicing logic */}
               {PRODUCTS.slice(
                 Math.max(0, currentProductIndex - 2), 
                 Math.min(PRODUCTS.length, currentProductIndex + 3)
-              ).map((prod, idx) => {
+              ).map((prod) => {
                 const actualIndex = PRODUCTS.indexOf(prod);
                 return (
                   <div key={actualIndex} className={`h-1.5 rounded-full transition-all ${actualIndex === currentProductIndex ? 'w-4 bg-cyan-400' : 'w-1.5 bg-slate-600'}`} />
