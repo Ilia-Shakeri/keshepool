@@ -1,11 +1,46 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { Gift, Copy, Users, ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useRouter } from "next/navigation";
 
 export default function InvitePage() {
   const router = useRouter();
+  const [inviteLink, setInviteLink] = useState("https://t.me/ZoodSubBot?start=ref_generic");
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    // Dynamically retrieve Telegram execution contexts to identify specific users
+    if (typeof window !== "undefined") {
+      const telegramUserId = window.Telegram?.WebApp?.initDataUnsafe?.user?.id;
+      if (telegramUserId) {
+        setInviteLink(`https://t.me/ZoodSubBot?start=ref_${telegramUserId}`);
+      }
+    }
+  }, []);
+
+  // Safe programmatic interaction layer with device string clipboards
+  const handleCopyLink = async () => {
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(inviteLink);
+      } else {
+        const structuralFallbackBuffer = document.createElement("textarea");
+        structuralFallbackBuffer.value = inviteLink;
+        structuralFallbackBuffer.style.position = "fixed"; 
+        document.body.appendChild(structuralFallbackBuffer);
+        structuralFallbackBuffer.focus();
+        structuralFallbackBuffer.select();
+        document.execCommand("copy");
+        document.body.removeChild(structuralFallbackBuffer);
+      }
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (err) {
+      console.error("Failed executing system text clipboard transaction context: ", err);
+    }
+  };
 
   return (
     <div className="min-h-screen bg-[#0f172a] text-slate-100 font-sans pb-32 relative">
@@ -25,17 +60,24 @@ export default function InvitePage() {
         </div>
         
         <p className="text-center text-sm text-slate-300 leading-relaxed mb-4 px-2">
-          با دعوت از هر دوست، <span className="text-cyan-400 font-bold">۲۰,۰۰۰ تومان</span> اعتبار هدیه بگیرید و دوست شما نیز ۱۰٪ تخفیف خرید اول دریافت میکند.
+          با دعوت از هر دوست، <span className="text-cyan-400 font-bold">۲۰,۰۰0 تومان</span> اعتبار هدیه بگیرید و دوست شما نیز ۱۰٪ تخفیف خرید اول دریافت میکند.
         </p>
         
         <div className="w-full">
           <label className="text-xs text-slate-400 mb-2 block text-right">لینک دعوت اختصاصی شما:</label>
           <div className="w-full bg-slate-950 p-4 rounded-2xl border border-slate-700 flex items-center justify-between gap-3 shadow-inner">
-            <span className="text-xs text-slate-400 truncate dir-ltr select-all font-mono">https://t.me/ZoodSubBot?start=ref_8912</span>
-            <Button size="icon" className="bg-cyan-500 hover:bg-cyan-400 text-white shrink-0 shadow-lg shadow-cyan-500/20 rounded-xl">
+            <span className="text-xs text-slate-400 truncate dir-ltr select-all font-mono">{inviteLink}</span>
+            <Button 
+              onClick={handleCopyLink}
+              size="icon" 
+              className={`shrink-0 shadow-lg rounded-xl transition-all ${copied ? 'bg-green-600 hover:bg-green-500' : 'bg-cyan-500 hover:bg-cyan-400'} text-white`}
+            >
               <Copy className="w-4 h-4" />
             </Button>
           </div>
+          {copied && (
+            <span className="text-xs text-green-400 block text-right mt-1 animate-fade-in">لینک دعوت با موفقیت کپی شد!</span>
+          )}
         </div>
 
         <div className="w-full bg-slate-800/50 backdrop-blur-sm rounded-2xl p-5 border border-slate-700 flex justify-between items-center mt-4 shadow-md">

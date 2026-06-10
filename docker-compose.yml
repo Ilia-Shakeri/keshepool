@@ -41,9 +41,9 @@ services:
     environment:
       - DATABASE_URL=postgresql+asyncpg://zoodsub_user:zoodsub_password@db:5432/zoodsub_db
       - REDIS_URL=redis://redis:6379/0
-      - BOT_TOKEN=${BOT_TOKEN:-YOUR_TELEGRAM_BOT_TOKEN}
-      # Base URL only. The path is appended in the Python code.
-      - WEBHOOK_URL=${WEBHOOK_URL:-https://your-domain.com}
+      - BOT_TOKEN=${BOT_TOKEN}
+      - WEBHOOK_URL=${WEBHOOK_URL}
+      - WEB_APP_URL=${WEB_APP_URL}
     depends_on:
       db:
         condition: service_healthy

@@ -1,7 +1,5 @@
 import { 
-  Music, MonitorPlay, Smartphone, Bot, Sparkles, Send, 
-  Gamepad2, Palette, Code, ShoppingCart, Film, 
-  Tv, Play, BookOpen, FileText, Brush, Gamepad, Shield, LineChart 
+  Music, MonitorPlay, Smartphone, Bot, Sparkles, Send, Gamepad2, Shield
 } from "lucide-react";
 import React from "react";
 
@@ -28,7 +26,7 @@ export interface Product {
   category: ProductCategory;
 }
 
-// Exporting all premium products with multiple duration options
+// Exporting all premium products including missing categories to prevent empty fallback states
 export const PRODUCTS: Product[] = [
   {
     id: "spotify",
@@ -113,5 +111,60 @@ export const PRODUCTS: Product[] = [
     gradient: "from-sky-400 to-blue-500",
     shadow: "shadow-sky-500/30",
     category: "tools"
+  },
+  {
+    id: "xbox",
+    title: "ایکس باکس گیم پس", 
+    brand: "Xbox",
+    subtitle: "گیم پس آلتیمیت ظرفیتی",
+    variants: [
+      { id: "1m", duration: "۱ ماهه", priceLabel: "۳۲۰,۰۰۰", rawPrice: 320000 },
+      { id: "3m", duration: "۳ ماهه", priceLabel: "۹۰۰,۰۰۰", rawPrice: 900000 }
+    ],
+    icon: <Gamepad2 className="w-5 h-5 text-white" />,
+    gradient: "from-green-600 to-emerald-700",
+    shadow: "shadow-green-600/30",
+    category: "gaming"
+  },
+  {
+    id: "psplus",
+    title: "پلی استیشن پلاس", 
+    brand: "PlayStation",
+    subtitle: "ظرفیت اختصاصی اکانت ترکیه",
+    variants: [
+      { id: "1m", duration: "۱ ماهه", priceLabel: "۴۵۰,۰۰۰", rawPrice: 450000 },
+      { id: "1y", duration: "۱ ساله", priceLabel: "۳,۸۰۰,۰۰۰", rawPrice: 3800000 }
+    ],
+    icon: <Gamepad2 className="w-5 h-5 text-white" />,
+    gradient: "from-blue-600 to-indigo-700",
+    shadow: "shadow-blue-600/30",
+    category: "gaming"
+  },
+  {
+    id: "nordvpn",
+    title: "نورد وی‌پی‌ان", 
+    brand: "NordVPN",
+    subtitle: "اکانت اشتراکی مچ شده با رترکت",
+    variants: [
+      { id: "1m", duration: "۱ ماهه", priceLabel: "۱۴۰,۰۰۰", rawPrice: 140000 },
+      { id: "6m", duration: "۶ ماهه", priceLabel: "۶۸۰,۰۰۰", rawPrice: 680000 }
+    ],
+    icon: <Shield className="w-5 h-5 text-white" />,
+    gradient: "from-cyan-500 to-blue-600",
+    shadow: "shadow-cyan-500/30",
+    category: "vpn"
+  },
+  {
+    id: "expressvpn",
+    title: "اکسپرس وی‌پی‌ان", 
+    brand: "ExpressVPN",
+    subtitle: "اکانت اختصاصی پرمیوم ثابت",
+    variants: [
+      { id: "1m", duration: "۱ ماهه", priceLabel: "۱۹۰,۰۰۰", rawPrice: 190000 }
+    ],
+    icon: <Shield className="w-5 h-5 text-white" />,
+    gradient: "from-red-500 to-orange-600",
+    shadow: "shadow-red-500/30",
+    category: "vpn"
   }
 ];

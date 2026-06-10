@@ -134,3 +134,18 @@
     @apply font-sans;
   }
 }
+
+/* Custom layout utility configurations */
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}
+
+.dir-ltr {
+  direction: ltr !important;
+  text-align: left !important;
+}

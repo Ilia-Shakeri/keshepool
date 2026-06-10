@@ -23,11 +23,11 @@ export default function Home() {
   const [currentProductIndex, setCurrentProductIndex] = useState(0);
 
   // Retrieve current product and its default variant based on index
-  const activeProduct = PRODUCTS[currentProductIndex];
+  const activeProduct = PRODUCTS[currentProductIndex] || PRODUCTS[0];
   const defaultVariant = activeProduct.variants[0];
 
   useEffect(() => {
-    // Initialize Telegram Web App SDK
+    // Initialize Telegram Web App SDK safely
     const initTelegramApp = async () => {
       if (typeof window !== "undefined") {
         try {
@@ -64,13 +64,31 @@ export default function Home() {
     setCurrentProductIndex((prev) => (prev === 0 ? PRODUCTS.length - 1 : prev - 1));
   };
 
+  // Safe wrapper for Web App termination context
+  const handleCloseApplication = () => {
+    if (typeof window !== "undefined" && window.Telegram?.WebApp?.close) {
+      window.Telegram.WebApp.close();
+    }
+  };
+
+  // Transmit transaction request context through native Telegram WebApp gateway layer
+  const handleCheckoutProcess = () => {
+    const paymentTargetUrl = "https://your-domain.com/pay/gateway";
+    if (typeof window !== "undefined" && window.Telegram?.WebApp?.openLink) {
+      window.Telegram.WebApp.openLink(paymentTargetUrl);
+    } else {
+      window.open(paymentTargetUrl, "_blank");
+    }
+    setIsPurchaseModalOpen(false);
+  };
+
   return (
     <div className="min-h-screen bg-[#0f172a] text-slate-100 font-sans pb-32 relative selection:bg-cyan-500 selection:text-white overflow-y-auto">
       
       {/* Top Header Bar */}
       <header className="flex justify-between items-center p-4 bg-slate-900/80 backdrop-blur-md sticky top-0 z-40 border-b border-slate-800/50">
         <div className="flex items-center gap-2 text-slate-400">
-          <button onClick={() => window.close()} className="hover:text-white transition-colors">
+          <button onClick={handleCloseApplication} className="hover:text-white transition-colors">
             <X className="w-6 h-6" />
           </button>
           <button className="hover:text-white transition-colors">
@@ -161,10 +179,7 @@ export default function Home() {
                 </DialogDescription>
               </DialogHeader>
               <div className="flex flex-col gap-3 mt-4">
-                <Button className="w-full bg-green-600 hover:bg-green-500 text-white py-6 rounded-xl text-lg font-bold flex gap-2" onClick={() => {
-                  alert("Redirecting to secure payment gateway...");
-                  setIsPurchaseModalOpen(false);
-                }}>
+                <Button className="w-full bg-green-600 hover:bg-green-500 text-white py-6 rounded-xl text-lg font-bold flex gap-2" onClick={handleCheckoutProcess}>
                   <CreditCard className="w-5 h-5" /> انتقال به درگاه پرداخت
                 </Button>
                 <DialogClose asChild>
@@ -238,7 +253,8 @@ export default function Home() {
 
         <div className="bg-slate-800 rounded-3xl p-5 shadow-lg border border-slate-700 mb-8">
           <h3 className="font-bold text-lg text-white text-right mb-4 flex items-center justify-end gap-2">
-            چرا زودساب؟ <CheckCircle2 className="w-5 h-5 text-cyan-400" />
+            چرا زودساب؟
+            <CheckCircle2 className="w-5 h-5 text-cyan-400" />
           </h3>
           <ul className="text-right space-y-3 text-sm text-slate-300">
             <li className="flex items-center justify-end gap-2">تحویل کاملا خودکار و آنی <Zap className="w-4 h-4 text-yellow-500" /></li>
