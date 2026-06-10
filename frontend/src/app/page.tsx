@@ -209,9 +209,17 @@ export default function Home() {
               <DialogHeader>
                 <DialogTitle className="text-right text-xl font-bold text-cyan-400">تایید سفارش</DialogTitle>
                 <DialogDescription className="text-right text-slate-400 mt-2">
-                  شما در حال خرید {activeProduct.title} ({defaultVariant.duration}) به مبلغ {defaultVariant.priceLabel} تومان هستید.
+                  شما در حال خرید {activeProduct.title} ({defaultVariant.duration}) هستید.
                 </DialogDescription>
               </DialogHeader>
+
+              {/* Total Price Layout with correct Right-to-Left alignment */}
+              <div className="bg-slate-800/50 p-4 rounded-xl border border-slate-700/50 mt-2 flex justify-between items-center w-full">
+                <span className="text-sm font-bold text-slate-300">مبلغ قابل پرداخت:</span>
+                <span className="text-cyan-400 font-bold text-lg flex items-center gap-1 dir-ltr text-left">
+                  {defaultVariant.priceLabel} <span className="text-sm font-normal text-slate-400">تومان</span>
+                </span>
+              </div>
 
               {/* Dynamic Account Provisioning Method Selection */}
               <div className="mt-4 border-t border-slate-800 pt-4">
@@ -257,7 +265,7 @@ export default function Home() {
 
               <div className="flex flex-col gap-3 mt-4 relative z-10">
                 <Button className="w-full bg-green-600 hover:bg-green-500 text-white py-6 rounded-xl text-lg font-bold flex gap-2" onClick={handleCheckoutProcess}>
-                  <CreditCard className="w-5 h-5" /> انتقال به درگاه پرداخت
+                  <CreditCard className="w-5 h-5" /> پرداخت و تحویل آنی
                 </Button>
                 <DialogClose asChild>
                   <Button variant="ghost" className="w-full text-slate-400 hover:text-white hover:bg-slate-800 py-6 rounded-xl border border-transparent hover:border-slate-700" onClick={() => {
@@ -355,15 +363,16 @@ export default function Home() {
           )}
         </div>
 
+        {/* Fixed Natural RTL Alignment using standard flex flow */}
         <div className="bg-slate-800 rounded-3xl p-5 shadow-lg border border-slate-700 mb-8">
-          <h3 className="font-bold text-lg text-white text-right mb-4 flex items-center justify-end gap-2">
-            چرا زودساب؟
+          <h3 className="font-bold text-lg text-white mb-4 flex items-center gap-2">
             <CheckCircle2 className="w-5 h-5 text-cyan-400" />
+            چرا زودساب؟
           </h3>
-          <ul className="text-right space-y-3 text-sm text-slate-300">
-            <li className="flex items-center justify-end gap-2">تحویل کاملا خودکار و آنی <Zap className="w-4 h-4 text-yellow-500" /></li>
-            <li className="flex items-center justify-end gap-2">پشتیبانی ۲۴ ساعته واقعی <Users className="w-4 h-4 text-blue-400" /></li>
-            <li className="flex items-center justify-end gap-2">تضمین بازگشت وجه <CheckCircle2 className="w-4 h-4 text-green-400" /></li>
+          <ul className="space-y-3 text-sm text-slate-300">
+            <li className="flex items-center gap-2"><Zap className="w-4 h-4 text-yellow-500" /> تحویل کاملا خودکار و آنی</li>
+            <li className="flex items-center gap-2"><Users className="w-4 h-4 text-blue-400" /> پشتیبانی ۲۴ ساعته واقعی</li>
+            <li className="flex items-center gap-2"><CheckCircle2 className="w-4 h-4 text-green-400" /> تضمین بازگشت وجه</li>
           </ul>
         </div>
 

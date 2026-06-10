@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { ChevronRight, CreditCard, Zap, CheckCircle2, Users } from "lucide-react";
+import { CreditCard, Zap, Users } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useRouter } from "next/navigation";
 import { PRODUCTS, ProductCategory, Product } from "@/lib/products";
@@ -71,8 +71,8 @@ export default function ProductsPage() {
       {/* Sticky Top Header Configuration */}
       <header className="flex justify-between items-center p-4 bg-slate-900/80 backdrop-blur-md sticky top-0 z-40 border-b border-slate-800/50 mb-4 max-w-lg mx-auto">
         <h1 className="text-xl font-bold text-cyan-400">محصولات پرمیوم</h1>
-        <button onClick={() => router.back()} className="text-slate-400 hover:text-white transition-colors flex items-center gap-1 bg-slate-800/50 px-3 py-1.5 rounded-xl">
-          بازگشت <ChevronRight className="w-5 h-5" />
+        <button onClick={() => router.back()} className="text-slate-400 hover:text-white transition-colors bg-slate-800/50 px-4 py-1.5 rounded-xl text-sm font-medium">
+          بازگشت
         </button>
       </header>
 
@@ -153,9 +153,12 @@ export default function ProductsPage() {
                         </div>
                       </div>
 
-                      <DialogDescription className="text-right text-slate-300 bg-slate-800/50 p-4 rounded-xl border border-slate-700/50 mt-4 flex justify-between items-center">
-                        <span className="text-cyan-400 font-bold text-lg">{selectedProduct.variants[selectedVariantIndex].priceLabel} <span className="text-sm font-normal text-slate-400">تومان</span></span>
-                        <span className="text-sm">مبلغ قابل پرداخت:</span>
+                      {/* Total Price Layout with correct Right-to-Left alignment */}
+                      <DialogDescription className="text-slate-300 bg-slate-800/50 p-4 rounded-xl border border-slate-700/50 mt-4 flex justify-between items-center w-full">
+                        <span className="text-sm font-bold text-right">مبلغ قابل پرداخت:</span>
+                        <span className="text-cyan-400 font-bold text-lg flex items-center gap-1 dir-ltr text-left">
+                          {selectedProduct.variants[selectedVariantIndex].priceLabel} <span className="text-sm font-normal text-slate-400">تومان</span>
+                        </span>
                       </DialogDescription>
                     </DialogHeader>
                     
@@ -202,8 +205,8 @@ export default function ProductsPage() {
                     </div>
 
                     <div className="flex flex-col gap-3 mt-4 relative z-10">
-                      <Button className="w-full bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white py-6 rounded-xl text-md font-bold flex gap-2 shadow-lg shadow-cyan-500/20" onClick={handleCheckoutProcess}>
-                        <CreditCard className="w-5 h-5" /> پرداخت و تحویل آنی <Zap className="w-4 h-4 text-yellow-400 fill-current" />
+                      <Button className="w-full bg-green-600 hover:bg-green-500 text-white py-6 rounded-xl text-md font-bold flex gap-2 shadow-lg shadow-cyan-500/20" onClick={handleCheckoutProcess}>
+                        <CreditCard className="w-5 h-5" /> پرداخت و تحویل آنی
                       </Button>
                       <DialogClose asChild>
                         <Button variant="ghost" className="w-full text-slate-400 hover:text-white hover:bg-slate-800 py-6 rounded-xl border border-transparent hover:border-slate-700">

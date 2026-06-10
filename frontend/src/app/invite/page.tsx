@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Gift, Copy, Users, ChevronRight } from "lucide-react";
+import { Gift, Copy, Users } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useRouter } from "next/navigation";
 
@@ -28,7 +28,7 @@ export default function InvitePage() {
       } else {
         const structuralFallbackBuffer = document.createElement("textarea");
         structuralFallbackBuffer.value = inviteLink;
-        structuralFallbackBuffer.style.position = "fixed"; 
+        structuralFallbackBuffer.style.position = "fixed";
         document.body.appendChild(structuralFallbackBuffer);
         structuralFallbackBuffer.focus();
         structuralFallbackBuffer.select();
@@ -48,8 +48,8 @@ export default function InvitePage() {
       {/* Consistent Sticky Header */}
       <header className="flex justify-between items-center p-4 bg-slate-900/80 backdrop-blur-md sticky top-0 z-40 border-b border-slate-800/50 mb-6 max-w-lg mx-auto">
         <h1 className="text-xl font-bold text-cyan-400">دعوت از دوستان</h1>
-        <button onClick={() => router.back()} className="text-slate-400 hover:text-white transition-colors flex items-center gap-1 bg-slate-800/50 px-3 py-1.5 rounded-xl">
-          بازگشت <ChevronRight className="w-5 h-5" />
+        <button onClick={() => router.back()} className="text-slate-400 hover:text-white transition-colors bg-slate-800/50 px-4 py-1.5 rounded-xl text-sm font-medium">
+          بازگشت
         </button>
       </header>
 

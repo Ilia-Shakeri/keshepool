@@ -1,6 +1,6 @@
 "use client";
 
-import { User, LogOut, ChevronRight } from "lucide-react";
+import { User, LogOut } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useRouter } from "next/navigation";
 
@@ -13,8 +13,8 @@ export default function ProfilePage() {
       {/* Consistent Sticky Header */}
       <header className="flex justify-between items-center p-4 bg-slate-900/80 backdrop-blur-md sticky top-0 z-40 border-b border-slate-800/50 mb-6 max-w-lg mx-auto">
         <h1 className="text-xl font-bold text-cyan-400">پروفایل کاربری</h1>
-        <button onClick={() => router.back()} className="text-slate-400 hover:text-white transition-colors flex items-center gap-1 bg-slate-800/50 px-3 py-1.5 rounded-xl">
-          بازگشت <ChevronRight className="w-5 h-5" />
+        <button onClick={() => router.back()} className="text-slate-400 hover:text-white transition-colors bg-slate-800/50 px-4 py-1.5 rounded-xl text-sm font-medium">
+          بازگشت
         </button>
       </header>
 
