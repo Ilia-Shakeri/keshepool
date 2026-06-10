@@ -1,85 +1,19 @@
-// ==================================================
-// FILE: frontend/src/app/page.tsx
-// ==================================================
-
 "use client";
 
 import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
 import { 
-  Zap, 
-  Users, 
-  Flame, 
-  ChevronRight, 
-  ChevronLeft, 
-  Gift, 
-  User, 
-  FileText, 
-  Send, 
-  ShoppingBag,
-  MoreVertical,
-  X,
-  Music,
-  Crown,
-  CheckCircle2,
-  MonitorPlay,
-  Smartphone,
-  CreditCard
+  Zap, Users, Flame, ChevronRight, ChevronLeft, 
+  MoreVertical, X, Music, Crown, CheckCircle2, CreditCard
 } from "lucide-react";
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-  DialogFooter,
-  DialogClose
+  Dialog, DialogContent, DialogDescription, DialogHeader, 
+  DialogTitle, DialogTrigger, DialogClose
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import Image from "next/image";
-
-// Define our product mock data
-const PRODUCTS = [
-  {
-    id: "spotify",
-    title: "اسپاتیفای پرمیوم", 
-    brand: "اسپاتیفای",
-    subtitle: "اکانت ۱ ماهه • بدون قطعی • ریجن ترکیه",
-    price: "۱۶۰,۰۰۰",
-    rawPrice: 160000,
-    icon: <Music className="w-5 h-5 text-white" />,
-    gradient: "from-green-400 to-green-600",
-    shadow: "shadow-green-500/30"
-  },
-  {
-    id: "netflix",
-    title: "نتفلیکس پرمیوم", 
-    brand: "نتفلیکس",
-    subtitle: "اکانت ۱ ماهه • کیفیت 4K • پروفایل اختصاصی",
-    price: "۲۵۰,۰۰۰",
-    rawPrice: 250000,
-    icon: <MonitorPlay className="w-5 h-5 text-white" />,
-    gradient: "from-red-500 to-red-700",
-    shadow: "shadow-red-500/30"
-  },
-  {
-    id: "apple",
-    title: "اپل موزیک", 
-    brand: "اپل",
-    subtitle: "اکانت ۳ ماهه • ریجن آمریکا • فامیلی",
-    price: "۱۸۰,۰۰۰",
-    rawPrice: 180000,
-    icon: <Smartphone className="w-5 h-5 text-white" />,
-    gradient: "from-slate-400 to-slate-600",
-    shadow: "shadow-slate-500/30"
-  }
-];
+import { PRODUCTS } from "@/lib/products";
 
 export default function Home() {
-  // Initialize Next.js router for page navigation
-  const router = useRouter();
-
   // State for the spinning wheel animation
   const [isSpinning, setIsSpinning] = useState(false);
   const [spinResult, setSpinResult] = useState<string | null>(null);
@@ -144,13 +78,11 @@ export default function Home() {
         </div>
         
         <div className="flex items-center gap-3">
-          {/* Modernized Persian Title */}
           <h1 className="text-xl font-extrabold tracking-wide flex items-center">
             <span className="text-purple-400 drop-shadow-md">زود</span>
             <span className="text-cyan-400 drop-shadow-md">ساب</span>
           </h1>
           
-          {/* Enlarged, Box-less Logo */}
           <div className="relative w-28 h-10"> 
             <Image 
               src="/logo.png" 
@@ -168,10 +100,8 @@ export default function Home() {
         {/* Main Product Card */}
         <div className="bg-gradient-to-b from-[#1e1b4b] via-[#312e81] to-[#0f172a] rounded-3xl p-6 text-white shadow-2xl relative overflow-hidden border border-indigo-500/20 mt-2 transition-all duration-500">
           
-          {/* Background Glow Effect */}
           <div className="absolute top-0 right-0 w-32 h-32 bg-cyan-500/10 rounded-full blur-3xl pointer-events-none"></div>
 
-          {/* Top badging */}
           <div className="flex justify-between items-start mb-6 relative z-10">
             <span className="bg-indigo-500/20 px-3 py-1 rounded-full text-xs font-semibold border border-indigo-400/30 text-indigo-200 flex items-center gap-1">
               <Zap className="w-3 h-3 text-yellow-400" /> تحویل فوری
@@ -187,7 +117,6 @@ export default function Home() {
             </div>
           </div>
 
-          {/* Title & Subtitle */}
           <div className="text-center mb-6 relative z-10 h-32 flex flex-col justify-center">
             <h1 className="text-4xl font-extrabold mb-2 text-white drop-shadow-md">{activeProduct.title}</h1>
             <p className="text-sm text-indigo-200/70">{activeProduct.subtitle}</p>
@@ -196,7 +125,6 @@ export default function Home() {
             </div>
           </div>
 
-          {/* Pricing Tiers Box */}
           <div className="bg-slate-900/60 backdrop-blur-md rounded-2xl p-4 mb-6 border border-slate-700/50">
             <div className="flex justify-between items-center pb-3 border-b border-slate-700/50 text-xs text-slate-400">
               <span>پلن‌های تخفیفی</span>
@@ -218,7 +146,6 @@ export default function Home() {
             </div>
           </div>
 
-          {/* Purchase Button triggering Dialog */}
           <Dialog open={isPurchaseModalOpen} onOpenChange={setIsPurchaseModalOpen}>
             <DialogTrigger asChild>
               <button className="w-full bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 active:scale-95 transition-all text-white font-bold py-4 rounded-xl flex items-center justify-center gap-2 shadow-lg shadow-cyan-500/30 relative z-10">
@@ -229,8 +156,7 @@ export default function Home() {
               <DialogHeader>
                 <DialogTitle className="text-right text-xl font-bold text-cyan-400">تایید سفارش</DialogTitle>
                 <DialogDescription className="text-right text-slate-400 mt-2">
-                  شما در حال خرید {activeProduct.title} به مبلغ {activeProduct.price} تومان هستید.
-                  آیا مطمئنید؟
+                  شما در حال خرید {activeProduct.title} به مبلغ {activeProduct.price} تومان هستید. آیا مطمئنید؟
                 </DialogDescription>
               </DialogHeader>
               <div className="flex flex-col gap-3 mt-4">
@@ -249,7 +175,6 @@ export default function Home() {
             </DialogContent>
           </Dialog>
 
-          {/* Carousel Arrows */}
           <div className="flex justify-center gap-6 mt-6 relative z-10">
             <button 
               onClick={handleNextProduct}
@@ -257,10 +182,17 @@ export default function Home() {
             >
               <ChevronRight className="w-5 h-5 text-slate-300" />
             </button>
-            <div className="flex items-center gap-2">
-              {PRODUCTS.map((_, idx) => (
-                <div key={idx} className={`h-1.5 rounded-full transition-all ${idx === currentProductIndex ? 'w-4 bg-cyan-400' : 'w-1.5 bg-slate-600'}`} />
-              ))}
+            <div className="flex items-center gap-2 max-w-[150px] overflow-hidden justify-center">
+              {/* Added a slicing logic here so the indicator dots don't overflow with 23 items */}
+              {PRODUCTS.slice(
+                Math.max(0, currentProductIndex - 2), 
+                Math.min(PRODUCTS.length, currentProductIndex + 3)
+              ).map((prod, idx) => {
+                const actualIndex = PRODUCTS.indexOf(prod);
+                return (
+                  <div key={actualIndex} className={`h-1.5 rounded-full transition-all ${actualIndex === currentProductIndex ? 'w-4 bg-cyan-400' : 'w-1.5 bg-slate-600'}`} />
+                );
+              })}
             </div>
             <button 
               onClick={handlePrevProduct}
@@ -271,7 +203,6 @@ export default function Home() {
           </div>
         </div>
 
-        {/* Slot Machine / Free Spin Banner */}
         <div className="bg-slate-800 rounded-3xl p-5 shadow-lg border border-slate-700 flex flex-col gap-4">
           <div className="flex items-center justify-between w-full">
             <button 
@@ -291,14 +222,12 @@ export default function Home() {
             </div>
           </div>
 
-          {/* Mini Slot Machine Visual */}
           <div className={`bg-slate-900 rounded-xl p-3 flex items-center justify-center gap-3 shadow-inner relative border border-slate-700 transition-all duration-300 ${isSpinning ? 'animate-pulse' : ''}`}>
             <div className="bg-slate-800 rounded-lg p-2"><Crown className={`w-6 h-6 text-yellow-500 ${isSpinning ? 'animate-spin' : ''}`} /></div>
             <div className="bg-slate-800 rounded-lg p-2"><Music className={`w-6 h-6 text-green-400 ${isSpinning ? 'animate-bounce' : ''}`} /></div>
             <div className="bg-slate-800 rounded-lg p-2"><Flame className={`w-6 h-6 text-pink-500 ${isSpinning ? 'animate-pulse' : ''}`} /></div>
           </div>
 
-          {/* Result Message Area */}
           {spinResult && (
             <div className="bg-green-500/10 border border-green-500/30 text-green-400 p-3 rounded-xl text-center text-sm font-bold animate-in fade-in zoom-in duration-300">
               🎉 {spinResult}
@@ -306,11 +235,9 @@ export default function Home() {
           )}
         </div>
 
-        {/* Additional Content Block to ensure scrolling functionality */}
         <div className="bg-slate-800 rounded-3xl p-5 shadow-lg border border-slate-700 mb-8">
           <h3 className="font-bold text-lg text-white text-right mb-4 flex items-center justify-end gap-2">
-            چرا زودساب؟
-            <CheckCircle2 className="w-5 h-5 text-cyan-400" />
+            چرا زودساب؟ <CheckCircle2 className="w-5 h-5 text-cyan-400" />
           </h3>
           <ul className="text-right space-y-3 text-sm text-slate-300">
             <li className="flex items-center justify-end gap-2">تحویل کاملا خودکار و آنی <Zap className="w-4 h-4 text-yellow-500" /></li>
@@ -320,55 +247,6 @@ export default function Home() {
         </div>
 
       </main>
-
-      {/* Bottom Navigation */}
-      <div className="fixed bottom-0 left-0 w-full px-4 pb-4 z-50 pointer-events-none">
-        
-        {/* Floating Invite Banner - Now routes to the invite page */}
-        <button 
-          onClick={() => router.push('/invite')}
-          className="w-full pointer-events-auto bg-indigo-950/95 backdrop-blur-md mx-auto max-w-lg rounded-2xl p-3 mb-3 flex justify-between items-center border border-indigo-500/50 shadow-xl shadow-indigo-500/10 hover:bg-indigo-900 transition-all active:scale-95"
-        >
-          <Gift className="w-6 h-6 text-cyan-400 animate-pulse" />
-          <span className="font-bold text-sm text-cyan-100">دوستات رو دعوت کن و تخفیف بگیر!</span>
-        </button>
-
-        {/* Navigation Bar - Buttons now push to distinct routes */}
-        <nav className="pointer-events-auto bg-slate-900/95 backdrop-blur-xl border border-slate-700 mx-auto max-w-lg rounded-3xl p-2 flex justify-between items-center shadow-2xl">
-          <button 
-            onClick={() => router.push('/profile')}
-            className="flex flex-col items-center gap-1 p-2 w-16 text-slate-400 hover:text-cyan-400 transition-colors active:scale-95"
-          >
-            <User className="w-5 h-5" />
-            <span className="text-[10px] font-medium">پروفایل</span>
-          </button>
-          
-          <button 
-            onClick={() => router.push('/orders')}
-            className="flex flex-col items-center gap-1 p-2 w-16 text-slate-400 hover:text-cyan-400 transition-colors active:scale-95"
-          >
-            <FileText className="w-5 h-5" />
-            <span className="text-[10px] font-medium">سفارشات</span>
-          </button>
-
-          <button 
-            onClick={() => router.push('/support')}
-            className="flex flex-col items-center gap-1 p-2 w-16 text-slate-400 hover:text-cyan-400 transition-colors active:scale-95"
-          >
-            <Send className="w-5 h-5" />
-            <span className="text-[10px] font-medium">پشتیبانی</span>
-          </button>
-
-          <button 
-            onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
-            className="flex flex-col items-center gap-1 py-2 px-6 rounded-2xl bg-cyan-500/10 text-cyan-400 shadow-sm border border-cyan-500/30 hover:bg-cyan-500/20 transition-colors active:scale-95"
-          >
-            <ShoppingBag className="w-5 h-5 mb-1 mx-auto" />
-            <span className="text-[10px] font-bold">خرید اشتراک</span>
-          </button>
-        </nav>
-      </div>
-
     </div>
   );
 }

@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import localFont from "next/font/local";
 import Script from "next/script";
+import BottomNav from "@/components/BottomNav";
 import "./globals.css";
 
 // Configure local font mapping
@@ -33,7 +34,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="fa" dir="rtl" suppressHydrationWarning>
-      <body className={`${vazir.variable} font-sans antialiased`} suppressHydrationWarning>
+      <body className={`${vazir.variable} font-sans antialiased bg-slate-950`} suppressHydrationWarning>
         
         {/* Load Telegram Web App SDK */}
         <Script
@@ -41,8 +42,10 @@ export default function RootLayout({
           strategy="beforeInteractive"
         />
         
-        <main className="min-h-screen bg-slate-950 text-slate-100 overflow-x-hidden">
+        <main className="min-h-screen text-slate-100 overflow-x-hidden relative">
           {children}
+          {/* Global Bottom Navigation integrated here */}
+          <BottomNav />
         </main>
       </body>
     </html>

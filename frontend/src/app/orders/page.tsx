@@ -8,7 +8,7 @@ export default function OrdersPage() {
   const router = useRouter();
 
   return (
-    <div className="min-h-screen bg-[#0f172a] text-slate-100 font-sans p-4 max-w-lg mx-auto">
+    <div className="min-h-screen bg-[#0f172a] text-slate-100 font-sans p-4 max-w-lg mx-auto pb-32">
       <header className="flex justify-between items-center mb-8 border-b border-slate-800/50 pb-4">
         <h1 className="text-xl font-bold text-cyan-400">سفارشات من</h1>
         <button onClick={() => router.back()} className="text-slate-400 hover:text-white transition-colors flex items-center gap-1">
