@@ -5,15 +5,15 @@ services:
     image: postgres:15-alpine
     restart: unless-stopped
     environment:
-      POSTGRES_USER: zoodsub_user
-      POSTGRES_PASSWORD: zoodsub_password
-      POSTGRES_DB: zoodsub_db
+      POSTGRES_USER: keshepool_user
+      POSTGRES_PASSWORD: keshepool_password
+      POSTGRES_DB: keshepool_db
     ports:
       - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U zoodsub_user -d zoodsub_db"]
+      test: ["CMD-SHELL", "pg_isready -U keshepool_user -d keshepool_db"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -39,11 +39,13 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - DATABASE_URL=postgresql+asyncpg://zoodsub_user:zoodsub_password@db:5432/zoodsub_db
+      - DATABASE_URL=postgresql+asyncpg://keshepool_user:keshepool_password@db:5432/keshepool_db
       - REDIS_URL=redis://redis:6379/0
       - BOT_TOKEN=${BOT_TOKEN}
       - WEBHOOK_URL=${WEBHOOK_URL}
       - WEB_APP_URL=${WEB_APP_URL}
+      - TETRA98_API_URL=${TETRA98_API_URL}
+      - TETRA98_API_KEY=${TETRA98_API_KEY}
     depends_on:
       db:
         condition: service_healthy

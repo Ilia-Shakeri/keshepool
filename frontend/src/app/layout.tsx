@@ -23,8 +23,8 @@ const vazir = localFont({
 });
 
 export const metadata: Metadata = {
-  title: "ZoodSub | Premium Accounts",
-  description: "Buy premium accounts for Spotify, Netflix, Apple Music and more.",
+  title: "Keshepool | Premium Accounts & Services",
+  description: "Buy premium accounts, secure VPN configs, and foreign payment services.",
 };
 
 export default function RootLayout({
@@ -34,7 +34,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="fa" dir="rtl" suppressHydrationWarning>
-      <body className={`${vazir.variable} font-sans antialiased bg-slate-950`} suppressHydrationWarning>
+      <body className={`${vazir.variable} font-sans antialiased bg-zinc-950`} suppressHydrationWarning>
         
         {/* Load Telegram Web App SDK */}
         <Script
@@ -42,7 +42,7 @@ export default function RootLayout({
           strategy="beforeInteractive"
         />
         
-        <main className="min-h-screen text-slate-100 overflow-x-hidden relative">
+        <main className="min-h-screen text-zinc-100 overflow-x-hidden relative">
           {children}
           {/* Global Bottom Navigation integrated here */}
           <BottomNav />

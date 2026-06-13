@@ -33,13 +33,13 @@ dp = Dispatcher()
 async def handle_start(message: types.Message):
     """
     Handles the /start command.
-    Sends a welcome message and an inline button to open the Telegram Mini App via environment configuration.
+    Sends a welcome message and an inline button to open the Telegram Mini App.
     """
     markup = InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="Open ZoodSub 🚀", 
+                    text="Open Keshepool 🚀", 
                     web_app=WebAppInfo(url=WEB_APP_URL)
                 )
             ]
@@ -47,7 +47,7 @@ async def handle_start(message: types.Message):
     )
     
     await message.answer(
-        text="Welcome to ZoodSub! Click the button below to buy premium accounts.",
+        text="Welcome to Keshepool! Click the button below to access premium services.",
         reply_markup=markup
     )
 
