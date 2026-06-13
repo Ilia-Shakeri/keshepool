@@ -1,11 +1,11 @@
 import { 
-  Music, MonitorPlay, Smartphone, Bot, Sparkles, Send, Gamepad2, Shield, 
-  Wallet, MessageCircle, Twitter, Video, FileText
+  Music, MonitorPlay, Bot, Sparkles, Gamepad2, Shield, 
+  MessageCircle, Twitter, Video
 } from "lucide-react";
 import React from "react";
 
-// Expanded category definitions
-export type ProductCategory = 'music' | 'video' | 'ai' | 'tools' | 'gaming' | 'vpn' | 'social' | 'financial';
+// Expanded category definitions without 'financial'
+export type ProductCategory = 'music' | 'video' | 'ai' | 'tools' | 'gaming' | 'vpn' | 'social';
 
 // Define variant structure for different subscription durations
 export interface ProductVariant {
@@ -28,7 +28,7 @@ export interface Product {
 }
 
 export const PRODUCTS: Product[] = [
-  // VPN & Configs (Hot Items)
+  // VPN & Configs - Strictly limited to 2 plans per requirements
   {
     id: "vpn_config",
     title: "کانفیگ اختصاصی V2Ray", 
@@ -42,21 +42,6 @@ export const PRODUCTS: Product[] = [
     gradient: "from-emerald-500 to-teal-700",
     shadow: "shadow-emerald-500/40",
     category: "vpn"
-  },
-  // Financial Services
-  {
-    id: "currency_exchange",
-    title: "پرداخت و نقد کردن ارزی", 
-    brand: "Finance",
-    subtitle: "تتر • پی‌پال • مسترکارت",
-    variants: [
-      { id: "payment", duration: "پرداخت فاکتور ارزی", priceLabel: "تماس بگیرید", rawPrice: 0 },
-      { id: "cashout", duration: "نقد کردن درآمد", priceLabel: "تماس بگیرید", rawPrice: 0 }
-    ],
-    icon: <Wallet className="w-5 h-5 text-white" />,
-    gradient: "from-amber-400 to-orange-600",
-    shadow: "shadow-amber-500/30",
-    category: "financial"
   },
   // Music & Audio
   {

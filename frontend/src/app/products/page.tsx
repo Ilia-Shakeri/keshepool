@@ -10,12 +10,11 @@ import {
   DialogTitle, DialogTrigger, DialogClose
 } from "@/components/ui/dialog";
 
-// Define strict categories for the top filter bar
+// Define strict categories for the top filter bar (Financial removed)
 const CATEGORIES: { id: ProductCategory | 'all', label: string }[] = [
   { id: 'all', label: 'همه محصولات' },
   { id: 'vpn', label: 'کانفیگ وی‌پی‌ان' },
   { id: 'social', label: 'شبکه‌های اجتماعی' },
-  { id: 'financial', label: 'خدمات ارزی' },
   { id: 'video', label: 'فیلم و سریال' },
   { id: 'music', label: 'موسیقی' },
   { id: 'ai', label: 'هوش مصنوعی' },
@@ -57,7 +56,8 @@ export default function ProductsPage() {
       return;
     }
 
-    const paymentTargetUrl = "https://your-domain.com/pay/gateway";
+    // Direct Tetra98 Gateway Integration Placeholder
+    const paymentTargetUrl = `https://tetra98.com/gateway/mock-session?amount=${selectedProduct.variants[selectedVariantIndex].rawPrice}&currency=USDT`;
     
     if (typeof window !== "undefined" && window.Telegram?.WebApp?.openLink) {
       window.Telegram.WebApp.openLink(paymentTargetUrl);
@@ -154,12 +154,15 @@ export default function ProductsPage() {
                         </div>
                       </div>
 
-                      {/* Total Price Layout with correct Right-to-Left alignment */}
+                      {/* Total Price Layout and Crypto Warning */}
                       <DialogDescription className="text-zinc-300 bg-zinc-800/50 p-4 rounded-xl border border-zinc-700/50 mt-4 flex justify-between items-center w-full">
                         <span className="text-sm font-bold text-right">مبلغ قابل پرداخت:</span>
-                        <span className="text-emerald-400 font-bold text-lg flex items-center gap-1 dir-ltr text-left">
-                          {selectedProduct.variants[selectedVariantIndex].priceLabel} <span className="text-sm font-normal text-zinc-400">تومان</span>
-                        </span>
+                        <div className="flex flex-col items-end">
+                          <span className="text-emerald-400 font-bold text-lg flex items-center gap-1 dir-ltr text-left">
+                            {selectedProduct.variants[selectedVariantIndex].priceLabel} <span className="text-sm font-normal text-zinc-400">تومان</span>
+                          </span>
+                          <span className="text-xs text-zinc-500 mt-1">پرداخت تتری (USDT) انجام می‌شود</span>
+                        </div>
                       </DialogDescription>
                     </DialogHeader>
                     
@@ -207,7 +210,7 @@ export default function ProductsPage() {
 
                     <div className="flex flex-col gap-3 mt-4 relative z-10">
                       <Button className="w-full bg-emerald-600 hover:bg-emerald-500 text-white py-6 rounded-xl text-md font-bold flex gap-2 shadow-lg shadow-emerald-500/20" onClick={handleCheckoutProcess}>
-                        <CreditCard className="w-5 h-5" /> ثبت سفارش
+                        <CreditCard className="w-5 h-5" /> پرداخت تتری (Tetra98)
                       </Button>
                       <DialogClose asChild>
                         <Button variant="ghost" className="w-full text-zinc-400 hover:text-white hover:bg-zinc-800 py-6 rounded-xl border border-transparent hover:border-zinc-700">

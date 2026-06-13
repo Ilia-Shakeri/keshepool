@@ -3,23 +3,18 @@
 import { useEffect, useState } from "react";
 import { 
   Zap, Users, Flame, ChevronRight, ChevronLeft, 
-  MoreVertical, X, Crown, CheckCircle2, CreditCard, Shield, Wallet
+  MoreVertical, X, CheckCircle2, CreditCard, Shield, Wallet
 } from "lucide-react";
 import {
   Dialog, DialogContent, DialogDescription, DialogHeader, 
   DialogTitle, DialogTrigger, DialogClose
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import Image from "next/image";
 import { PRODUCTS } from "@/lib/products";
 import { useRouter } from "next/navigation";
 
 export default function Home() {
   const router = useRouter();
-  // State variables for the spin wheel mechanics and UI feedback
-  const [isSpinning, setIsSpinning] = useState(false);
-  const [spinResult, setSpinResult] = useState<string | null>(null);
-  const [spinDisplayNumber, setSpinDisplayNumber] = useState<number>(0);
 
   // State variables for the product carousel and purchase modal
   const [isPurchaseModalOpen, setIsPurchaseModalOpen] = useState(false);
@@ -50,30 +45,6 @@ export default function Home() {
     initTelegramApp();
   }, []);
 
-  // Execute the spin wheel logic with visual number rolling
-  const handleSpin = () => {
-    if (isSpinning) return;
-    setIsSpinning(true);
-    setSpinResult(null);
-
-    const duration = 3000;
-    const intervalTime = 100;
-    let elapsed = 0;
-
-    const rollInterval = setInterval(() => {
-      elapsed += intervalTime;
-      setSpinDisplayNumber(Math.floor(Math.random() * 10 + 1) * 5);
-      
-      if (elapsed >= duration) {
-        clearInterval(rollInterval);
-        setIsSpinning(false);
-        const finalDiscount = Math.floor(Math.random() * 10 + 1) * 5;
-        setSpinResult(`شما ${finalDiscount}٪ تخفیف برنده شدید!`);
-        setSpinDisplayNumber(finalDiscount);
-      }
-    }, intervalTime);
-  };
-
   const handleNextProduct = () => setCurrentProductIndex((prev) => (prev + 1) % PRODUCTS.length);
   const handlePrevProduct = () => setCurrentProductIndex((prev) => (prev === 0 ? PRODUCTS.length - 1 : prev - 1));
 
@@ -89,7 +60,9 @@ export default function Home() {
       return;
     }
 
-    const paymentTargetUrl = "https://your-domain.com/pay/gateway";
+    // Generate Tetra98 Tether Payment Gateway URL (Placeholder using required URL constraint)
+    const paymentTargetUrl = `https://tetra98.com/gateway/mock-session?amount=${defaultVariant.rawPrice}&currency=USDT`;
+    
     if (typeof window !== "undefined" && window.Telegram?.WebApp?.openLink) {
       window.Telegram.WebApp.openLink(paymentTargetUrl);
     } else {
@@ -127,7 +100,7 @@ export default function Home() {
 
       <main className="p-4 space-y-6 max-w-lg mx-auto">
         
-        {/* Hot Items Section - Designed for high conversion on Configs and Payments */}
+        {/* Hot Items Section */}
         <div className="bg-gradient-to-r from-emerald-900/40 to-teal-900/40 rounded-2xl p-1 border border-emerald-500/20 shadow-lg mb-2">
           <div className="flex justify-between items-center px-4 py-2 border-b border-emerald-500/20 mb-2">
             <button onClick={() => router.push('/products')} className="text-xs text-emerald-400 hover:text-emerald-300 font-bold">مشاهده همه</button>
@@ -141,10 +114,10 @@ export default function Home() {
               <span className="text-xs font-bold text-zinc-200">کانفیگ V2Ray</span>
               <span className="text-[9px] text-emerald-500 bg-emerald-500/10 px-2 py-0.5 rounded-full">بدون قطعی</span>
             </div>
-            <div onClick={() => router.push('/products')} className="bg-zinc-900/80 p-3 rounded-xl border border-zinc-700 hover:border-amber-500/50 cursor-pointer transition-all flex flex-col items-center gap-2 text-center shadow-inner">
+            <div onClick={() => router.push('/finance')} className="bg-zinc-900/80 p-3 rounded-xl border border-zinc-700 hover:border-amber-500/50 cursor-pointer transition-all flex flex-col items-center gap-2 text-center shadow-inner">
               <Wallet className="w-6 h-6 text-amber-400" />
               <span className="text-xs font-bold text-zinc-200">خدمات ارزی</span>
-              <span className="text-[9px] text-amber-500 bg-amber-500/10 px-2 py-0.5 rounded-full">تتر و پی‌پال</span>
+              <span className="text-[9px] text-amber-500 bg-amber-500/10 px-2 py-0.5 rounded-full">نقد کردن درآمد</span>
             </div>
           </div>
         </div>
@@ -177,19 +150,6 @@ export default function Home() {
             </div>
           </div>
 
-          <div className="bg-zinc-950/60 backdrop-blur-md rounded-2xl p-4 mb-6 border border-zinc-800">
-            <div className="flex justify-between items-center pb-3 border-b border-zinc-800 text-xs text-zinc-400">
-              <span>تخفیفات همکاری ({defaultVariant.duration})</span>
-            </div>
-            
-            <div className="space-y-4 pt-4 text-sm font-medium">
-              <div className="flex justify-between items-center text-emerald-400 hover:bg-zinc-800/50 p-2 rounded-lg transition-colors cursor-pointer">
-                <span>{defaultVariant.priceLabel} تومان</span>
-                <span className="flex items-center gap-2">خرید عادی <Zap className="w-4 h-4 fill-current" /></span>
-              </div>
-            </div>
-          </div>
-
           <Dialog open={isPurchaseModalOpen} onOpenChange={setIsPurchaseModalOpen}>
             <DialogTrigger asChild>
               <button className="w-full bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 active:scale-95 transition-all text-white font-bold py-4 rounded-xl flex items-center justify-center gap-2 shadow-lg shadow-emerald-500/30 relative z-10">
@@ -205,11 +165,15 @@ export default function Home() {
                 </DialogDescription>
               </DialogHeader>
 
+              {/* Price configuration with Crypto Context */}
               <div className="bg-zinc-800/50 p-4 rounded-xl border border-zinc-700/50 mt-2 flex justify-between items-center w-full">
                 <span className="text-sm font-bold text-zinc-300">مبلغ قابل پرداخت:</span>
-                <span className="text-emerald-400 font-bold text-lg flex items-center gap-1 dir-ltr text-left">
-                  {defaultVariant.priceLabel} <span className="text-sm font-normal text-zinc-400">تومان</span>
-                </span>
+                <div className="flex flex-col items-end">
+                  <span className="text-emerald-400 font-bold text-lg flex items-center gap-1 dir-ltr text-left">
+                    {defaultVariant.priceLabel} <span className="text-sm font-normal text-zinc-400">تومان</span>
+                  </span>
+                  <span className="text-xs text-zinc-500 mt-1">پرداخت معادل تتری (USDT)</span>
+                </div>
               </div>
 
               <div className="mt-4 border-t border-zinc-800 pt-4">
@@ -254,7 +218,7 @@ export default function Home() {
 
               <div className="flex flex-col gap-3 mt-4 relative z-10">
                 <Button className="w-full bg-emerald-600 hover:bg-emerald-500 text-white py-6 rounded-xl text-lg font-bold flex gap-2" onClick={handleCheckoutProcess}>
-                  <CreditCard className="w-5 h-5" /> ثبت و پرداخت
+                  <CreditCard className="w-5 h-5" /> پرداخت تتری (Tetra98)
                 </Button>
                 <DialogClose asChild>
                   <Button variant="ghost" className="w-full text-zinc-400 hover:text-white hover:bg-zinc-800 py-6 rounded-xl border border-transparent hover:border-zinc-700" onClick={() => {

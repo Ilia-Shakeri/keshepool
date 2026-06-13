@@ -17,6 +17,10 @@ WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 WEB_APP_URL = os.getenv("WEB_APP_URL", "https://your-domain.com")
 WEBHOOK_PATH = "/webhook"
 
+# Placeholder variables for Tetra98 Integration Logic
+TETRA98_API_URL = os.getenv("TETRA98_API_URL", "https://tetra98.com")
+TETRA98_API_KEY = os.getenv("TETRA98_API_KEY", "placeholder_key")
+
 if not BOT_TOKEN or BOT_TOKEN == "fallback_token":
     logger.critical("BOT_TOKEN environment variable is missing or default! Terminating boot context.")
     sys.exit(1)
@@ -92,3 +96,20 @@ async def health_check():
     Health check endpoint to verify infrastructure execution layer is responsive.
     """
     return {"status": "healthy"}
+
+@app.post("/api/pay/tetra98")
+async def create_tetra98_payment(amount: int):
+    """
+    Placeholder endpoint to generate a Tetra98 crypto payment link.
+    This accepts the fiat price, determines required USDT equivalent, and returns a secure payment link.
+    """
+    logger.info(f"Generating Tetra98 payment for amount: {amount}")
+    
+    # Constructing a simulated redirect mock string
+    payment_link = f"{TETRA98_API_URL}/gateway/mock-session?amount={amount}&currency=USDT&api_key={TETRA98_API_KEY}"
+    
+    return {
+        "status": "success",
+        "payment_url": payment_link,
+        "currency": "USDT"
+    }
