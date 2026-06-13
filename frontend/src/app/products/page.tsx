@@ -127,7 +127,10 @@ export default function ProductsPage() {
                       <div className="flex items-center gap-4 mb-4 justify-end">
                         <div className="text-right">
                           <DialogTitle className="text-xl font-bold text-white">{selectedProduct.title}</DialogTitle>
-                          <p className="text-xs text-zinc-400 mt-1">{selectedProduct.subtitle}</p>
+                          {/* Moved DialogDescription here to satisfy accessibility and prevent div hydration errors */}
+                          <DialogDescription className="text-xs text-zinc-400 mt-1">
+                            {selectedProduct.subtitle}
+                          </DialogDescription>
                         </div>
                         <div className={`bg-gradient-to-br ${selectedProduct.gradient} p-3 rounded-2xl shadow-lg`}>
                           {selectedProduct.icon}
@@ -154,8 +157,8 @@ export default function ProductsPage() {
                         </div>
                       </div>
 
-                      {/* Total Price Layout and Crypto Warning */}
-                      <DialogDescription className="text-zinc-300 bg-zinc-800/50 p-4 rounded-xl border border-zinc-700/50 mt-4 flex justify-between items-center w-full">
+                      {/* Total Price Layout and Crypto Warning (Changed to standard div) */}
+                      <div className="text-zinc-300 bg-zinc-800/50 p-4 rounded-xl border border-zinc-700/50 mt-4 flex justify-between items-center w-full">
                         <span className="text-sm font-bold text-right">مبلغ قابل پرداخت:</span>
                         <div className="flex flex-col items-end">
                           <span className="text-emerald-400 font-bold text-lg flex items-center gap-1 dir-ltr text-left">
@@ -163,7 +166,7 @@ export default function ProductsPage() {
                           </span>
                           <span className="text-xs text-zinc-500 mt-1">پرداخت تتری (USDT) انجام می‌شود</span>
                         </div>
-                      </DialogDescription>
+                      </div>
                     </DialogHeader>
                     
                     {/* Dynamic Account Provisioning Method Selection */}
