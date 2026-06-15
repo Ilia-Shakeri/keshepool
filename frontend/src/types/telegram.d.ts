@@ -13,6 +13,7 @@ export interface TelegramWebApp {
   expand: () => void;
   close: () => void;
   openLink: (url: string, options?: { try_instant_view?: boolean }) => void;
+  openTelegramLink: (url: string) => void;
   initData: string;
   initDataUnsafe: {
     query_id?: string;
