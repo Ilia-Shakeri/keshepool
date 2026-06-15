@@ -1,278 +1,107 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { 
-  Zap, Users, Flame, ChevronRight, ChevronLeft, 
-  MoreVertical, X, CheckCircle2, CreditCard, Shield, Wallet
-} from "lucide-react";
-import {
-  Dialog, DialogContent, DialogDescription, DialogHeader, 
-  DialogTitle, DialogTrigger, DialogClose
-} from "@/components/ui/dialog";
-import { Button } from "@/components/ui/button";
-import { PRODUCTS } from "@/lib/products";
 import { useRouter } from "next/navigation";
+import { Bell, User, Star, Flame, Code, Layout, Music, PlaySquare, Bot, Shield, BookOpen, MoreHorizontal, MessageCircle } from "lucide-react";
+import { PRODUCTS } from "@/lib/products";
 
 export default function Home() {
   const router = useRouter();
-
-  // State variables for the product carousel and purchase modal
-  const [isPurchaseModalOpen, setIsPurchaseModalOpen] = useState(false);
-  const [currentProductIndex, setCurrentProductIndex] = useState(0);
-
-  // State variables for account provisioning logic
-  const [activationMethod, setActivationMethod] = useState<'random' | 'personal'>('random');
-  const [accountEmail, setAccountEmail] = useState('');
-  const [accountPassword, setAccountPassword] = useState('');
-
-  // Retrieve current active product and its default subscription variant
-  const activeProduct = PRODUCTS[currentProductIndex] || PRODUCTS[0];
-  const defaultVariant = activeProduct.variants[0];
+  
+  // State for dynamically storing Telegram User Info
+  const [tgUser, setTgUser] = useState<{ id?: number; first_name?: string; last_name?: string; username?: string } | null>(null);
 
   useEffect(() => {
-    // Safely initialize the Telegram Web App SDK on the client side
-    const initTelegramApp = async () => {
-      if (typeof window !== "undefined") {
-        try {
-          const WebApp = (await import("@twa-dev/sdk")).default;
-          WebApp.expand();
-          WebApp.ready();
-        } catch (error) {
-          console.error("Telegram Web App SDK initialization failed:", error);
-        }
+    // Initialize Telegram WebApp SDK and retrieve user data securely
+    if (typeof window !== "undefined" && window.Telegram?.WebApp) {
+      window.Telegram.WebApp.expand();
+      window.Telegram.WebApp.ready();
+      
+      const userPayload = window.Telegram.WebApp.initDataUnsafe?.user;
+      if (userPayload) {
+        setTgUser(userPayload);
       }
-    };
-    initTelegramApp();
+    }
   }, []);
 
-  const handleNextProduct = () => setCurrentProductIndex((prev) => (prev + 1) % PRODUCTS.length);
-  const handlePrevProduct = () => setCurrentProductIndex((prev) => (prev === 0 ? PRODUCTS.length - 1 : prev - 1));
-
-  const handleCloseApplication = () => {
-    if (typeof window !== "undefined" && window.Telegram?.WebApp?.close) {
-      window.Telegram.WebApp.close();
-    }
-  };
-
-  const handleCheckoutProcess = () => {
-    if (activationMethod === 'personal' && (!accountEmail || !accountPassword)) {
-      alert("لطفاً مشخصات را وارد کنید.");
-      return;
-    }
-
-    // Generate Tetra98 Tether Payment Gateway URL (Placeholder using required URL constraint)
-    const paymentTargetUrl = `https://tetra98.com/gateway/mock-session?amount=${defaultVariant.rawPrice}&currency=USDT`;
-    
-    if (typeof window !== "undefined" && window.Telegram?.WebApp?.openLink) {
-      window.Telegram.WebApp.openLink(paymentTargetUrl);
-    } else {
-      window.open(paymentTargetUrl, "_blank");
-    }
-    
-    setIsPurchaseModalOpen(false);
-    setAccountEmail('');
-    setAccountPassword('');
-    setActivationMethod('random');
-  };
+  // Filter hot items (VPN Configs as requested)
+  const hotItems = PRODUCTS.filter(p => p.id === "vpn_config" || p.id === "telegram_premium" || p.id === "spotify");
 
   return (
-    <div className="min-h-screen bg-zinc-950 text-zinc-100 font-sans pb-32 relative selection:bg-emerald-500 selection:text-white overflow-y-auto">
-      
-      {/* Top Navigation Header */}
-      <header className="flex justify-between items-center p-4 bg-zinc-900/80 backdrop-blur-md sticky top-0 z-40 border-b border-zinc-800/50">
-        <div className="flex items-center gap-2 text-zinc-400">
-          <button onClick={handleCloseApplication} className="hover:text-white transition-colors">
-            <X className="w-6 h-6" />
-          </button>
-          <button className="hover:text-white transition-colors">
-            <MoreVertical className="w-6 h-6" />
-          </button>
+    <div className="min-h-screen font-sans pb-24">
+      {/* Top Header */}
+      <header className="flex justify-between items-center p-5 pt-6">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 bg-zinc-800 rounded-full flex items-center justify-center overflow-hidden border border-zinc-700 cursor-pointer hover:opacity-80 transition-all active:scale-95" onClick={() => router.push('/profile')}>
+            <User className="w-6 h-6 text-zinc-400" />
+          </div>
+          <div className="flex flex-col">
+            <h1 className="text-sm font-bold text-white">سلام {tgUser?.first_name || 'کاربر عزیز'}</h1>
+            <p className="text-[10px] text-zinc-400 mt-0.5">بهترین سرویس‌ها، با بهترین قیمت</p>
+          </div>
         </div>
-        
-        {/* Adjusted Logo and Title Alignment */}
-        <div className="flex items-center gap-1">
-          <h1 className="text-2xl font-extrabold tracking-wide flex items-center">
-            <span className="text-emerald-400 drop-shadow-md">کشه</span>
-            <span className="text-cyan-400 drop-shadow-md">پول</span>
-          </h1>
-        </div>
+        <button className="relative p-2 bg-zinc-900 rounded-full border border-zinc-800 cursor-pointer hover:bg-zinc-800 active:scale-95 transition-all">
+          <Bell className="w-5 h-5 text-zinc-300" />
+          <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-red-500 rounded-full border border-zinc-900"></span>
+        </button>
       </header>
 
-      <main className="p-4 space-y-6 max-w-lg mx-auto">
-        
-        {/* Hot Items Section */}
-        <div className="bg-gradient-to-r from-emerald-900/40 to-teal-900/40 rounded-2xl p-1 border border-emerald-500/20 shadow-lg mb-2">
-          <div className="flex justify-between items-center px-4 py-2 border-b border-emerald-500/20 mb-2">
-            <button onClick={() => router.push('/products')} className="text-xs text-emerald-400 hover:text-emerald-300 font-bold">مشاهده همه</button>
+      <main className="px-5 space-y-8">
+        {/* Hot Items Slider (VPN Configs Focus) */}
+        <section>
+          <div className="flex justify-between items-center mb-4">
             <h3 className="text-sm font-bold text-white flex items-center gap-2">
-              محصولات ویژه <Flame className="w-4 h-4 text-orange-500 animate-pulse" />
+              <Flame className="w-4 h-4 text-orange-500" /> پیشنهاد ویژه
             </h3>
+            <button onClick={() => router.push('/products')} className="text-xs text-red-500 font-bold cursor-pointer hover:opacity-80 transition-all active:scale-95">مشاهده همه</button>
           </div>
-          <div className="grid grid-cols-2 gap-2 p-2">
-            <div onClick={() => router.push('/products')} className="bg-zinc-900/80 p-3 rounded-xl border border-zinc-700 hover:border-emerald-500/50 cursor-pointer transition-all flex flex-col items-center gap-2 text-center shadow-inner">
-              <Shield className="w-6 h-6 text-emerald-400" />
-              <span className="text-xs font-bold text-zinc-200">کانفیگ V2Ray</span>
-              <span className="text-[9px] text-emerald-500 bg-emerald-500/10 px-2 py-0.5 rounded-full">بدون قطعی</span>
-            </div>
-            <div onClick={() => router.push('/finance')} className="bg-zinc-900/80 p-3 rounded-xl border border-zinc-700 hover:border-amber-500/50 cursor-pointer transition-all flex flex-col items-center gap-2 text-center shadow-inner">
-              <Wallet className="w-6 h-6 text-amber-400" />
-              <span className="text-xs font-bold text-zinc-200">خدمات ارزی</span>
-              <span className="text-[9px] text-amber-500 bg-amber-500/10 px-2 py-0.5 rounded-full">نقد کردن درآمد</span>
-            </div>
-          </div>
-        </div>
-
-        {/* Dynamic Product Card Carousel */}
-        <div className="bg-gradient-to-b from-zinc-800 via-zinc-900 to-black rounded-3xl p-6 text-white shadow-2xl relative overflow-hidden border border-zinc-700 mt-2 transition-all duration-500">
           
-          <div className="absolute top-0 right-0 w-32 h-32 bg-emerald-500/10 rounded-full blur-3xl pointer-events-none"></div>
-
-          <div className="flex justify-between items-start mb-6 relative z-10">
-            <span className="bg-zinc-800/80 px-3 py-1 rounded-full text-xs font-semibold border border-zinc-700 text-zinc-300 flex items-center gap-1">
-              <Zap className="w-3 h-3 text-yellow-400" /> تحویل سریع
-            </span>
-            <div className="flex items-center gap-2">
-              <div className="text-right">
-                <h2 className="text-sm font-bold text-white">{activeProduct.brand}</h2>
-                <p className="text-[10px] text-emerald-400 font-mono tracking-widest uppercase">Premium</p>
-              </div>
-              <div className={`bg-gradient-to-br ${activeProduct.gradient} p-2 rounded-full shadow-lg ${activeProduct.shadow} transition-colors duration-500`}>
-                {activeProduct.icon}
-              </div>
-            </div>
-          </div>
-
-          <div className="text-center mb-6 relative z-10 h-32 flex flex-col justify-center">
-            <h1 className="text-3xl font-extrabold mb-2 text-white drop-shadow-md">{activeProduct.title}</h1>
-            <p className="text-sm text-zinc-400">{activeProduct.subtitle}</p>
-            <div className="mt-4 text-3xl font-bold text-emerald-400 flex items-center justify-center gap-2">
-              {defaultVariant.priceLabel} <span className="text-base font-normal text-emerald-400/60">تومان</span>
-            </div>
-          </div>
-
-          <Dialog open={isPurchaseModalOpen} onOpenChange={setIsPurchaseModalOpen}>
-            <DialogTrigger asChild>
-              <button className="w-full bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 active:scale-95 transition-all text-white font-bold py-4 rounded-xl flex items-center justify-center gap-2 shadow-lg shadow-emerald-500/30 relative z-10">
-                خرید این سرویس <ChevronLeft className="w-5 h-5" />
-              </button>
-            </DialogTrigger>
-            
-            <DialogContent className="bg-zinc-900 border border-zinc-800 text-white rounded-3xl w-[90%] max-w-md mx-auto overflow-y-auto max-h-[90vh]">
-              <DialogHeader>
-                <DialogTitle className="text-right text-xl font-bold text-emerald-400">تایید سفارش</DialogTitle>
-                <DialogDescription className="text-right text-zinc-400 mt-2">
-                  شما در حال خرید {activeProduct.title} ({defaultVariant.duration}) هستید.
-                </DialogDescription>
-              </DialogHeader>
-
-              {/* Price configuration with Crypto Context */}
-              <div className="bg-zinc-800/50 p-4 rounded-xl border border-zinc-700/50 mt-2 flex justify-between items-center w-full">
-                <span className="text-sm font-bold text-zinc-300">مبلغ قابل پرداخت:</span>
-                <div className="flex flex-col items-end">
-                  <span className="text-emerald-400 font-bold text-lg flex items-center gap-1 dir-ltr text-left">
-                    {defaultVariant.priceLabel} <span className="text-sm font-normal text-zinc-400">تومان</span>
-                  </span>
-                  <span className="text-xs text-zinc-500 mt-1">پرداخت معادل تتری (USDT)</span>
-                </div>
-              </div>
-
-              <div className="mt-4 border-t border-zinc-800 pt-4">
-                <label className="text-sm font-bold text-zinc-300 block text-right mb-3">نوع انجام سفارش:</label>
-                <div className="grid grid-cols-2 gap-3 mb-4">
-                  <button 
-                    onClick={() => setActivationMethod('random')} 
-                    className={`p-3 rounded-xl text-xs font-bold transition-all border flex flex-col items-center justify-center gap-2 ${activationMethod === 'random' ? 'bg-emerald-500/20 text-emerald-400 border-emerald-400 shadow-[0_0_15px_rgba(52,211,153,0.3)]' : 'bg-zinc-800 text-zinc-400 border-zinc-700'}`}
-                  >
-                    <Zap className="w-5 h-5" />
-                    تحویل سریع
-                  </button>
-                  <button 
-                    onClick={() => setActivationMethod('personal')} 
-                    className={`p-3 rounded-xl text-xs font-bold transition-all border flex flex-col items-center justify-center gap-2 ${activationMethod === 'personal' ? 'bg-emerald-500/20 text-emerald-400 border-emerald-400 shadow-[0_0_15px_rgba(52,211,153,0.3)]' : 'bg-zinc-800 text-zinc-400 border-zinc-700'}`}
-                  >
-                    <Users className="w-5 h-5" />
-                    روی اکانت شخصی
-                  </button>
-                </div>
-                
-                {activationMethod === 'personal' && (
-                  <div className="flex flex-col gap-3 mb-2 animate-in fade-in zoom-in duration-300">
-                    <input 
-                      type="text" 
-                      placeholder="ایمیل یا آیدی جهت فعالسازی" 
-                      className="w-full bg-zinc-950 border border-zinc-700 rounded-xl p-3 text-sm text-left text-white focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 transition-all placeholder:text-right" 
-                      onChange={e => setAccountEmail(e.target.value)} 
-                      value={accountEmail} 
-                    />
-                    <input 
-                      type="password" 
-                      placeholder="رمز عبور (در صورت نیاز)" 
-                      className="w-full bg-zinc-950 border border-zinc-700 rounded-xl p-3 text-sm text-left text-white focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 transition-all placeholder:text-right" 
-                      onChange={e => setAccountPassword(e.target.value)} 
-                      value={accountPassword} 
-                    />
-                    <p className="text-[10px] text-zinc-500 text-right pr-1">اطلاعات شما با پروتکل‌های امنیتی محافظت می‌شود.</p>
+          <div className="flex gap-4 overflow-x-auto pb-4 scrollbar-hide dir-rtl -mx-5 px-5">
+            {hotItems.map((item, i) => (
+              <div 
+                key={i} 
+                onClick={() => router.push('/products')}
+                className="min-w-[240px] bg-gradient-to-br from-[#1a1a24] to-[#0f0f13] border border-zinc-800/80 rounded-2xl p-4 flex flex-col justify-between cursor-pointer hover:border-red-500/30 hover:shadow-lg hover:shadow-red-500/10 transition-all active:scale-[0.98]"
+              >
+                <div className="flex justify-between items-start mb-4">
+                  <div className={`w-10 h-10 rounded-xl bg-gradient-to-br ${item.gradient} flex items-center justify-center shadow-lg`}>
+                    {item.icon}
                   </div>
-                )}
+                  <span className="text-[10px] bg-red-500/10 text-red-500 border border-red-500/20 px-2 py-1 rounded-md font-bold">پرفروش</span>
+                </div>
+                <div>
+                  <h4 className="text-sm font-bold text-white">{item.title}</h4>
+                  <p className="text-[10px] text-zinc-400 mt-1">{item.subtitle}</p>
+                  <p className="text-xs font-bold text-emerald-400 mt-3">{item.variants[0].priceLabel} تومان</p>
+                </div>
               </div>
-
-              <div className="flex flex-col gap-3 mt-4 relative z-10">
-                <Button className="w-full bg-emerald-600 hover:bg-emerald-500 text-white py-6 rounded-xl text-lg font-bold flex gap-2" onClick={handleCheckoutProcess}>
-                  <CreditCard className="w-5 h-5" /> پرداخت تتری (Tetra98)
-                </Button>
-                <DialogClose asChild>
-                  <Button variant="ghost" className="w-full text-zinc-400 hover:text-white hover:bg-zinc-800 py-6 rounded-xl border border-transparent hover:border-zinc-700" onClick={() => {
-                    setAccountEmail('');
-                    setAccountPassword('');
-                    setActivationMethod('random');
-                  }}>
-                    انصراف
-                  </Button>
-                </DialogClose>
-              </div>
-            </DialogContent>
-          </Dialog>
-
-          <div className="flex justify-center gap-6 mt-6 relative z-10">
-            <button 
-              onClick={handleNextProduct}
-              className="bg-zinc-800/50 hover:bg-zinc-700 hover:scale-110 p-3 rounded-full transition-all border border-zinc-600/30 active:scale-95"
-            >
-              <ChevronRight className="w-5 h-5 text-zinc-300" />
-            </button>
-            <div className="flex items-center gap-2 max-w-[150px] overflow-hidden justify-center">
-              {PRODUCTS.slice(
-                Math.max(0, currentProductIndex - 2), 
-                Math.min(PRODUCTS.length, currentProductIndex + 3)
-              ).map((prod) => {
-                const actualIndex = PRODUCTS.indexOf(prod);
-                return (
-                  <div key={actualIndex} className={`h-1.5 rounded-full transition-all ${actualIndex === currentProductIndex ? 'w-4 bg-emerald-400' : 'w-1.5 bg-zinc-600'}`} />
-                );
-              })}
-            </div>
-            <button 
-              onClick={handlePrevProduct}
-              className="bg-zinc-800/50 hover:bg-zinc-700 hover:scale-110 p-3 rounded-full transition-all border border-zinc-600/30 active:scale-95"
-            >
-              <ChevronLeft className="w-5 h-5 text-zinc-300" />
-            </button>
+            ))}
           </div>
-        </div>
+        </section>
 
-        {/* Fixed Natural RTL Alignment using standard flex flow */}
-        <div className="bg-zinc-900 rounded-3xl p-5 shadow-lg border border-zinc-800 mb-8">
-          <h3 className="font-bold text-lg text-white mb-4 flex items-center gap-2">
-            <CheckCircle2 className="w-5 h-5 text-emerald-400" />
-            چرا کشه‌پول؟
-          </h3>
-          <ul className="space-y-3 text-sm text-zinc-300">
-            <li className="flex items-center gap-2"><Zap className="w-4 h-4 text-yellow-500" /> تحویل سریع سرویس‌ها</li>
-            <li className="flex items-center gap-2"><Users className="w-4 h-4 text-blue-400" /> تضمین پایداری اکانت‌ها</li>
-            <li className="flex items-center gap-2"><CheckCircle2 className="w-4 h-4 text-green-400" /> انجام خدمات ارزی و کانفیگ امن</li>
-          </ul>
-        </div>
-
+        {/* Categories Grid */}
+        <section>
+          <h3 className="text-sm font-bold text-white mb-4">دسته‌بندی‌ها</h3>
+          <div className="grid grid-cols-4 gap-4">
+            {[
+              { icon: <Shield className="w-5 h-5" />, label: "تحریم‌شکن" },
+              { icon: <Music className="w-5 h-5" />, label: "موسیقی" },
+              { icon: <PlaySquare className="w-5 h-5" />, label: "استریم" },
+              { icon: <Bot className="w-5 h-5" />, label: "هوش مصنوعی" },
+              { icon: <MessageCircle className="w-5 h-5" />, label: "شبکه اجتماعی" },
+              { icon: <Code className="w-5 h-5" />, label: "برنامه‌نویسی" },
+              { icon: <Layout className="w-5 h-5" />, label: "طراحی" },
+              { icon: <MoreHorizontal className="w-5 h-5" />, label: "بیشتر" },
+            ].map((cat, i) => (
+              <div key={i} onClick={() => router.push('/products')} className="flex flex-col items-center gap-2 cursor-pointer group hover:opacity-90 active:scale-95 transition-all">
+                <div className="w-14 h-14 bg-zinc-900 rounded-2xl border border-zinc-800 flex items-center justify-center text-zinc-300 group-hover:bg-zinc-800 transition-colors">
+                  {cat.icon}
+                </div>
+                <span className="text-[10px] text-zinc-400 font-medium">{cat.label}</span>
+              </div>
+            ))}
+          </div>
+        </section>
       </main>
     </div>
   );

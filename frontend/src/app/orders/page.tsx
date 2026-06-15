@@ -1,107 +1,172 @@
 "use client";
 
-import { Clock } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { useRouter } from "next/navigation";
-import {
-  Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogClose
-} from "@/components/ui/dialog";
+import { useState } from "react";
+import { Search, ChevronLeft, Copy, Check, Headphones } from "lucide-react";
+import { Dialog, DialogContent, DialogTitle, DialogHeader } from "@/components/ui/dialog";
 
-// Mock database layer for current client-side rendering evaluation
+type OrderStatus = 'all' | 'active' | 'expired';
+
+// Mock Data representing the visual states in the UI
 const MOCK_ORDERS = [
-  { id: "ORD-981X", title: "اسپاتیفای پرمیوم ۱ ماهه", date: "۱۴۰۳/۰۳/۱۱", status: "فعال", price: "۱۶۰,۰۰۰", method: "روی اکانت شخصی", email: "ilia@example.com" },
-  { id: "ORD-982X", title: "نتفلیکس پرمیوم ۳ ماهه", date: "۱۴۰۳/۰۲/۱۵", status: "پایان یافته", price: "۷۰۰,۰۰۰", method: "اکانت آماده", email: "-" },
-  { id: "ORD-983X", title: "تلگرام پرمیوم ۶ ماهه", date: "۱۴۰۲/۱۱/۲۰", status: "پایان یافته", price: "۱,۶۰۰,۰۰۰", method: "ارسال گیفت", email: "@ilia_devops" }
+  { id: "#HA-2024-1298", title: "Claude Pro", duration: "1 ماهه", daysLeft: "23 روز باقیمانده", status: "active", icon: "C", bg: "bg-orange-500", date: "1403/11/20 - 21:41", email: "example@mail.com" },
+  { id: "#HA-2024-1102", title: "ChatGPT Plus", duration: "1 ماهه", daysLeft: "12 روز باقیمانده", status: "active", icon: "G", bg: "bg-emerald-500", date: "1403/10/05 - 14:20", email: "example@mail.com" },
+  { id: "#HA-2024-0988", title: "Netflix Premium", duration: "1 ماهه", daysLeft: "منقضی شده", status: "expired", icon: "N", bg: "bg-red-600", date: "1403/08/12 - 09:15", email: "example@mail.com" },
 ];
 
 export default function OrdersPage() {
-  const router = useRouter();
+  const [activeTab, setActiveTab] = useState<OrderStatus>('all');
+  const [selectedOrder, setSelectedOrder] = useState<typeof MOCK_ORDERS[0] | null>(null);
+  const [copiedField, setCopiedField] = useState<string | null>(null);
+
+  const filteredOrders = MOCK_ORDERS.filter(order => 
+    activeTab === 'all' ? true : order.status === activeTab
+  );
+
+  const handleCopy = async (text: string, field: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedField(field);
+      setTimeout(() => setCopiedField(null), 2000);
+    } catch (err) {
+      console.error("Failed to copy", err);
+    }
+  };
 
   return (
-    <div className="min-h-screen bg-zinc-950 text-zinc-100 font-sans pb-32 relative">
-      
-      {/* Consistent Sticky Header */}
-      <header className="flex justify-between items-center p-4 bg-zinc-900/80 backdrop-blur-md sticky top-0 z-40 border-b border-zinc-800/50 mb-6 max-w-lg mx-auto">
-        <h1 className="text-xl font-bold text-emerald-400">سفارشات من</h1>
-        <button onClick={() => router.back()} className="text-zinc-400 hover:text-white transition-colors bg-zinc-800/50 px-4 py-1.5 rounded-xl text-sm font-medium">
-          بازگشت
-        </button>
+    <div className="min-h-screen bg-[#0a0a0c] text-white font-sans pb-32">
+      <header className="p-5 pt-6 flex justify-between items-center relative">
+        <div className="w-6"></div> {/* Spacer for alignment */}
+        <h1 className="text-base font-bold text-white">سفارش‌ها</h1>
+        <Search className="w-5 h-5 text-zinc-300" />
       </header>
 
-      <main className="flex flex-col gap-4 w-full px-4 max-w-lg mx-auto">
-        {MOCK_ORDERS.map((order) => (
-          <Dialog key={order.id}>
-            <div className="bg-zinc-800/60 backdrop-blur-sm rounded-3xl p-5 border border-zinc-700 flex flex-col gap-3 shadow-md hover:border-emerald-500/30 transition-colors">
-              <div className="flex justify-between items-center border-b border-zinc-700/50 pb-3">
-                <span className={`text-xs px-3 py-1 rounded-full font-medium ${order.status === 'فعال' ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 'bg-zinc-700/50 text-zinc-400 border border-zinc-600/50'}`}>
-                  {order.status}
-                </span>
-                <span className="text-xs text-zinc-400 flex items-center gap-1"><Clock className="w-3 h-3" /> {order.date}</span>
+      <main className="px-5 mt-2">
+        {/* Custom Segmented Control Tabs */}
+        <div className="bg-[#121217] p-1 rounded-xl flex items-center justify-between mb-6 border border-zinc-800/80">
+          <button onClick={() => setActiveTab('all')} className={`flex-1 py-2 text-xs font-medium rounded-lg transition-colors ${activeTab === 'all' ? 'bg-[#2a2a32] text-white' : 'text-zinc-500'}`}>همه</button>
+          <button onClick={() => setActiveTab('active')} className={`flex-1 py-2 text-xs font-medium rounded-lg transition-colors ${activeTab === 'active' ? 'bg-[#2a2a32] text-white' : 'text-zinc-500'}`}>فعال</button>
+          <button onClick={() => setActiveTab('expired')} className={`flex-1 py-2 text-xs font-medium rounded-lg transition-colors ${activeTab === 'expired' ? 'bg-[#2a2a32] text-white' : 'text-zinc-500'}`}>منقضی شده</button>
+        </div>
+
+        {/* Orders List */}
+        <div className="space-y-3">
+          {filteredOrders.map((order) => (
+            <div 
+              key={order.id} 
+              onClick={() => setSelectedOrder(order)}
+              className="bg-[#121217] border border-zinc-800/80 rounded-2xl p-4 flex items-center justify-between cursor-pointer hover:bg-zinc-900 transition-colors"
+            >
+              <div className="flex items-center gap-4">
+                <div className={`w-12 h-12 ${order.bg} rounded-full flex items-center justify-center text-white font-bold text-xl shadow-lg`}>
+                  {order.icon}
+                </div>
+                <div className="flex flex-col gap-1">
+                  <h3 className="text-sm font-bold text-white">{order.title}</h3>
+                  <p className="text-[10px] text-zinc-400">{order.duration}</p>
+                  <p className="text-[10px] text-zinc-500 mt-1">{order.daysLeft}</p>
+                </div>
               </div>
               
-              <div className="flex justify-between items-center mt-2">
-                <div className="text-right">
-                  <h4 className="font-bold text-sm text-white mb-1">{order.title}</h4>
-                  <p className="text-[10px] text-zinc-400 font-mono">کد سفارش: {order.id}</p>
-                </div>
-                <DialogTrigger asChild>
-                  <Button variant="outline" size="sm" className="border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/10 shrink-0 ml-2 rounded-xl">مشاهده</Button>
-                </DialogTrigger>
+              <div className={`text-[10px] font-bold px-3 py-1 rounded-full border ${
+                order.status === 'active' ? 'text-green-500 border-green-500/20 bg-green-500/5' : 'text-red-500 border-red-500/20 bg-red-500/5'
+              }`}>
+                {order.status === 'active' ? 'فعال' : 'منقضی'}
               </div>
             </div>
-
-            {/* Dynamic Modal populated securely with state context */}
-            <DialogContent className="bg-zinc-900 border border-zinc-700 text-white rounded-3xl w-[90%] max-w-md mx-auto">
-              <DialogHeader className="border-b border-zinc-800 pb-4 mb-2">
-                <DialogTitle className="text-right text-lg font-bold text-emerald-400">
-                  جزئیات سفارش
-                </DialogTitle>
-              </DialogHeader>
-              
-              <div className="flex flex-col gap-4 text-sm mt-2">
-                <div className="flex justify-between items-center">
-                  <span className="text-zinc-400">محصول:</span>
-                  <span className="font-bold text-white">{order.title}</span>
-                </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-zinc-400">کد سفارش:</span>
-                  <span className="font-mono text-emerald-400 bg-emerald-500/10 px-2 py-1 rounded-md">{order.id}</span>
-                </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-zinc-400">تاریخ ثبت:</span>
-                  <span>{order.date}</span>
-                </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-zinc-400">وضعیت:</span>
-                  <span className={order.status === 'فعال' ? 'text-emerald-400 font-bold' : 'text-zinc-500'}>{order.status}</span>
-                </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-zinc-400">نوع فعالسازی:</span>
-                  <span>{order.method}</span>
-                </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-zinc-400">ایمیل / آیدی:</span>
-                  <span className="font-mono text-left dir-ltr">{order.email}</span>
-                </div>
-                
-                {/* Visual grouping identical to the transaction payload interface */}
-                <div className="mt-2 bg-zinc-800/50 p-4 rounded-xl border border-zinc-700/50 flex justify-between items-center">
-                  <span className="font-bold text-zinc-300">مبلغ پرداخت شده:</span>
-                  <span className="text-emerald-400 font-bold text-lg dir-ltr">{order.price} <span className="text-sm font-normal text-zinc-400">تومان</span></span>
-                </div>
-              </div>
-
-              <div className="mt-6">
-                <DialogClose asChild>
-                  <Button className="w-full bg-zinc-800 hover:bg-zinc-700 text-white py-6 rounded-xl border border-zinc-600 transition-colors">
-                    بستن
-                  </Button>
-                </DialogClose>
-              </div>
-            </DialogContent>
-          </Dialog>
-        ))}
+          ))}
+        </div>
       </main>
+
+      {/* Order Details Modal (Screen 5) */}
+      <Dialog open={!!selectedOrder} onOpenChange={(open) => !open && setSelectedOrder(null)}>
+        <DialogContent className="bg-[#0a0a0c] border-none text-white w-full h-[100dvh] max-w-md mx-auto p-0 font-sans dir-rtl rounded-none flex flex-col">
+          <DialogTitle className="sr-only">Order Details</DialogTitle>
+          
+          <DialogHeader className="flex flex-row justify-between items-center p-5 pt-6 border-b border-zinc-800/60 sticky top-0 bg-[#0a0a0c]/90 backdrop-blur-md z-20">
+            <button onClick={() => setSelectedOrder(null)} className="p-2 -mr-2 text-zinc-400 hover:text-white transition-colors">
+              <ChevronLeft className="w-5 h-5" />
+            </button>
+            <h2 className="text-base font-bold">جزئیات سفارش</h2>
+            <button className="p-2 -ml-2 text-zinc-400 hover:text-white transition-colors">
+              <Headphones className="w-5 h-5" />
+            </button>
+          </DialogHeader>
+
+          {selectedOrder && (
+            <div className="p-5 space-y-6 flex-1 overflow-y-auto pb-24">
+              
+              {/* Status & Title Card */}
+              <div className="bg-[#121217] border border-zinc-800/80 rounded-2xl p-4 flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className={`w-10 h-10 ${selectedOrder.bg} rounded-full flex items-center justify-center text-white font-bold shadow-lg`}>
+                    {selectedOrder.icon}
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-bold text-white">{selectedOrder.title}</h3>
+                    <p className="text-[10px] text-zinc-400 mt-1">{selectedOrder.duration} - اکانت اشتراکی</p>
+                  </div>
+                </div>
+                <div className={`text-[10px] font-bold px-3 py-1 rounded-full border ${
+                  selectedOrder.status === 'active' ? 'text-green-500 border-green-500/20 bg-green-500/5' : 'text-red-500 border-red-500/20 bg-red-500/5'
+                }`}>
+                  {selectedOrder.status === 'active' ? 'فعال' : 'منقضی'}
+                </div>
+              </div>
+
+              {/* Order Meta */}
+              <div className="space-y-4 px-2">
+                <div className="flex justify-between items-center text-xs">
+                  <span className="text-zinc-500">تاریخ خرید</span>
+                  <span className="text-zinc-300 font-medium">{selectedOrder.date}</span>
+                </div>
+                <div className="flex justify-between items-center text-xs">
+                  <span className="text-zinc-500">شماره سفارش</span>
+                  <span className="text-zinc-300 font-mono font-medium">{selectedOrder.id}</span>
+                </div>
+              </div>
+
+              {/* Credentials Section */}
+              <div className="pt-4 border-t border-zinc-800/60">
+                <h4 className="text-sm font-bold text-white mb-4">اطلاعات اکانت</h4>
+                <div className="space-y-2">
+                  
+                  {/* Email Row */}
+                  <div className="bg-[#121217] border border-zinc-800/80 rounded-xl p-3.5 flex items-center justify-between">
+                    <span className="text-sm text-zinc-300 font-mono">{selectedOrder.email}</span>
+                    <button onClick={() => handleCopy(selectedOrder.email, 'email')} className="text-zinc-500 hover:text-white transition-colors">
+                      {copiedField === 'email' ? <Check className="w-4 h-4 text-green-500" /> : <Copy className="w-4 h-4" />}
+                    </button>
+                  </div>
+
+                  {/* Password Row */}
+                  <div className="bg-[#121217] border border-zinc-800/80 rounded-xl p-3.5 flex items-center justify-between">
+                    <span className="text-sm text-zinc-300 font-mono">••••••••••</span>
+                    <button onClick={() => handleCopy('secure_password_123', 'password')} className="text-zinc-500 hover:text-white transition-colors">
+                      {copiedField === 'password' ? <Check className="w-4 h-4 text-green-500" /> : <Copy className="w-4 h-4" />}
+                    </button>
+                  </div>
+
+                  {/* Login Link Row */}
+                  <div className="bg-[#121217] border border-zinc-800/80 rounded-xl p-3.5 flex items-center justify-between">
+                    <span className="text-sm text-zinc-300 font-mono">https://claude.ai/login</span>
+                    <button onClick={() => handleCopy('https://claude.ai/login', 'link')} className="text-zinc-500 hover:text-white transition-colors">
+                      {copiedField === 'link' ? <Check className="w-4 h-4 text-green-500" /> : <Copy className="w-4 h-4" />}
+                    </button>
+                  </div>
+
+                </div>
+              </div>
+
+              {/* Usage Guide Button */}
+              <button className="w-full bg-[#121217] border border-zinc-800/80 hover:bg-zinc-900 transition-colors rounded-xl p-4 flex items-center justify-between mt-2">
+                <span className="text-sm font-medium text-zinc-300">راهنمای استفاده</span>
+                <div className="w-5 h-5 rounded-full border border-zinc-500 flex items-center justify-center text-zinc-500 text-[10px] font-bold">?</div>
+              </button>
+
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

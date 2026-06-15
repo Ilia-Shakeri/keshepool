@@ -7,23 +7,15 @@ import "./globals.css";
 // Configure local font mapping
 const vazir = localFont({
   src: [
-    {
-      path: "../fonts/Vazir-Regular.woff2",
-      weight: "400",
-      style: "normal",
-    },
-    {
-      path: "../fonts/Vazir-Bold.woff2",
-      weight: "700",
-      style: "normal",
-    },
+    { path: "../fonts/Vazir-Regular.woff2", weight: "400", style: "normal" },
+    { path: "../fonts/Vazir-Bold.woff2", weight: "700", style: "normal" },
   ],
   variable: "--font-vazir",
   display: "swap",
 });
 
 export const metadata: Metadata = {
-  title: "Keshepool | Premium Accounts & Services",
+  title: "Keshepool | Premium Accounts",
   description: "Buy premium accounts, secure VPN configs, and foreign payment services.",
 };
 
@@ -34,17 +26,11 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="fa" dir="rtl" suppressHydrationWarning>
-      <body className={`${vazir.variable} font-sans antialiased bg-zinc-950`} suppressHydrationWarning>
-        
-        {/* Load Telegram Web App SDK */}
-        <Script
-          src="https://telegram.org/js/telegram-web-app.js"
-          strategy="beforeInteractive"
-        />
-        
-        <main className="min-h-screen text-zinc-100 overflow-x-hidden relative">
+      {/* Updated background to match the exact dark theme from the UI design */}
+      <body className={`${vazir.variable} font-sans antialiased bg-[#0a0a0c] text-white`} suppressHydrationWarning>
+        <Script src="https://telegram.org/js/telegram-web-app.js" strategy="beforeInteractive" />
+        <main className="min-h-screen overflow-x-hidden relative max-w-md mx-auto bg-[#0a0a0c] shadow-2xl border-x border-zinc-900/50">
           {children}
-          {/* Global Bottom Navigation integrated here */}
           <BottomNav />
         </main>
       </body>
