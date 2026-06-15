@@ -1,10 +1,9 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  // Disable the development indicator button on the bottom left
+  // Simplified devIndicators to pass Next.js 16 strict type checking
   devIndicators: {
-    appIsrStatus: false,
-    buildActivity: false,
+    // position: "bottom-right", // Optional: Only standard properties are allowed
   },
 };
 
