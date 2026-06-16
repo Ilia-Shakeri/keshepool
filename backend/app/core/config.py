@@ -9,6 +9,7 @@ class Settings(BaseSettings):
     DATABASE_URL: str
     REDIS_URL: str = Field(default="redis://redis:6379/0")
     BOT_TOKEN: str
+    ADMIN_BOT_TOKEN: str
     WEBHOOK_URL: str
     WEBHOOK_SECRET: str
     WEB_APP_URL: str
