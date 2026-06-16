@@ -26,10 +26,9 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="fa" dir="rtl" suppressHydrationWarning>
-      {/* Updated background to match the exact dark theme from the UI design */}
-      <body className={`${vazir.variable} font-sans antialiased bg-[#0a0a0c] text-white`} suppressHydrationWarning>
+      <body className={`${vazir.variable} font-sans antialiased bg-[#0F0F10] text-[#F5F5F5]`} suppressHydrationWarning>
         <Script src="https://telegram.org/js/telegram-web-app.js" strategy="beforeInteractive" />
-        <main className="min-h-screen overflow-x-hidden relative max-w-md mx-auto bg-[#0a0a0c] shadow-2xl border-x border-zinc-900/50">
+        <main className="min-h-screen overflow-x-hidden relative max-w-md mx-auto bg-[#0F0F10] shadow-2xl border-x border-[#33383F]/50">
           {children}
           <BottomNav />
         </main>
