@@ -7,7 +7,6 @@ import { toPersianDigits } from "@/lib/utils";
 
 type OrderStatus = 'all' | 'active' | 'expired';
 
-// Application state representation for ordered assets
 const MOCK_ORDERS = [
   { id: "#HA-2024-1298", title: "Claude Pro", duration: "۱ ماهه", daysLeft: `۲۳ روز باقیمانده`, status: "active", icon: "C", bg: "bg-[#E63946]", date: "۱۴۰۳/۱۱/۲۰ - ۲۱:۴۱", email: "example@mail.com" },
   { id: "#HA-2024-1102", title: "ChatGPT Plus", duration: "۱ ماهه", daysLeft: `۱۲ روز باقیمانده`, status: "active", icon: "G", bg: "bg-[#1E3C5A]", date: "۱۴۰۳/۱۰/۰۵ - ۱۴:۲۰", email: "example@mail.com" },
@@ -42,14 +41,12 @@ export default function OrdersPage() {
       </header>
 
       <main className="px-5 mt-2">
-        {/* Custom Segmented Nav */}
         <div className="bg-[#0B1D33] p-1 rounded-xl flex items-center justify-between mb-6 border border-[#33383F]">
           <button onClick={() => setActiveTab('all')} className={`flex-1 py-2 text-xs font-medium rounded-lg transition-colors ${activeTab === 'all' ? 'bg-[#33383F] text-[#F5F5F5]' : 'text-[#F5F5F5]/50'}`}>همه</button>
           <button onClick={() => setActiveTab('active')} className={`flex-1 py-2 text-xs font-medium rounded-lg transition-colors ${activeTab === 'active' ? 'bg-[#33383F] text-[#F5F5F5]' : 'text-[#F5F5F5]/50'}`}>فعال</button>
           <button onClick={() => setActiveTab('expired')} className={`flex-1 py-2 text-xs font-medium rounded-lg transition-colors ${activeTab === 'expired' ? 'bg-[#33383F] text-[#F5F5F5]' : 'text-[#F5F5F5]/50'}`}>منقضی شده</button>
         </div>
 
-        {/* Active Entities Iteration */}
         <div className="space-y-3">
           {filteredOrders.map((order) => (
             <div 
@@ -69,7 +66,7 @@ export default function OrdersPage() {
               </div>
               
               <div className={`text-[10px] font-bold px-3 py-1 rounded-full border ${
-                order.status === 'active' ? 'text-[#1E3C5A] border-[#1E3C5A]/40 bg-[#1E3C5A]/10' : 'text-[#E63946] border-[#E63946]/20 bg-[#E63946]/5'
+                order.status === 'active' ? 'text-emerald-400 border-emerald-400/40 bg-emerald-400/10' : 'text-[#E63946] border-[#E63946]/20 bg-[#E63946]/5'
               }`}>
                 {order.status === 'active' ? 'فعال' : 'منقضی'}
               </div>
@@ -78,7 +75,6 @@ export default function OrdersPage() {
         </div>
       </main>
 
-      {/* Meta Inspection Modal */}
       <Dialog open={!!selectedOrder} onOpenChange={(open) => !open && setSelectedOrder(null)}>
         <DialogContent className="bg-[#0F0F10] border-none text-[#F5F5F5] w-full h-[100dvh] max-w-md mx-auto p-0 font-sans dir-rtl rounded-none flex flex-col">
           <DialogTitle className="sr-only">Order Details</DialogTitle>
@@ -95,7 +91,6 @@ export default function OrdersPage() {
 
           {selectedOrder && (
             <div className="p-5 space-y-6 flex-1 overflow-y-auto pb-24">
-              
               <div className="bg-[#0B1D33] border border-[#33383F] rounded-2xl p-4 flex items-center justify-between">
                 <div className="flex items-center gap-3">
                   <div className={`w-10 h-10 ${selectedOrder.bg} rounded-full flex items-center justify-center text-[#F5F5F5] font-bold shadow-lg`}>
@@ -107,7 +102,7 @@ export default function OrdersPage() {
                   </div>
                 </div>
                 <div className={`text-[10px] font-bold px-3 py-1 rounded-full border ${
-                  selectedOrder.status === 'active' ? 'text-[#1E3C5A] border-[#1E3C5A]/40 bg-[#1E3C5A]/10' : 'text-[#E63946] border-[#E63946]/20 bg-[#E63946]/5'
+                  selectedOrder.status === 'active' ? 'text-emerald-400 border-emerald-400/40 bg-emerald-400/10' : 'text-[#E63946] border-[#E63946]/20 bg-[#E63946]/5'
                 }`}>
                   {selectedOrder.status === 'active' ? 'فعال' : 'منقضی'}
                 </div>
@@ -127,7 +122,6 @@ export default function OrdersPage() {
               <div className="pt-4 border-t border-[#33383F]">
                 <h4 className="text-sm font-bold text-[#F5F5F5] mb-4">اطلاعات اکانت</h4>
                 <div className="space-y-2">
-                  
                   <div className="bg-[#0B1D33] border border-[#33383F] rounded-xl p-3.5 flex items-center justify-between">
                     <span className="text-sm text-[#F5F5F5]/80 font-mono">{selectedOrder.email}</span>
                     <button onClick={() => handleCopy(selectedOrder.email, 'email')} className="text-[#F5F5F5]/50 hover:text-[#F5F5F5] transition-colors">
@@ -148,7 +142,6 @@ export default function OrdersPage() {
                       {copiedField === 'link' ? <Check className="w-4 h-4 text-[#1E3C5A]" /> : <Copy className="w-4 h-4" />}
                     </button>
                   </div>
-
                 </div>
               </div>
 
@@ -156,7 +149,6 @@ export default function OrdersPage() {
                 <span className="text-sm font-medium text-[#F5F5F5]">راهنمای استفاده</span>
                 <div className="w-5 h-5 rounded-full border border-[#F5F5F5]/50 flex items-center justify-center text-[#F5F5F5]/50 text-[10px] font-bold">?</div>
               </button>
-
             </div>
           )}
         </DialogContent>

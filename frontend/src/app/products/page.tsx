@@ -1,13 +1,12 @@
 "use client";
 
 import { useState } from "react";
-import { SlidersHorizontal, ChevronLeft, Star } from "lucide-react";
+import { SlidersHorizontal, ChevronLeft } from "lucide-react";
 import { PRODUCTS, ProductCategory, Product, ProductVariant } from "@/lib/products";
 import ProductDetailModal from "@/components/ProductDetailModal";
 import CheckoutModal from "@/components/CheckoutModal";
-import { toPersianDigits, formatPrice } from "@/lib/utils";
+import { toPersianDigits } from "@/lib/utils";
 
-// Filter taxonomy definitions
 const CATEGORIES: { id: ProductCategory | 'all', label: string }[] = [
   { id: 'all', label: 'همه' },
   { id: 'video', label: 'استریم' },
@@ -19,21 +18,17 @@ const CATEGORIES: { id: ProductCategory | 'all', label: string }[] = [
 
 export default function ProductsPage() {
   const [activeCategory, setActiveCategory] = useState<ProductCategory | 'all'>('all');
-
-  // Interactive View States
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [isDetailModalOpen, setIsDetailModalOpen] = useState(false);
   const [selectedVariant, setSelectedVariant] = useState<ProductVariant | null>(null);
   const [isCheckoutOpen, setIsCheckoutOpen] = useState(false);
 
-  // Simulated internal balance
   const walletBalance = 820000;
 
   const filteredProducts = PRODUCTS.filter(product => 
     activeCategory === 'all' || product.category === activeCategory
   );
 
-  // Presentation transition triggers
   const handleProductSelect = (product: Product) => {
     setSelectedProduct(product);
     setIsDetailModalOpen(true);
@@ -42,8 +37,6 @@ export default function ProductsPage() {
   const handleProceedToCheckout = (variant: ProductVariant) => {
     setSelectedVariant(variant);
     setIsDetailModalOpen(false);
-    
-    // Defer execution to allow modal unmounting animation
     setTimeout(() => {
       setIsCheckoutOpen(true);
     }, 150);
@@ -51,13 +44,11 @@ export default function ProductsPage() {
 
   return (
     <div className="min-h-screen bg-[#0F0F10] text-[#F5F5F5] font-sans pb-32">
-      {/* Structural Header */}
       <header className="p-5 pt-6 pb-2">
         <div className="flex justify-center items-center mb-6 relative">
           <h1 className="text-base font-bold text-[#F5F5F5] absolute left-1/2 -translate-x-1/2">محصولات</h1>
         </div>
 
-        {/* Keyword Filtering Input */}
         <div className="relative mb-6">
           <input 
             type="text" 
@@ -69,7 +60,6 @@ export default function ProductsPage() {
           </button>
         </div>
 
-        {/* Category Sorting Chips */}
         <div className="flex gap-2 overflow-x-auto scrollbar-hide dir-rtl pb-2 -mx-5 px-5">
           {CATEGORIES.map((cat) => (
             <button
@@ -87,7 +77,6 @@ export default function ProductsPage() {
         </div>
       </header>
 
-      {/* Product Display Map */}
       <main className="px-5 space-y-3 mt-2">
         {filteredProducts.map((product) => (
           <div 
@@ -102,15 +91,14 @@ export default function ProductsPage() {
               <div className="flex flex-col gap-1">
                 <h3 className="text-sm font-bold text-[#F5F5F5]">{product.brand}</h3>
                 <p className="text-[10px] text-[#F5F5F5]/50">{product.subtitle}</p>
-                <p className="text-[10px] text-[#F5F5F5]/70 mt-1">از <span className="text-[#F5F5F5] font-bold">{toPersianDigits(product.variants[0].priceLabel)}</span> تومان</p>
               </div>
             </div>
             
             <div className="flex flex-col items-end justify-between h-full py-1 gap-4">
               <ChevronLeft className="w-4 h-4 text-[#F5F5F5]/50" />
-              <div className="flex items-center gap-1 text-[10px] text-[#F5F5F5]/70 font-medium">
-                <Star className="w-3 h-3 text-[#E63946] fill-[#E63946]" />
-                {toPersianDigits(4.9)}
+              <div className="flex flex-col items-end gap-0.5">
+                  <span className="text-xs font-bold text-[#F5F5F5]">{toPersianDigits(product.variants[0].priceLabel)}</span>
+                  <span className="text-[10px] text-[#F5F5F5]/50">تومان</span>
               </div>
             </div>
           </div>
@@ -123,7 +111,6 @@ export default function ProductsPage() {
         )}
       </main>
 
-      {/* Layer 1: Product Presentation Context */}
       <ProductDetailModal 
         isOpen={isDetailModalOpen} 
         onClose={() => setIsDetailModalOpen(false)} 
@@ -131,7 +118,6 @@ export default function ProductsPage() {
         onProceedToCheckout={handleProceedToCheckout} 
       />
 
-      {/* Layer 2: Finalization Context */}
       {selectedProduct && selectedVariant && (
         <CheckoutModal 
           isOpen={isCheckoutOpen} 

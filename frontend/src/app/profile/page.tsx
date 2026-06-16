@@ -7,12 +7,10 @@ import { toPersianDigits } from "@/lib/utils";
 
 export default function ProfilePage() {
   const router = useRouter();
-  
   const [tgUser, setTgUser] = useState<{ id?: number; first_name?: string; last_name?: string } | null>(null);
   const [copied, setCopied] = useState(false);
 
   useEffect(() => {
-    // Parse the system initialization context configuration payload
     if (typeof window !== "undefined" && window.Telegram?.WebApp) {
       const userPayload = window.Telegram.WebApp.initDataUnsafe?.user;
       if (userPayload) {
@@ -65,7 +63,7 @@ export default function ProfilePage() {
           </div>
           <div className="h-8 w-px bg-[#33383F]"></div>
           <div className="flex flex-col items-center gap-1 cursor-pointer hover:opacity-80 active:scale-95" onClick={() => router.push('/finance')}>
-            <span className="text-lg font-bold text-[#F5F5F5]">{toPersianDigits("820K")}</span>
+            <span className="text-lg font-bold text-[#F5F5F5]">{toPersianDigits("820")} هزار</span>
             <span className="text-[10px] text-[#F5F5F5]/50">تومان موجودی</span>
           </div>
         </div>
