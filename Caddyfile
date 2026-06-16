@@ -1,23 +1,20 @@
-# ==================================================
-# FILE: Caddyfile
-# ==================================================
-# Replace with your actual DuckDNS domain
 keshepool.duckdns.org {
-    
-    # Route Telegram Webhook and Backend API requests to the FastAPI container
     handle /webhook* {
         reverse_proxy backend:8000
     }
-    
+
     handle /health* {
         reverse_proxy backend:8000
     }
-    
+
     handle /api/* {
         reverse_proxy backend:8000
     }
 
-    # Route all other traffic to the Next.js Frontend container
+    handle /static/* {
+        reverse_proxy backend:8000
+    }
+
     handle {
         reverse_proxy frontend:3000
     }

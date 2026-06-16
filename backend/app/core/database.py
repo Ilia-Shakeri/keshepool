@@ -1,30 +1,31 @@
-# ==================================================
-# FILE: backend/app/core/database.py
-# ==================================================
+import logging
 
-import os
-from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
-from sqlalchemy.ext.declarative import declarative_base
 
-# Construct the async database URL from the environment variable
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql+asyncpg://user:pass@db:5432/dbname")
+from app.core.config import settings
+from app.models import Base
 
-# Create the async SQLAlchemy engine
-engine = create_async_engine(DATABASE_URL, echo=False)
+logger = logging.getLogger(__name__)
 
-# Create the session factory for async sessions
-AsyncSessionLocal = sessionmaker(
-    engine, class_=AsyncSession, expire_on_commit=False
+engine = create_async_engine(
+    settings.DATABASE_URL,
+    echo=False,
+    pool_pre_ping=True,
+    pool_size=5,
+    max_overflow=10,
 )
 
-Base = declarative_base()
+AsyncSessionLocal = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
+
+async def init_db() -> None:
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    logger.info("Database metadata is ready.")
+
 
 async def get_db():
-    """
-    Dependency function to yield database sessions for FastAPI routes.
-    Ensures the session is cleanly closed after the request completes.
-    """
     async with AsyncSessionLocal() as session:
         try:
             yield session

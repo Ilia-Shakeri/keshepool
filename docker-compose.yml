@@ -1,4 +1,4 @@
-version: '3.8'
+version: "3.8"
 
 services:
   db:
@@ -16,6 +16,22 @@ services:
       timeout: 5s
       retries: 5
 
+  db-backup:
+    image: prodrigestivill/postgres-backup-local:15
+    restart: unless-stopped
+    environment:
+      POSTGRES_HOST: db
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      SCHEDULE: "@daily"
+      BACKUP_KEEP_DAYS: 7
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - ./backups:/backups
+
   redis:
     image: redis:7-alpine
     restart: unless-stopped
@@ -28,19 +44,23 @@ services:
       retries: 5
 
   backend:
-    build: 
-      context: ./backend
-      dockerfile: Dockerfile
+    image: ${CI_REGISTRY_IMAGE:-registry.gitlab.com/keshepool}/keshepool-backend:latest
     restart: unless-stopped
-    # Ports removed for security. Access is routed via Caddy.
     environment:
       - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
       - REDIS_URL=redis://redis:6379/0
       - BOT_TOKEN=${BOT_TOKEN}
       - WEBHOOK_URL=${WEBHOOK_URL}
       - WEB_APP_URL=${WEB_APP_URL}
+      - WEBHOOK_SECRET=${WEBHOOK_SECRET}
       - TETRA98_API_URL=${TETRA98_API_URL}
       - TETRA98_API_KEY=${TETRA98_API_KEY}
+      - ADMIN_TELEGRAM_IDS=${ADMIN_TELEGRAM_IDS}
+      - ASSET_ROOT=/app/static
+      - PUBLIC_ASSET_BASE_URL=/static
+      - ALLOW_INSECURE_DEV_AUTH=${ALLOW_INSECURE_DEV_AUTH:-false}
+    volumes:
+      - ./static:/app/static
     depends_on:
       db:
         condition: service_healthy
@@ -48,16 +68,13 @@ services:
         condition: service_healthy
 
   frontend:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
+    image: ${CI_REGISTRY_IMAGE:-registry.gitlab.com/keshepool}/keshepool-frontend:latest
     restart: unless-stopped
-    # Ports removed for security. Access is routed via Caddy.
     environment:
       - NODE_ENV=production
       - NEXT_PUBLIC_API_URL=${WEBHOOK_URL}/api
+      - NEXT_PUBLIC_BOT_USERNAME=${NEXT_PUBLIC_BOT_USERNAME:-keshepoolbot}
 
-  # Caddy Reverse Proxy Service
   caddy:
     image: caddy:2-alpine
     restart: unless-stopped
@@ -65,26 +82,12 @@ services:
       - "80:80"
       - "443:443"
     volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
       - caddy_config:/config
     depends_on:
       - backend
       - frontend
-
-  admin-bot:
-    build: 
-      context: ./admin-bot
-      dockerfile: Dockerfile
-    restart: unless-stopped
-    environment:
-      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
-      - ADMIN_BOT_TOKEN=${ADMIN_BOT_TOKEN}
-      - ADMIN_TELEGRAM_IDS=${ADMIN_TELEGRAM_IDS} # e.g., "123456789,987654321"
-      - ADMIN_GROUP_CHAT_ID=${ADMIN_GROUP_CHAT_ID}
-    depends_on:
-      db:
-        condition: service_healthy
 
 volumes:
   pgdata:

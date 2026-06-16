@@ -1,49 +1,116 @@
-from sqlalchemy.orm import Session
-from sqlalchemy.exc import IntegrityError
-from app.models import InventoryItem, ItemStatus, TransactionType
-from app.services.wallet_service import process_wallet_transaction
+import secrets
+from decimal import Decimal
+from typing import Optional
+
 from fastapi import HTTPException
-import logging
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
-logger = logging.getLogger(__name__)
+from app.models import (
+    InventoryItem,
+    ItemStatus,
+    Notification,
+    Order,
+    OrderStatus,
+    Product,
+    ProductVariant,
+    Transaction,
+    TransactionType,
+    User,
+    Wallet,
+    utcnow,
+)
 
-def fulfill_order(db: Session, user_id: int, product_id: str, plan_type: str, price: float):
-    """
-    Executes order fulfillment using transaction locks.
-    Deducts wallet balance and assigns inventory concurrently.
-    """
+
+def _money(value) -> Decimal:
+    return Decimal(str(value)).quantize(Decimal("0.01"))
+
+
+async def fulfill_wallet_order(
+    db: AsyncSession,
+    user: User,
+    product_id: str,
+    variant_id: str,
+) -> Order:
     try:
-        with db.begin_nested():
-            # Deduct from wallet securely
-            process_wallet_transaction(
-                db=db, 
-                user_id=user_id, 
-                amount=-price, 
-                tx_type=TransactionType.PURCHASE,
-                ref_id=f"order_{product_id}_{plan_type}"
+        variant_result = await db.execute(
+            select(ProductVariant)
+            .options(selectinload(ProductVariant.product))
+            .where(
+                ProductVariant.id == variant_id,
+                ProductVariant.product_id == product_id,
+                ProductVariant.is_active.is_(True),
             )
-            
-            # Lock and assign an available inventory item to prevent double-selling
-            item = db.query(InventoryItem).filter(
+        )
+        variant = variant_result.scalars().first()
+        if not variant or not variant.product or not variant.product.is_active:
+            raise HTTPException(status_code=404, detail="Product variant not found.")
+
+        wallet_result = await db.execute(
+            select(Wallet).where(Wallet.user_id == user.id).with_for_update()
+        )
+        wallet = wallet_result.scalars().first()
+        if not wallet:
+            raise HTTPException(status_code=404, detail="Wallet not found.")
+
+        price = _money(variant.raw_price)
+        if wallet.balance < price:
+            raise HTTPException(status_code=400, detail="Insufficient wallet balance.")
+
+        item_result = await db.execute(
+            select(InventoryItem)
+            .where(
                 InventoryItem.product_id == product_id,
-                InventoryItem.plan_type == plan_type,
-                InventoryItem.status == ItemStatus.AVAILABLE
-            ).with_for_update(skip_locked=True).first()
+                InventoryItem.variant_id == variant_id,
+                InventoryItem.status == ItemStatus.AVAILABLE,
+            )
+            .with_for_update(skip_locked=True)
+            .limit(1)
+        )
+        item = item_result.scalars().first()
+        if not item:
+            raise HTTPException(status_code=409, detail="This product is currently out of stock.")
 
-            if not item:
-                raise HTTPException(status_code=400, detail="Out of stock for this specific plan.")
+        wallet.balance = _money(wallet.balance) - price
+        item.status = ItemStatus.ASSIGNED
+        item.assigned_to_user_id = user.id
+        item.assigned_at = utcnow()
 
-            item.status = ItemStatus.ASSIGNED
-            item.assigned_to_user_id = user_id
-            
-        db.commit()
-        
-        # Trigger Telegram delivery via aiogram bot instance
-        # await bot.send_message(chat_id=user_id, text=f"Your config: \n{item.credentials}")
-        
-        return item
+        public_id = f"KP-{secrets.token_hex(4).upper()}"
+        order = Order(
+            public_id=public_id,
+            user_id=user.id,
+            product_id=product_id,
+            variant_id=variant_id,
+            inventory_item_id=item.id,
+            total_amount=price,
+            status=OrderStatus.ACTIVE,
+        )
+        db.add(order)
+        db.add(
+            Transaction(
+                wallet_id=wallet.id,
+                amount=-price,
+                type=TransactionType.PURCHASE,
+                reference_id=public_id,
+                description=f"Purchase: {variant.product.brand} {variant.duration}",
+            )
+        )
+        db.add(
+            Notification(
+                user_id=user.id,
+                title="سفارش جدید",
+                description=f"سفارش {variant.product.brand} با موفقیت فعال شد.",
+            )
+        )
 
-    except IntegrityError:
-        db.rollback()
-        logger.error(f"Fulfillment failed for user {user_id} and product {product_id}")
-        raise HTTPException(status_code=500, detail="Order fulfillment transaction failed.")
+        await db.commit()
+        await db.refresh(order)
+        return order
+    except HTTPException:
+        await db.rollback()
+        raise
+    except Exception as exc:
+        await db.rollback()
+        raise HTTPException(status_code=500, detail="Order fulfillment failed.") from exc

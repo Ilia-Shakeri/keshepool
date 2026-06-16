@@ -1,41 +1,56 @@
-from sqlalchemy.orm import Session
-from sqlalchemy.exc import IntegrityError
-from app.models import Wallet, Transaction, TransactionType
-from fastapi import HTTPException
+from decimal import Decimal
+from typing import Optional
 
-def process_wallet_transaction(db: Session, user_id: int, amount: float, tx_type: TransactionType, ref_id: str = None):
-    """
-    Executes a wallet transaction with strict ACID compliance.
-    Locks the wallet row to prevent race conditions during concurrent requests.
-    """
+from fastapi import HTTPException
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.models import Transaction, TransactionType, Wallet
+
+
+def to_decimal(value) -> Decimal:
+    return Decimal(str(value)).quantize(Decimal("0.01"))
+
+
+async def apply_wallet_transaction(
+    db: AsyncSession,
+    user_id: int,
+    amount,
+    tx_type: TransactionType,
+    ref_id: Optional[str] = None,
+    description: Optional[str] = None,
+) -> Wallet:
+    amount_decimal = to_decimal(amount)
+
     try:
-        # Start transaction block
-        with db.begin_nested():
-            # Lock the specific wallet row for update
-            wallet = db.query(Wallet).filter(Wallet.user_id == user_id).with_for_update().first()
-            
-            if not wallet:
-                raise HTTPException(status_code=404, detail="Wallet not found.")
-                
-            # Validate sufficient funds for deductions
-            if amount < 0 and wallet.balance < abs(amount):
-                raise HTTPException(status_code=400, detail="Insufficient funds.")
-                
-            # Apply balance change
-            wallet.balance += amount
-            
-            # Record the audit trail
-            transaction = Transaction(
+        wallet_result = await db.execute(
+            select(Wallet).where(Wallet.user_id == user_id).with_for_update()
+        )
+        wallet = wallet_result.scalars().first()
+
+        if not wallet:
+            raise HTTPException(status_code=404, detail="Wallet not found.")
+
+        if amount_decimal < 0 and wallet.balance < abs(amount_decimal):
+            raise HTTPException(status_code=400, detail="Insufficient wallet balance.")
+
+        wallet.balance = to_decimal(wallet.balance) + amount_decimal
+        db.add(
+            Transaction(
                 wallet_id=wallet.id,
-                amount=amount,
+                amount=amount_decimal,
                 type=tx_type,
-                reference_id=ref_id
+                reference_id=ref_id,
+                description=description,
             )
-            db.add(transaction)
-            
-        db.commit()
+        )
+
+        await db.commit()
+        await db.refresh(wallet)
         return wallet
-        
-    except IntegrityError:
-        db.rollback()
-        raise HTTPException(status_code=500, detail="Database transaction failed.")
+    except HTTPException:
+        await db.rollback()
+        raise
+    except Exception as exc:
+        await db.rollback()
+        raise HTTPException(status_code=500, detail="Wallet transaction failed.") from exc

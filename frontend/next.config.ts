@@ -1,8 +1,6 @@
-// ==================================================
-// FILE: frontend/next.config.ts
-// ==================================================
-
 import type { NextConfig } from "next";
+
+const backendUrl = process.env.BACKEND_INTERNAL_URL || 'http://127.0.0.1:8000';
 
 const nextConfig: NextConfig = {
   output: 'standalone',
@@ -10,10 +8,8 @@ const nextConfig: NextConfig = {
   async rewrites() {
     return [
       {
-        // Proxy all API requests to the local FastAPI backend during development
-        // This mirrors the Caddy reverse proxy behavior in production
         source: '/api/:path*',
-        destination: 'http://127.0.0.1:8000/api/:path*',
+        destination: `${backendUrl}/api/:path*`,
       },
     ];
   },
