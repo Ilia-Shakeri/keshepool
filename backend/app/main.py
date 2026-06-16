@@ -15,44 +15,48 @@ from aiogram import Bot, Dispatcher, types
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
 from aiogram.filters import CommandStart
 
-from app.core.database import get_db
+from app.core.database import get_db, AsyncSessionLocal
 from app.models import Transaction, TransactionType, Wallet, User
 from app.services.wallet_service import process_wallet_transaction
 from app.core.security import validate_telegram_data
 
-# Initialize logging configuration
+from app.api import admin, products  # Import the new routers
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Fetch environment variables securely
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 WEB_APP_URL = os.getenv("WEB_APP_URL", "https://your-domain.com")
 WEBHOOK_PATH = "/webhook"
 
-# Tetra98 API Configuration
-TETRA98_API_URL = os.getenv("TETRA98_API_URL", "https://api.tetra98.com")
-TETRA98_API_KEY = os.getenv("TETRA98_API_KEY", "placeholder_key")
-CALLBACK_URL = f"{WEBHOOK_URL}/api/pay/tetra98/callback"
-
-if not BOT_TOKEN or BOT_TOKEN == "fallback_token":
-    logger.critical("BOT_TOKEN environment variable is missing or default! Terminating boot context.")
+if not BOT_TOKEN or not WEBHOOK_URL:
+    logger.critical("Critical environment variables missing. Terminating context.")
     sys.exit(1)
 
-if not WEBHOOK_URL:
-    logger.critical("WEBHOOK_URL environment variable is missing! Terminating boot context.")
-    sys.exit(1)
-
-# Initialize Aiogram bot and dispatcher securely
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
 @dp.message(CommandStart())
 async def handle_start(message: types.Message):
     """
-    Handles the /start command.
-    Sends a welcome message and an inline button to open the Telegram Mini App.
+    Persists user to the database upon initialization of the bot context.
     """
+    async with AsyncSessionLocal() as session:
+        user_id_str = str(message.from_user.id)
+        result = await session.execute(select(User).filter(User.telegram_id == user_id_str))
+        user = result.scalars().first()
+        
+        if not user:
+            new_user = User(telegram_id=user_id_str, role="user")
+            session.add(new_user)
+            await session.flush()
+            
+            new_wallet = Wallet(user_id=new_user.id, balance=0.00)
+            session.add(new_wallet)
+            await session.commit()
+            logger.info(f"Registered new user in database: {user_id_str}")
+
     markup = InlineKeyboardMarkup(
         inline_keyboard=[
             [
@@ -71,38 +75,29 @@ async def handle_start(message: types.Message):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """
-    Manages the lifecycle of the FastAPI application.
-    Initializes webhook on startup and cleans up resources on shutdown.
-    """
     full_webhook_url = f"{WEBHOOK_URL.rstrip('/')}{WEBHOOK_PATH}"
     logger.info(f"Setting up webhook at: {full_webhook_url}")
-    
     await bot.set_webhook(url=full_webhook_url)
-    
-    yield  # Application engine running context
-    
-    logger.info("Removing webhook and cleaning up resources...")
+    yield
     await bot.delete_webhook()
     await bot.session.close()
 
-# Initialize FastAPI application
 app = FastAPI(lifespan=lifespan)
+
+# Register routers
+app.include_router(admin.router)
+app.include_router(products.router)
 
 @app.post(WEBHOOK_PATH)
 async def bot_webhook(request: Request):
-    """
-    Endpoint that receives updates from Telegram servers.
-    Validates payload structure and logs exceptions accurately without crashing.
-    """
     try:
         update_data = await request.json()
         telegram_update = types.Update(**update_data)
         await dp.feed_update(bot=bot, update=telegram_update)
         return {"status": "ok"}
     except Exception as e:
-        logger.error(f"Error processing webhook update payload: {e}")
-        raise HTTPException(status_code=400, detail="Invalid update payload structure")
+        logger.error(f"Webhook payload error: {e}")
+        raise HTTPException(status_code=400, detail="Invalid payload")
 
 @app.get("/health")
 async def health_check():

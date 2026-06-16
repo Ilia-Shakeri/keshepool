@@ -1,8 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { SlidersHorizontal, ChevronLeft } from "lucide-react";
-import { PRODUCTS, ProductCategory, Product, ProductVariant } from "@/lib/products";
+import { ProductCategory, Product, ProductVariant } from "@/lib/products";
+import { IconMap } from "@/lib/icons";
 import ProductDetailModal from "@/components/ProductDetailModal";
 import CheckoutModal from "@/components/CheckoutModal";
 import { toPersianDigits } from "@/lib/utils";
@@ -17,15 +18,30 @@ const CATEGORIES: { id: ProductCategory | 'all', label: string }[] = [
 ];
 
 export default function ProductsPage() {
+  const [products, setProducts] = useState<Product[]>([]);
   const [activeCategory, setActiveCategory] = useState<ProductCategory | 'all'>('all');
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [isDetailModalOpen, setIsDetailModalOpen] = useState(false);
   const [selectedVariant, setSelectedVariant] = useState<ProductVariant | null>(null);
   const [isCheckoutOpen, setIsCheckoutOpen] = useState(false);
-
   const walletBalance = 820000;
 
-  const filteredProducts = PRODUCTS.filter(product => 
+  useEffect(() => {
+    const fetchProducts = async () => {
+      try {
+        const response = await fetch('/api/products');
+        if (response.ok) {
+          const data = await response.json();
+          setProducts(data);
+        }
+      } catch (error) {
+        console.error("Pipeline failure fetching product catalog", error);
+      }
+    };
+    fetchProducts();
+  }, []);
+
+  const filteredProducts = products.filter(product => 
     activeCategory === 'all' || product.category === activeCategory
   );
 
@@ -85,8 +101,8 @@ export default function ProductsPage() {
             className="bg-[#0B1D33] border border-[#33383F] rounded-2xl p-4 flex items-center justify-between cursor-pointer hover:bg-[#1E3C5A]/50 transition-colors group"
           >
             <div className="flex items-center gap-4">
-              <div className={`w-12 h-12 rounded-2xl ${product.gradient} flex items-center justify-center shadow-lg group-hover:scale-105 transition-transform`}>
-                {product.icon}
+              <div className={`w-12 h-12 rounded-2xl bg-gradient-to-br ${product.gradient} flex items-center justify-center shadow-lg group-hover:scale-105 transition-transform`}>
+                {IconMap[product.icon] || IconMap["Box"]}
               </div>
               <div className="flex flex-col gap-1">
                 <h3 className="text-sm font-bold text-[#F5F5F5]">{product.brand}</h3>
@@ -97,7 +113,7 @@ export default function ProductsPage() {
             <div className="flex flex-col items-end justify-between h-full py-1 gap-4">
               <ChevronLeft className="w-4 h-4 text-[#F5F5F5]/50" />
               <div className="flex flex-col items-end gap-0.5">
-                  <span className="text-xs font-bold text-[#F5F5F5]">{toPersianDigits(product.variants[0].priceLabel)}</span>
+                  <span className="text-xs font-bold text-[#F5F5F5]">{toPersianDigits(product.variants[0]?.priceLabel || '0')}</span>
                   <span className="text-[10px] text-[#F5F5F5]/50">تومان</span>
               </div>
             </div>
@@ -111,6 +127,7 @@ export default function ProductsPage() {
         )}
       </main>
 
+      {/* Render Modals securely */}
       <ProductDetailModal 
         isOpen={isDetailModalOpen} 
         onClose={() => setIsDetailModalOpen(false)} 

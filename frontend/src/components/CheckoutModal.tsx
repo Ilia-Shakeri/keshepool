@@ -4,6 +4,7 @@ import { useState } from "react";
 import { Check, Copy, ChevronLeft, CreditCard, Wallet, ShieldCheck } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Product, ProductVariant } from "@/lib/products";
+import { IconMap } from "@/lib/icons";
 import { Button } from "@/components/ui/button";
 import { formatPrice, toPersianDigits } from "@/lib/utils";
 
@@ -20,14 +21,14 @@ export default function CheckoutModal({ isOpen, setIsOpen, product, variant, wal
   const [discountCode, setDiscountCode] = useState('');
   const [copied, setCopied] = useState(false);
 
-  // Buffer pipeline layer for clipboard data persistence
+  // Safely copy text to the system clipboard
   const handleCopy = async (text: string) => {
     try {
       await navigator.clipboard.writeText(text);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch (err) {
-      console.error("Native integration layer clipboard crash", err);
+      console.error("Clipboard write operation failed", err);
     }
   };
 
@@ -35,7 +36,7 @@ export default function CheckoutModal({ isOpen, setIsOpen, product, variant, wal
     <Dialog open={isOpen} onOpenChange={setIsOpen}>
       <DialogContent className="bg-[#0F0F10] border border-[#33383F] text-[#F5F5F5] rounded-3xl w-[95%] max-w-md mx-auto overflow-y-auto max-h-[90vh] p-0 font-sans dir-rtl">
         
-        {/* Sticky execution header */}
+        {/* Sticky top navigation bar */}
         <DialogHeader className="p-4 border-b border-[#33383F] bg-[#0F0F10]/80 backdrop-blur-md sticky top-0 z-20">
           <div className="flex items-center gap-3">
             <button onClick={() => setIsOpen(false)} className="p-2 bg-[#33383F] rounded-full hover:bg-[#33383F]/80 transition-colors">
@@ -51,7 +52,8 @@ export default function CheckoutModal({ isOpen, setIsOpen, product, variant, wal
             <div className="bg-[#0B1D33] border border-[#33383F] rounded-2xl p-4 flex items-center justify-between shadow-sm">
               <div className="flex items-center gap-3">
                 <div className={`bg-gradient-to-br ${product.gradient} p-2.5 rounded-full shadow-lg`}>
-                  {product.icon}
+                   {/* Dynamically render the mapped icon */}
+                  {IconMap[product.icon] || IconMap["Box"]}
                 </div>
                 <div>
                   <h4 className="font-bold text-sm">{product.brand}</h4>
@@ -78,10 +80,10 @@ export default function CheckoutModal({ isOpen, setIsOpen, product, variant, wal
             </div>
           </div>
 
+          {/* Payment Method Selector */}
           <div className="space-y-3">
             <h3 className="text-sm text-[#F5F5F5]/70 font-medium">روش پرداخت</h3>
             <div className="space-y-2">
-              
               <button 
                 onClick={() => setPaymentMethod('wallet')}
                 className={`w-full flex items-center justify-between p-4 rounded-2xl border transition-all ${
@@ -114,10 +116,10 @@ export default function CheckoutModal({ isOpen, setIsOpen, product, variant, wal
                 </div>
                 <CreditCard className={`w-5 h-5 ${paymentMethod === 'tether' ? 'text-[#1E3C5A]' : 'text-[#F5F5F5]/50'}`} />
               </button>
-
             </div>
           </div>
 
+          {/* Conditional Tether Dropdown Info */}
           {paymentMethod === 'tether' && (
             <div className="bg-[#1E3C5A]/10 border border-[#1E3C5A]/20 rounded-2xl p-4 flex items-center justify-between animate-in fade-in zoom-in duration-300">
               <div className="text-right">

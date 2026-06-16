@@ -6,16 +6,15 @@ from app.core.security import IsAdminFilter
 from app.services.scheduler import send_hourly_report
 from app.locales.translations import get_text
 
-# Initialize router and enforce stealth middleware on all incoming data
 admin_router = Router()
 admin_router.message.filter(IsAdminFilter())
 admin_router.callback_query.filter(IsAdminFilter())
 
-# Configure default language metric
-DEFAULT_LANG = "fa"
+# In-memory dictionary to maintain language state per admin user context
+admin_language_state = {}
 
-def get_main_menu_markup() -> InlineKeyboardMarkup:
-    """Constructs the primary navigation keyboard."""
+def get_main_menu_markup(lang: str) -> InlineKeyboardMarkup:
+    """Constructs the primary navigation keyboard with localized context."""
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
@@ -25,18 +24,35 @@ def get_main_menu_markup() -> InlineKeyboardMarkup:
             [
                 InlineKeyboardButton(text="🎫 Tickets", callback_data="manage_tickets"),
                 InlineKeyboardButton(text="📊 Push Report", callback_data="force_report")
+            ],
+            [
+                InlineKeyboardButton(text=get_text(lang, "toggle_lang"), callback_data="toggle_language")
             ]
         ]
     )
 
 @admin_router.message(CommandStart())
 async def cmd_start(message: Message):
-    """Entrypoint for the bot. Renders the main dashboard."""
+    lang = admin_language_state.get(message.from_user.id, "fa")
     await message.answer(
-        text=get_text(DEFAULT_LANG, "main_menu"),
-        reply_markup=get_main_menu_markup(),
+        text=get_text(lang, "main_menu"),
+        reply_markup=get_main_menu_markup(lang),
         parse_mode="Markdown"
     )
+
+@admin_router.callback_query(F.data == "toggle_language")
+async def process_toggle_language(callback: CallbackQuery):
+    """Mutates the localization state for the execution context."""
+    current_lang = admin_language_state.get(callback.from_user.id, "fa")
+    new_lang = "en" if current_lang == "fa" else "fa"
+    admin_language_state[callback.from_user.id] = new_lang
+    
+    await callback.message.edit_text(
+        text=get_text(new_lang, "main_menu"),
+        reply_markup=get_main_menu_markup(new_lang),
+        parse_mode="Markdown"
+    )
+    await callback.answer()
 
 @admin_router.callback_query(F.data == "manage_users")
 async def process_manage_users(callback: CallbackQuery):

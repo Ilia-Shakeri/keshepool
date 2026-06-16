@@ -4,6 +4,7 @@ import { useState } from "react";
 import { ChevronRight } from "lucide-react";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Product, ProductVariant } from "@/lib/products";
+import { IconMap } from "@/lib/icons";
 import { toPersianDigits } from "@/lib/utils";
 
 interface ProductDetailModalProps {
@@ -14,11 +15,13 @@ interface ProductDetailModalProps {
 }
 
 export default function ProductDetailModal({ isOpen, onClose, product, onProceedToCheckout }: ProductDetailModalProps) {
+  // Manage UI state for standard and feature views
   const [activeTab, setActiveTab] = useState<'features' | 'details'>('details');
   const [selectedVariantId, setSelectedVariantId] = useState<string>('');
 
   if (!product) return null;
 
+  // Fallback to the first variant if no specific variant is selected by the user
   const activeVariant = product.variants.find(v => v.id === selectedVariantId) || product.variants[0];
 
   return (
@@ -27,6 +30,7 @@ export default function ProductDetailModal({ isOpen, onClose, product, onProceed
         
         <DialogTitle className="sr-only">{product.title} Details</DialogTitle>
 
+        {/* Sticky header for navigation */}
         <header className="flex justify-between items-center p-5 pt-6 sticky top-0 bg-[#0F0F10]/90 backdrop-blur-md z-20">
           <button onClick={onClose} className="p-2 bg-[#33383F] rounded-full hover:bg-[#33383F]/80 transition-colors">
             <ChevronRight className="w-5 h-5 text-[#F5F5F5]/80" />
@@ -35,8 +39,9 @@ export default function ProductDetailModal({ isOpen, onClose, product, onProceed
 
         <div className="flex-1 overflow-y-auto pb-28 px-5">
           <div className="flex flex-col items-center text-center mt-2 mb-6">
-            <div className={`w-20 h-20 rounded-full ${product.gradient} flex items-center justify-center shadow-lg mb-4`}>
-              {product.icon}
+            <div className={`w-20 h-20 rounded-full bg-gradient-to-br ${product.gradient} flex items-center justify-center shadow-lg mb-4`}>
+              {/* Dynamically render the icon based on the database string payload */}
+              {IconMap[product.icon] || IconMap["Box"]}
             </div>
             <h1 className="text-xl font-bold text-[#F5F5F5] mb-1">{product.brand}</h1>
             <p className="text-xs text-[#F5F5F5]/70 mb-3">{product.subtitle}</p>
@@ -47,6 +52,7 @@ export default function ProductDetailModal({ isOpen, onClose, product, onProceed
             </div>
           </div>
 
+          {/* Tab Navigation */}
           <div className="flex gap-4 border-b border-[#33383F] mb-5">
             <button 
               onClick={() => setActiveTab('features')}
@@ -68,7 +74,7 @@ export default function ProductDetailModal({ isOpen, onClose, product, onProceed
             {activeTab === 'details' ? (
                 <div className="animate-in fade-in zoom-in-95 duration-200">
                     <p className="text-xs text-[#F5F5F5]/70 leading-relaxed mb-6">
-                        دسترسی کامل به {product.brand} با جدیدترین ورژن مناسب کارهای حرفه‌ای، برنامه‌نویسی، تحلیل داده و... این متن در آینده توسط پنل مدیریت تغییر خواهد کرد.
+                        دسترسی کامل به {product.brand} با جدیدترین ورژن مناسب کارهای حرفه‌ای، برنامه‌نویسی، تحلیل داده و...
                     </p>
                     <h3 className="text-sm font-bold text-[#F5F5F5] mb-4 text-center">انتخاب مدت زمان</h3>
                     <div className="space-y-3">
@@ -79,7 +85,7 @@ export default function ProductDetailModal({ isOpen, onClose, product, onProceed
                                 key={variant.id}
                                 onClick={() => setSelectedVariantId(variant.id)}
                                 className={`w-full flex items-center justify-between p-4 rounded-2xl border transition-all ${
-                                isSelected ? 'border-[#E63946] bg-[#E63946]/5' : 'border-[#33383F] bg-[#0F0F10]/40 hover:bg-[#33383F]/60'
+                                    isSelected ? 'border-[#E63946] bg-[#E63946]/5' : 'border-[#33383F] bg-[#0F0F10]/40 hover:bg-[#33383F]/60'
                                 }`}
                             >
                                 <div className="flex flex-col items-start gap-1">
@@ -117,6 +123,7 @@ export default function ProductDetailModal({ isOpen, onClose, product, onProceed
           </div>
         </div>
 
+        {/* Action Button */}
         <div className="fixed bottom-0 left-0 w-full p-5 bg-[#0F0F10] border-t border-[#33383F] z-30 max-w-md left-1/2 -translate-x-1/2">
           <button 
             onClick={() => onProceedToCheckout(activeVariant)}

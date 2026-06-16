@@ -4,6 +4,7 @@ from aiogram import Bot, Dispatcher
 from app.handlers.admin import admin_router
 from app.services.scheduler import start_scheduler
 from app.core.config import settings
+from app.handlers.products_admin import products_router
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -15,7 +16,9 @@ async def main():
 
     # Register routers
     dp.include_router(admin_router)
-
+    dp.include_router(admin_router)
+    dp.include_router(products_router)
+    
     # Initialize the reporting engine
     scheduler = start_scheduler(bot)
 
