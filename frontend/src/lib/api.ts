@@ -76,9 +76,10 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
   });
 
   if (response.status === 401) {
-    if (typeof window !== "undefined" && window.Telegram?.WebApp) {
-      window.Telegram.WebApp.showAlert("Session Expired - Please reopen the app.", () => {
-        window.Telegram.WebApp.close();
+    const webApp = window.Telegram?.WebApp;
+    if (webApp) {
+      webApp.showAlert("Session Expired - Please reopen the app.", () => {
+        webApp.close();
       });
     }
     throw new Error("Session Expired - Please reopen the app.");
