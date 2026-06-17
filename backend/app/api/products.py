@@ -102,6 +102,18 @@ async def checkout_with_wallet(
     user: User = Depends(current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    # Enforce strict rate limits on order fulfillment initialization
+    rate_key = f"rate_limit:checkout:user:{user.telegram_id}"
+    
+    async with redis_client.pipeline(transaction=True) as pipe:
+        pipe.incr(rate_key)
+        pipe.expire(rate_key, 60, nx=True)
+        results = await pipe.execute()
+        
+    requests = results[0]
+    if requests > 60:
+        raise HTTPException(status_code=429, detail="Rate limit exceeded.")
+
     order = await fulfill_wallet_order(
         db=db,
         user=user,

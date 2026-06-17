@@ -34,6 +34,7 @@ async def fulfill_wallet_order(
     variant_id: str,
 ) -> Order:
     try:
+        # Validate the requested product variant
         variant_result = await db.execute(
             select(ProductVariant)
             .options(selectinload(ProductVariant.product))
@@ -47,6 +48,9 @@ async def fulfill_wallet_order(
         if not variant or not variant.product or not variant.product.is_active:
             raise HTTPException(status_code=404, detail="Product variant not found.")
 
+        # DETERMINISTIC LOCKING ORDER: 
+        # Always acquire the lock on the Wallet BEFORE the InventoryItem. 
+        # This prevents transaction deadlocks across concurrent requests.
         wallet_result = await db.execute(
             select(Wallet).where(Wallet.user_id == user.id).with_for_update()
         )
@@ -58,6 +62,7 @@ async def fulfill_wallet_order(
         if wallet.balance < price:
             raise HTTPException(status_code=400, detail="Insufficient wallet balance.")
 
+        # Acquire lock on the specific InventoryItem
         item_result = await db.execute(
             select(InventoryItem)
             .where(
@@ -72,6 +77,7 @@ async def fulfill_wallet_order(
         if not item:
             raise HTTPException(status_code=409, detail="This product is currently out of stock.")
 
+        # Process financial adjustments and assign inventory
         wallet.balance = _money(wallet.balance) - price
         item.status = ItemStatus.ASSIGNED
         item.assigned_to_user_id = user.id
@@ -88,6 +94,7 @@ async def fulfill_wallet_order(
             status=OrderStatus.ACTIVE,
         )
         db.add(order)
+        
         db.add(
             Transaction(
                 wallet_id=wallet.id,
@@ -97,6 +104,7 @@ async def fulfill_wallet_order(
                 description=f"Purchase: {variant.product.brand} {variant.duration}",
             )
         )
+        
         db.add(
             Notification(
                 user_id=user.id,

@@ -25,9 +25,16 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     @model_validator(mode="after")
-    def secure_dev_auth(self):
-        if self.ENVIRONMENT.lower() == "production" and self.ALLOW_INSECURE_DEV_AUTH:
-            self.ALLOW_INSECURE_DEV_AUTH = False
+    def validate_production_security(self):
+        # Prevent insecure settings from persisting in production environments
+        if self.ENVIRONMENT.lower() == "production":
+            if self.ALLOW_INSECURE_DEV_AUTH:
+                self.ALLOW_INSECURE_DEV_AUTH = False
+            
+            # Ensure internal APIs are secured behind a valid key
+            if not self.ADMIN_API_KEY:
+                raise ValueError("ADMIN_API_KEY must be defined and strictly set in the production environment to prevent unauthorized internal access.")
+                
         return self
 
     @cached_property

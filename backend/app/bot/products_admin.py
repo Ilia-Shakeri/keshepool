@@ -92,10 +92,10 @@ async def process_bulk_import_file(message: Message, state: FSMContext):
         return
 
     inserted_credentials = 0
-    
-    # Process batch inserts to prevent breaking the async database event loop
     chunk_size = 50
+    chunk_errors = []
 
+    # Process batch inserts with sequential fallback for exact error tracking
     for i in range(0, len(rows), chunk_size):
         chunk = rows[i:i + chunk_size]
         async with AsyncSessionLocal() as session:
@@ -149,12 +149,74 @@ async def process_bulk_import_file(message: Message, state: FSMContext):
                                 
                 await session.commit()
                 
-            except Exception as exc:
-                # Isolate the failure to a single chunk so partial imports still succeed
+            except Exception as bulk_exc:
+                # Isolate the failure by rolling back the chunk and falling back to sequential processing
                 await session.rollback()
-                logger.error("Database chunk transaction failed: %s", exc)
-                await message.answer(f"Failed to process chunk starting at index {i}. Check application logs.")
-                return
+                logger.warning("Bulk chunk failed, falling back to sequential tracking. Exception: %s", bulk_exc)
+                
+                for j, row in enumerate(chunk):
+                    async with AsyncSessionLocal() as single_session:
+                        try:
+                            product_id = row["product_id"]
+                            variant_id = row["variant_id"]
+                            
+                            product = await single_session.get(Product, product_id)
+                            if not product:
+                                product = Product(
+                                    id=product_id,
+                                    title=row["title"],
+                                    brand=row["brand"],
+                                    subtitle=row["subtitle"],
+                                    category=row["category"],
+                                    is_active=True
+                                )
+                                single_session.add(product)
+                            
+                            variant = await single_session.get(ProductVariant, variant_id)
+                            if not variant:
+                                variant = ProductVariant(
+                                    id=variant_id,
+                                    product_id=product_id,
+                                    duration=row["duration"],
+                                    raw_price=row["raw_price"],
+                                    price_label=f"{int(row['raw_price']):,}",
+                                    is_active=True
+                                )
+                                single_session.add(variant)
+                                
+                            if row["credentials"]:
+                                for cred in row["credentials"]:
+                                    exists_result = await single_session.execute(
+                                        select(InventoryItem).where(
+                                            InventoryItem.product_id == product_id,
+                                            InventoryItem.variant_id == variant_id,
+                                            InventoryItem.credentials == cred
+                                        )
+                                    )
+                                    
+                                    if not exists_result.scalars().first():
+                                        single_session.add(InventoryItem(
+                                            product_id=product_id,
+                                            variant_id=variant_id,
+                                            credentials=cred,
+                                            status=ItemStatus.AVAILABLE
+                                        ))
+                                        inserted_credentials += 1
+                                        
+                            await single_session.commit()
+                        except Exception as single_exc:
+                            await single_session.rollback()
+                            exact_line = i + j + 1
+                            error_msg = f"Line {exact_line} (Product: {row['product_id']}) failed: {single_exc}"
+                            chunk_errors.append(error_msg)
+                            logger.error(error_msg)
 
     await state.clear()
-    await message.answer(f"Bulk import success.\nProducts processed: {len(rows)}\nCredentials added: {inserted_credentials}")
+    
+    if chunk_errors:
+        error_report = "Import encountered database constraint errors on specific rows:\n" + "\n".join(chunk_errors[:10])
+        if len(chunk_errors) > 10:
+            error_report += f"\n...and {len(chunk_errors) - 10} more errors."
+        await message.answer(error_report)
+    else:
+        await message.answer(f"Bulk import success.\nProducts processed: {len(rows)}\nCredentials added: {inserted_credentials}")

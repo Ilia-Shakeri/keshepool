@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.users import current_user
 from app.core.config import settings
 from app.core.database import get_db
+from app.core.redis import redis_client
 from app.models import Transaction, TransactionType, TransactionStatus, User, Wallet
 from app.services.wallet_service import to_decimal
 
@@ -22,6 +23,18 @@ async def create_tetra98_payment(
     user: User = Depends(current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    # Enforce strict rate limits on payment gateway initiation
+    rate_key = f"rate_limit:pay:user:{user.telegram_id}"
+    
+    async with redis_client.pipeline(transaction=True) as pipe:
+        pipe.incr(rate_key)
+        pipe.expire(rate_key, 60, nx=True)
+        results = await pipe.execute()
+        
+    requests = results[0]
+    if requests > 60:
+        raise HTTPException(status_code=429, detail="Rate limit exceeded.")
+
     if not settings.TETRA98_API_URL or not settings.TETRA98_API_KEY:
         raise HTTPException(status_code=503, detail="Payment gateway is not configured.")
 

@@ -17,7 +17,7 @@ from app.core.config import settings
 from app.core.database import init_db
 from app.core.redis import redis_client
 
-# Configure logging
+# Configure structured JSON logging
 logger = logging.getLogger()
 if logger.handlers:
     logger.handlers.clear()
@@ -31,48 +31,56 @@ module_logger = logging.getLogger(__name__)
 
 WEBHOOK_PATH = "/webhook"
 
-# Ensure critical environment variables exist
+# Validate critical environment configurations prior to application start
 if not settings.BOT_TOKEN or not settings.ADMIN_BOT_TOKEN or not settings.WEBHOOK_URL:
     module_logger.critical("Critical environment variables (BOT_TOKEN/ADMIN_BOT_TOKEN/WEBHOOK_URL) are missing.")
     sys.exit(1)
 
-# Initialize Main Bot (Mini-App)
+# Initialize application bots and dispatchers
 bot = Bot(token=settings.BOT_TOKEN)
 dp = Dispatcher()
 
-# Initialize Admin Bot
 admin_bot = Bot(token=settings.ADMIN_BOT_TOKEN)
 admin_dp = Dispatcher()
 
-# Register routers
+# Register modular routers
 admin_dp.include_router(admin_router)
 admin_dp.include_router(products_router)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Initialize static asset directories and database schema
     Path(settings.ASSET_ROOT).mkdir(parents=True, exist_ok=True)
     await init_db()
     
-    # Scheduler runs on the admin bot
+    # Initialize background task scheduler
     scheduler = start_scheduler(admin_bot)
     
     full_webhook_url = settings.WEBHOOK_URL.rstrip('/')
-    module_logger.info("Setting Telegram webhooks...")
+    module_logger.info("Setting Telegram webhooks and bot configurations...")
     
     await bot.set_webhook(
         url=f"{full_webhook_url}{WEBHOOK_PATH}/main", 
         drop_pending_updates=True,
         secret_token=settings.WEBHOOK_SECRET
     )
+    
     await admin_bot.set_webhook(
         url=f"{full_webhook_url}{WEBHOOK_PATH}/admin", 
         drop_pending_updates=True,
         secret_token=settings.WEBHOOK_SECRET
     )
     
+    # Configure admin bot UX elements directly on startup
+    await admin_bot.set_my_commands([
+        types.BotCommand(command="start", description="Open Admin Panel")
+    ])
+    await admin_bot.set_chat_menu_button(menu_button=types.MenuButtonCommands())
+    
     try:
         yield
     finally:
+        # Graceful shutdown of services and connections
         scheduler.shutdown()
         await redis_client.aclose()
         await bot.delete_webhook()
@@ -82,6 +90,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Keshepool API", lifespan=lifespan)
 
+# Mount API routers and static files
 app.include_router(users.router)
 app.include_router(products.router)
 app.include_router(payments.router)
@@ -99,6 +108,7 @@ async def bot_webhook(
     request: Request, 
     x_telegram_bot_api_secret_token: str = Header(None, alias="X-Telegram-Bot-Api-Secret-Token")
 ):
+    # Enforce webhook authenticity using the secret token
     if x_telegram_bot_api_secret_token != settings.WEBHOOK_SECRET:
         module_logger.warning("Unauthorized webhook payload received.")
         raise HTTPException(status_code=401, detail="Invalid secret token.")
@@ -114,8 +124,9 @@ async def bot_webhook(
             
         return {"status": "ok"}
     except Exception as exc:
+        # Log the exception but return 200 OK to prevent Telegram from retrying the poison-pill payload indefinitely
         module_logger.exception("Webhook payload processing failed.")
-        raise HTTPException(status_code=400, detail="Invalid webhook payload.") from exc
+        return {"status": "ok"}
 
 @app.get("/health")
 async def health_check():
