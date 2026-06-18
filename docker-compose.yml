@@ -1,8 +1,7 @@
-version: "3.8"
-
 services:
   db:
     image: postgres:15-alpine
+    container_name: keshepool-db
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
@@ -15,9 +14,12 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    networks:
+      - keshepool_internal_net
 
   db-backup:
     image: prodrigestivill/postgres-backup-local:15
+    container_name: keshepool-db-backup
     restart: unless-stopped
     environment:
       POSTGRES_HOST: db
@@ -31,9 +33,12 @@ services:
         condition: service_healthy
     volumes:
       - ./backups:/backups
+    networks:
+      - keshepool_internal_net
 
   redis:
     image: redis:7-alpine
+    container_name: keshepool-redis
     restart: unless-stopped
     volumes:
       - redisdata:/data
@@ -42,11 +47,14 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    networks:
+      - keshepool_internal_net
 
   backend:
     build:
       context: ./backend
       dockerfile: Dockerfile
+    container_name: keshepool-backend
     restart: unless-stopped
     environment:
       - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
@@ -69,33 +77,30 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    networks:
+      - keshepool_internal_net
+      - caddy_gateway_net
 
   frontend:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+    container_name: keshepool-frontend
     restart: unless-stopped
     environment:
       - NODE_ENV=production
       - NEXT_PUBLIC_API_URL=${WEBHOOK_URL}/api
       - NEXT_PUBLIC_BOT_USERNAME=${NEXT_PUBLIC_BOT_USERNAME:-keshepoolbot}
-
-  caddy:
-    image: caddy:2-alpine
-    restart: unless-stopped
-    ports:
-      - "80:80"
-      - "443:443"
-    volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy_data:/data
-      - caddy_config:/config
-    depends_on:
-      - backend
-      - frontend
+    networks:
+      - keshepool_internal_net
+      - caddy_gateway_net
 
 volumes:
   pgdata:
   redisdata:
-  caddy_data:
-  caddy_config:
+
+networks:
+  keshepool_internal_net:
+    name: keshepool_internal_net
+  caddy_gateway_net:
+    external: true
