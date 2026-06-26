@@ -70,6 +70,8 @@ services:
       - ASSET_ROOT=/app/static
       - PUBLIC_ASSET_BASE_URL=/static
       - ALLOW_INSECURE_DEV_AUTH=${ALLOW_INSECURE_DEV_AUTH:-false}
+      - ADMIN_API_KEY=${ADMIN_API_KEY}
+      - ENVIRONMENT=${ENVIRONMENT:-production}
     volumes:
       - ./static:/app/static
     depends_on:

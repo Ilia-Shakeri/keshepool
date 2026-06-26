@@ -6,6 +6,7 @@ from pathlib import Path
 
 from aiogram import Bot, Dispatcher, types
 from fastapi import FastAPI, HTTPException, Request, Header
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pythonjsonlogger import jsonlogger
 
@@ -89,6 +90,15 @@ async def lifespan(app: FastAPI):
         await admin_bot.session.close()
 
 app = FastAPI(title="Keshepool API", lifespan=lifespan)
+
+# Restrict CORS to the configured frontend origin only
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[settings.WEB_APP_URL],
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "PATCH"],
+    allow_headers=["Content-Type", "X-Telegram-Init-Data", "X-Admin-Token"],
+)
 
 # Mount API routers and static files
 app.include_router(users.router)

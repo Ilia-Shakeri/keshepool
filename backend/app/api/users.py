@@ -81,19 +81,25 @@ async def get_wallet_balance(user: User = Depends(current_user), db: AsyncSessio
 
 @router.get("/wallet/transactions")
 async def get_wallet_transactions(user: User = Depends(current_user), db: AsyncSession = Depends(get_db)):
-    wallet_result = await db.execute(
-        select(Wallet).options(selectinload(Wallet.transactions)).where(Wallet.user_id == user.id)
-    )
+    wallet_result = await db.execute(select(Wallet).where(Wallet.user_id == user.id))
     wallet = wallet_result.scalars().first()
     if not wallet:
         return []
 
-    transactions = sorted(wallet.transactions, key=lambda item: item.created_at, reverse=True)[:30]
+    from app.models import Transaction
+    tx_result = await db.execute(
+        select(Transaction)
+        .where(Transaction.wallet_id == wallet.id)
+        .order_by(Transaction.created_at.desc())
+        .limit(30)
+    )
+    transactions = tx_result.scalars().all()
     return [
         {
             "id": tx.id,
             "amount": float(tx.amount),
             "type": tx.type.value,
+            "status": tx.status.value,
             "referenceId": tx.reference_id,
             "description": tx.description,
             "createdAt": tx.created_at.isoformat(),

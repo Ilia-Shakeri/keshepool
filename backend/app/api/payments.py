@@ -105,8 +105,13 @@ async def tetra98_payment_callback(request: Request, db: AsyncSession = Depends(
     if status != "success" or not order_id or not transaction_id:
         return {"status": "failed", "message": "Payment was not successful."}
 
+    try:
+        order_id_int = int(order_id)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="Invalid order_id in callback payload.")
+
     tx_result = await db.execute(
-        select(Transaction).where(Transaction.id == int(order_id))
+        select(Transaction).where(Transaction.id == order_id_int)
     )
     pending_tx = tx_result.scalars().first()
     

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { ChevronLeft, Wallet } from "lucide-react";
+import { Check, ChevronLeft, Copy, Wallet } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import ProductIcon from "@/components/ProductIcon";
 import { Button } from "@/components/ui/button";
@@ -17,34 +17,110 @@ interface CheckoutModalProps {
   walletBalance: number;
 }
 
+interface OrderResult {
+  id: string;
+  credentials: string;
+  productBrand: string;
+  variantDuration: string;
+}
+
 export default function CheckoutModal({ isOpen, setIsOpen, product, variant, walletBalance }: CheckoutModalProps) {
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [resultMessage, setResultMessage] = useState<string | null>(null);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [orderResult, setOrderResult] = useState<OrderResult | null>(null);
+  const [copied, setCopied] = useState(false);
+
   const canPay = walletBalance >= variant.rawPrice && (variant.stockCount ?? 0) > 0;
 
   const handleSubmit = async () => {
     if (!canPay || isSubmitting) return;
 
     setIsSubmitting(true);
-    setResultMessage(null);
+    setErrorMessage(null);
 
     try {
       const result = await checkoutWithWallet(product.id, variant.id);
-      setResultMessage(`سفارش ${result.order.id} با موفقیت ثبت شد.`);
-      setTimeout(() => setIsOpen(false), 1200);
+      setOrderResult({
+        id: result.order.id,
+        credentials: result.order.credentials,
+        productBrand: result.order.productBrand,
+        variantDuration: result.order.variantDuration,
+      });
     } catch (error) {
-      setResultMessage(error instanceof Error ? error.message : "ثبت سفارش ناموفق بود.");
+      setErrorMessage(error instanceof Error ? error.message : "ثبت سفارش ناموفق بود.");
     } finally {
       setIsSubmitting(false);
     }
   };
 
+  const handleCopy = () => {
+    if (!orderResult) return;
+    navigator.clipboard.writeText(orderResult.credentials).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  };
+
+  const handleClose = () => {
+    setOrderResult(null);
+    setErrorMessage(null);
+    setCopied(false);
+    setIsOpen(false);
+  };
+
+  if (orderResult) {
+    return (
+      <Dialog open={isOpen} onOpenChange={handleClose}>
+        <DialogContent className="bg-[#0F0F10] border border-[#33383F] text-[#F5F5F5] rounded-3xl w-[95%] max-w-md mx-auto overflow-y-auto max-h-[90vh] p-0 font-sans dir-rtl">
+          <DialogHeader className="p-4 border-b border-[#33383F] bg-[#0F0F10]/80 backdrop-blur-md sticky top-0 z-20">
+            <div className="flex items-center gap-3">
+              <button onClick={handleClose} className="p-2 bg-[#33383F] rounded-full hover:bg-[#33383F]/80 transition-colors">
+                <ChevronLeft className="w-5 h-5" />
+              </button>
+              <DialogTitle className="text-lg font-bold">سفارش ثبت شد</DialogTitle>
+            </div>
+          </DialogHeader>
+
+          <div className="p-5 space-y-5">
+            <div className="flex flex-col items-center gap-3 py-4">
+              <div className="w-14 h-14 bg-emerald-500/10 border border-emerald-500/30 rounded-full flex items-center justify-center">
+                <Check className="w-7 h-7 text-emerald-400" />
+              </div>
+              <p className="text-sm font-bold text-[#F5F5F5]">{orderResult.productBrand} — {orderResult.variantDuration}</p>
+              <p className="text-[10px] text-[#F5F5F5]/50">شناسه سفارش: {orderResult.id}</p>
+            </div>
+
+            <div className="bg-[#0B1D33] border border-[#33383F] rounded-2xl p-4">
+              <p className="text-[10px] text-[#F5F5F5]/50 mb-2">اطلاعات دسترسی</p>
+              <p className="text-sm font-mono text-emerald-400 break-all leading-relaxed">{orderResult.credentials}</p>
+            </div>
+
+            <Button
+              onClick={handleCopy}
+              className="w-full bg-[#33383F] hover:bg-[#33383F]/80 text-[#F5F5F5] py-5 rounded-2xl text-sm font-bold transition-all active:scale-95 border-none gap-2"
+            >
+              {copied ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
+              {copied ? "کپی شد" : "کپی اطلاعات"}
+            </Button>
+
+            <Button
+              onClick={handleClose}
+              className="w-full bg-[#E63946] hover:bg-[#E63946]/90 text-[#F5F5F5] py-5 rounded-2xl text-sm font-bold transition-all active:scale-95 border-none"
+            >
+              بستن
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+    );
+  }
+
   return (
-    <Dialog open={isOpen} onOpenChange={setIsOpen}>
+    <Dialog open={isOpen} onOpenChange={handleClose}>
       <DialogContent className="bg-[#0F0F10] border border-[#33383F] text-[#F5F5F5] rounded-3xl w-[95%] max-w-md mx-auto overflow-y-auto max-h-[90vh] p-0 font-sans dir-rtl">
         <DialogHeader className="p-4 border-b border-[#33383F] bg-[#0F0F10]/80 backdrop-blur-md sticky top-0 z-20">
           <div className="flex items-center gap-3">
-            <button onClick={() => setIsOpen(false)} className="p-2 bg-[#33383F] rounded-full hover:bg-[#33383F]/80 transition-colors">
+            <button onClick={handleClose} className="p-2 bg-[#33383F] rounded-full hover:bg-[#33383F]/80 transition-colors">
               <ChevronLeft className="w-5 h-5" />
             </button>
             <DialogTitle className="text-lg font-bold">تسویه حساب</DialogTitle>
@@ -88,9 +164,9 @@ export default function CheckoutModal({ isOpen, setIsOpen, product, variant, wal
             </div>
           )}
 
-          {resultMessage && (
-            <div className="text-xs text-[#F5F5F5] bg-[#33383F] border border-[#33383F] rounded-xl p-3">
-              {resultMessage}
+          {errorMessage && (
+            <div className="text-xs text-[#E63946] bg-[#E63946]/10 border border-[#E63946]/20 rounded-xl p-3">
+              {errorMessage}
             </div>
           )}
 

@@ -5,6 +5,7 @@ class ProductAdminStates(StatesGroup):
     selecting_action = State()
     awaiting_new_price = State()
     awaiting_new_name = State()
+    selecting_variant_for_stock = State()
     awaiting_stock_text = State()
     awaiting_bulk_import_file = State()
     awaiting_logo_upload = State()

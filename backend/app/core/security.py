@@ -24,7 +24,7 @@ async def validate_telegram_data(
             return {"user": json.dumps({"id": 0, "first_name": "Development", "username": "dev"})}
         raise HTTPException(status_code=401, detail="Telegram init data header is required.")
 
-    cache_key = f"auth_session:{hashlib.md5(init_data.encode()).hexdigest()}"
+    cache_key = f"auth_session:{hashlib.sha256(init_data.encode()).hexdigest()}"
     cached_session = await redis_client.get(cache_key)
     
     if cached_session:

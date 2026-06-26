@@ -44,3 +44,10 @@ full_Keshepool_project_code.txt
 
 #Design Png Files
 Design_Refrence
+
+# Claude AI and Graphify Ignore Rules
+CLAUDE.md
+graphify-out/
+
+#backups
+backups/*

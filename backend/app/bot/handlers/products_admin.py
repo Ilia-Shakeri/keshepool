@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Dict, List, Tuple
 
 from aiogram import F, Router
+from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from sqlalchemy import select, func
@@ -59,6 +60,11 @@ def parse_product_import(content: str) -> Tuple[List[Dict], List[str]]:
 
         try:
             product_id = _validate_id(row[0], "product_id")
+            title = row[1].strip()
+            brand = row[2].strip()
+            if not title or not brand:
+                raise ValueError("title and brand must not be empty.")
+
             variant_id = _validate_id(row[5], "variant_id")
             category = row[4].strip() or "tools"
             if category not in ALLOWED_CATEGORIES:
@@ -74,8 +80,8 @@ def parse_product_import(content: str) -> Tuple[List[Dict], List[str]]:
 
             rows.append({
                 "product_id": product_id,
-                "title": row[1].strip(),
-                "brand": row[2].strip(),
+                "title": title,
+                "brand": brand,
                 "subtitle": row[3].strip(),
                 "category": category,
                 "variant_id": variant_id,
@@ -87,6 +93,49 @@ def parse_product_import(content: str) -> Tuple[List[Dict], List[str]]:
             errors.append(f"Line {index}: {exc}")
 
     return rows, errors
+
+async def trigger_product_management_message(message: Message, lang: str):
+    """Shared entry point usable from message shortcuts and callback handlers."""
+    keyboard = [
+        [InlineKeyboardButton(text=get_text(lang, "bulk_import"), callback_data="bulk_import_products")]
+    ]
+
+    async with AsyncSessionLocal() as session:
+        try:
+            result = await session.execute(
+                select(Product).order_by(Product.brand.asc())
+            )
+            products = result.scalars().all()
+
+            for product in products:
+                status_icon = "✅" if product.is_active else "⛔"
+                keyboard.append(
+                    [InlineKeyboardButton(
+                        text=f"{status_icon} {product.brand}",
+                        callback_data=f"edit_prod_{product.id}",
+                    )]
+                )
+        except Exception as exc:
+            logger.error("DB error fetching products: %s", exc)
+            await message.answer("❌ Database error loading products.")
+            return
+
+    keyboard.append([InlineKeyboardButton(text=get_text(lang, "back_to_menu"), callback_data="main_menu")])
+    await message.answer(
+        text=get_text(lang, "product_mgmt_title"),
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard),
+        parse_mode="Markdown",
+    )
+
+@products_router.message(Command("cancel"))
+async def cmd_cancel(message: Message, state: FSMContext):
+    lang = await _lang(message.from_user.id)
+    current_state = await state.get_state()
+    if current_state is None:
+        await message.answer(get_text(lang, "main_menu"))
+        return
+    await state.clear()
+    await message.answer(get_text(lang, "operation_cancelled"))
 
 @products_router.callback_query(F.data == "manage_inventory")
 async def trigger_product_management(callback: CallbackQuery, state: FSMContext):
@@ -103,13 +152,16 @@ async def trigger_product_management(callback: CallbackQuery, state: FSMContext)
             products = result.scalars().all()
 
             for product in products:
-                status = "✅" if product.is_active else "⛔"
+                status_icon = "✅" if product.is_active else "⛔"
                 keyboard.append(
-                    [InlineKeyboardButton(text=f"{status} {product.brand}", callback_data=f"edit_prod_{product.id}")]
+                    [InlineKeyboardButton(
+                        text=f"{status_icon} {product.brand}",
+                        callback_data=f"edit_prod_{product.id}",
+                    )]
                 )
-        except Exception as e:
-            logger.error("DB Error fetching products: %s", e)
-            await callback.answer(f"Database Error", show_alert=True)
+        except Exception as exc:
+            logger.error("DB error fetching products: %s", exc)
+            await callback.answer("Database error.", show_alert=True)
             return
 
     keyboard.append([InlineKeyboardButton(text=get_text(lang, "back_to_menu"), callback_data="main_menu")])
@@ -134,17 +186,17 @@ async def select_product_action(callback: CallbackQuery, state: FSMContext):
             if not product:
                 await callback.answer(get_text(lang, "not_found"), show_alert=True)
                 return
-            
+
             stock_result = await session.execute(
                 select(func.count(InventoryItem.id)).where(
                     InventoryItem.product_id == product.id,
-                    InventoryItem.status == ItemStatus.AVAILABLE
+                    InventoryItem.status == ItemStatus.AVAILABLE,
                 )
             )
             stock_count = stock_result.scalar() or 0
-        except Exception as e:
-            logger.error("DB Error fetching product variants: %s", e)
-            await callback.answer("Database Error", show_alert=True)
+        except Exception as exc:
+            logger.error("DB error fetching product: %s", exc)
+            await callback.answer("Database error.", show_alert=True)
             return
 
     markup = InlineKeyboardMarkup(
@@ -172,7 +224,9 @@ async def select_product_action(callback: CallbackQuery, state: FSMContext):
 @products_router.callback_query(F.data == "bulk_import_products")
 async def prompt_bulk_import(callback: CallbackQuery, state: FSMContext):
     lang = await _lang(callback.from_user.id)
-    await callback.message.answer(get_text(lang, "bulk_import_help"))
+    await callback.message.answer(
+        get_text(lang, "bulk_import_help") + "\n\n" + get_text(lang, "cancel_hint")
+    )
     await state.set_state(ProductAdminStates.awaiting_bulk_import_file)
     await callback.answer()
 
@@ -199,13 +253,13 @@ async def process_bulk_import_file(message: Message, state: FSMContext):
     chunk_errors = []
 
     for i in range(0, len(rows), chunk_size):
-        chunk = rows[i:i + chunk_size]
+        chunk = rows[i : i + chunk_size]
         async with AsyncSessionLocal() as session:
             try:
                 for row in chunk:
                     product_id = row["product_id"]
                     variant_id = row["variant_id"]
-                    
+
                     product = await session.get(Product, product_id)
                     if not product:
                         product = Product(
@@ -214,10 +268,10 @@ async def process_bulk_import_file(message: Message, state: FSMContext):
                             brand=row["brand"],
                             subtitle=row["subtitle"],
                             category=row["category"],
-                            is_active=True
+                            is_active=True,
                         )
                         session.add(product)
-                    
+
                     variant = await session.get(ProductVariant, variant_id)
                     if not variant:
                         variant = ProductVariant(
@@ -226,43 +280,44 @@ async def process_bulk_import_file(message: Message, state: FSMContext):
                             duration=row["duration"],
                             raw_price=row["raw_price"],
                             price_label=f"{int(row['raw_price']):,}",
-                            is_active=True
+                            is_active=True,
                         )
                         session.add(variant)
 
-                    if row["credentials"]:
-                        for cred in row["credentials"]:
-                            exists_result = await session.execute(
-                                select(InventoryItem).where(
-                                    InventoryItem.product_id == product_id,
-                                    InventoryItem.variant_id == variant_id,
-                                    InventoryItem.credentials == cred
-                                )
+                    for cred in row["credentials"]:
+                        exists_result = await session.execute(
+                            select(InventoryItem).where(
+                                InventoryItem.product_id == product_id,
+                                InventoryItem.variant_id == variant_id,
+                                InventoryItem.credentials == cred,
                             )
-                            
-                            if not exists_result.scalars().first():
-                                session.add(InventoryItem(
+                        )
+                        if not exists_result.scalars().first():
+                            session.add(
+                                InventoryItem(
                                     product_id=product_id,
                                     variant_id=variant_id,
                                     credentials=cred,
-                                    status=ItemStatus.AVAILABLE
-                                ))
-                                inserted_credentials += 1
-                                
+                                    status=ItemStatus.AVAILABLE,
+                                )
+                            )
+                            inserted_credentials += 1
+
                 await session.commit()
-                
+
             except Exception as exc:
                 await session.rollback()
-                logger.error("Transaction rollback on data pipeline slice at index %d: %s", i, exc)
-                chunk_errors.append(f"Chunk {i//chunk_size + 1} failed: {exc}")
+                logger.error("Transaction rollback on chunk at index %d: %s", i, exc)
+                chunk_errors.append(f"Chunk {i // chunk_size + 1} failed: {exc}")
                 continue
 
     await redis_client.delete("cache:products:all")
     await state.clear()
-    
+
     if chunk_errors:
-        error_msg = get_text(lang, "bulk_import_errors") + "\n" + "\n".join(chunk_errors[:5])
-        await message.answer(error_msg)
+        await message.answer(
+            get_text(lang, "bulk_import_errors") + "\n" + "\n".join(chunk_errors[:5])
+        )
     else:
         await message.answer(
             get_text(lang, "bulk_import_success")
@@ -273,7 +328,9 @@ async def process_bulk_import_file(message: Message, state: FSMContext):
 @products_router.callback_query(F.data == "action_edit_price", ProductAdminStates.selecting_action)
 async def prompt_new_price(callback: CallbackQuery, state: FSMContext):
     lang = await _lang(callback.from_user.id)
-    await callback.message.answer(get_text(lang, "enter_new_price"))
+    await callback.message.answer(
+        get_text(lang, "enter_new_price") + "\n\n" + get_text(lang, "cancel_hint")
+    )
     await state.set_state(ProductAdminStates.awaiting_new_price)
     await callback.answer()
 
@@ -297,7 +354,7 @@ async def process_new_price(message: Message, state: FSMContext):
             if not product:
                 await message.answer(get_text(lang, "not_found"))
                 return
-            
+
             variants_result = await session.execute(
                 select(ProductVariant)
                 .where(ProductVariant.product_id == product_id, ProductVariant.is_active.is_(True))
@@ -306,12 +363,12 @@ async def process_new_price(message: Message, state: FSMContext):
             for variant in variants_result.scalars().all():
                 variant.raw_price = new_price
                 variant.price_label = f"{int(new_price):,}"
-                
+
             await session.commit()
             await redis_client.delete("cache:products:all")
-        except Exception as e:
+        except Exception as exc:
             await session.rollback()
-            logger.error("DB Update Error: %s", e)
+            logger.error("DB update error: %s", exc)
             await message.answer(get_text(lang, "db_error"))
             return
 
@@ -321,7 +378,9 @@ async def process_new_price(message: Message, state: FSMContext):
 @products_router.callback_query(F.data == "action_edit_name", ProductAdminStates.selecting_action)
 async def prompt_new_name(callback: CallbackQuery, state: FSMContext):
     lang = await _lang(callback.from_user.id)
-    await callback.message.answer(get_text(lang, "enter_new_name"))
+    await callback.message.answer(
+        get_text(lang, "enter_new_name") + "\n\n" + get_text(lang, "cancel_hint")
+    )
     await state.set_state(ProductAdminStates.awaiting_new_name)
     await callback.answer()
 
@@ -335,21 +394,21 @@ async def process_new_name(message: Message, state: FSMContext):
 
     data = await state.get_data()
     product_id = data.get("target_product_id")
-    
+
     async with AsyncSessionLocal() as session:
         try:
             product = await session.get(Product, product_id)
             if not product:
                 await message.answer(get_text(lang, "not_found"))
                 return
-            
+
             product.title = new_name
             product.brand = new_name
             await session.commit()
             await redis_client.delete("cache:products:all")
-        except Exception as e:
+        except Exception as exc:
             await session.rollback()
-            logger.error("DB Update Error: %s", e)
+            logger.error("DB update error: %s", exc)
             await message.answer(get_text(lang, "db_error"))
             return
 
@@ -357,9 +416,74 @@ async def process_new_name(message: Message, state: FSMContext):
     await message.answer(get_text(lang, "name_updated"))
 
 @products_router.callback_query(F.data == "action_add_stock", ProductAdminStates.selecting_action)
-async def prompt_stock_text(callback: CallbackQuery, state: FSMContext):
+async def prompt_variant_selection(callback: CallbackQuery, state: FSMContext):
+    """Present a variant picker before entering stock text, replacing the silent first-variant assumption."""
     lang = await _lang(callback.from_user.id)
-    await callback.message.answer(get_text(lang, "enter_stock_lines"))
+    data = await state.get_data()
+    product_id = data.get("target_product_id")
+
+    async with AsyncSessionLocal() as session:
+        try:
+            result = await session.execute(
+                select(Product)
+                .options(selectinload(Product.variants))
+                .where(Product.id == product_id)
+            )
+            product = result.scalars().first()
+
+            if not product:
+                await callback.answer(get_text(lang, "not_found"), show_alert=True)
+                return
+
+            active_variants = [v for v in product.variants if v.is_active]
+
+            if not active_variants:
+                await callback.answer(get_text(lang, "not_found"), show_alert=True)
+                return
+
+            if len(active_variants) == 1:
+                # Skip the picker when only one variant exists
+                await state.update_data(target_variant_id=active_variants[0].id)
+                await callback.message.answer(
+                    get_text(lang, "enter_stock_lines") + "\n\n" + get_text(lang, "cancel_hint")
+                )
+                await state.set_state(ProductAdminStates.awaiting_stock_text)
+                await callback.answer()
+                return
+
+        except Exception as exc:
+            logger.error("DB error loading variants: %s", exc)
+            await callback.answer("Database error.", show_alert=True)
+            return
+
+    keyboard = [
+        [InlineKeyboardButton(
+            text=f"{v.duration} — {v.price_label}",
+            callback_data=f"pick_variant_{v.id}",
+        )]
+        for v in active_variants
+    ]
+    keyboard.append([InlineKeyboardButton(text=get_text(lang, "back"), callback_data="manage_inventory")])
+
+    await callback.message.edit_text(
+        text=get_text(lang, "select_variant"),
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard),
+        parse_mode="Markdown",
+    )
+    await state.set_state(ProductAdminStates.selecting_variant_for_stock)
+    await callback.answer()
+
+@products_router.callback_query(
+    F.data.startswith("pick_variant_"),
+    ProductAdminStates.selecting_variant_for_stock,
+)
+async def variant_selected_for_stock(callback: CallbackQuery, state: FSMContext):
+    lang = await _lang(callback.from_user.id)
+    variant_id = callback.data.removeprefix("pick_variant_")
+    await state.update_data(target_variant_id=variant_id)
+    await callback.message.answer(
+        get_text(lang, "enter_stock_lines") + "\n\n" + get_text(lang, "cancel_hint")
+    )
     await state.set_state(ProductAdminStates.awaiting_stock_text)
     await callback.answer()
 
@@ -373,21 +497,16 @@ async def process_stock_text(message: Message, state: FSMContext):
 
     data = await state.get_data()
     product_id = data.get("target_product_id")
+    variant_id = data.get("target_variant_id")
     inserted = 0
 
     async with AsyncSessionLocal() as session:
         try:
-            product = await session.execute(
-                select(Product).options(selectinload(Product.variants)).where(Product.id == product_id)
-            )
-            product = product.scalars().first()
-            
-            if not product or not product.variants:
+            variant = await session.get(ProductVariant, variant_id)
+            if not variant or variant.product_id != product_id:
                 await message.answer(get_text(lang, "not_found"))
                 return
-                
-            variant_id = product.variants[0].id
-            
+
             for credential in credentials:
                 exists_result = await session.execute(
                     select(InventoryItem).where(
@@ -396,10 +515,9 @@ async def process_stock_text(message: Message, state: FSMContext):
                         InventoryItem.credentials == credential,
                     ).with_for_update()
                 )
-                
                 if exists_result.scalars().first():
                     continue
-                    
+
                 session.add(
                     InventoryItem(
                         product_id=product_id,
@@ -412,9 +530,9 @@ async def process_stock_text(message: Message, state: FSMContext):
 
             await session.commit()
             await redis_client.delete("cache:products:all")
-        except Exception as e:
+        except Exception as exc:
             await session.rollback()
-            logger.error("DB Insert Error: %s", e)
+            logger.error("DB insert error: %s", exc)
             await message.answer(get_text(lang, "db_error"))
             return
 
@@ -424,7 +542,9 @@ async def process_stock_text(message: Message, state: FSMContext):
 @products_router.callback_query(F.data == "action_upload_logo", ProductAdminStates.selecting_action)
 async def prompt_logo_upload(callback: CallbackQuery, state: FSMContext):
     lang = await _lang(callback.from_user.id)
-    await callback.message.answer(get_text(lang, "send_logo"))
+    await callback.message.answer(
+        get_text(lang, "send_logo") + "\n\n" + get_text(lang, "cancel_hint")
+    )
     await state.set_state(ProductAdminStates.awaiting_logo_upload)
     await callback.answer()
 
@@ -458,7 +578,7 @@ async def process_logo_upload(message: Message, state: FSMContext):
 
     extension = mimetypes.guess_extension(mime_type) or ".jpg"
     safe_product_id = re.sub(r"[^a-zA-Z0-9_-]", "_", product_id)
-    
+
     asset_dir = Path(settings.ASSET_ROOT) / "product-assets"
     asset_dir.mkdir(parents=True, exist_ok=True)
     target_path = asset_dir / f"{safe_product_id}{extension}"
@@ -472,14 +592,14 @@ async def process_logo_upload(message: Message, state: FSMContext):
             if not product:
                 await message.answer(get_text(lang, "not_found"))
                 return
-            
+
             product.asset_url = asset_url
             product.icon = "Image"
             await session.commit()
             await redis_client.delete("cache:products:all")
-        except Exception as e:
+        except Exception as exc:
             await session.rollback()
-            logger.error("DB Update Error: %s", e)
+            logger.error("DB update error: %s", exc)
             await message.answer(get_text(lang, "db_error"))
             return
 

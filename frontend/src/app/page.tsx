@@ -14,6 +14,7 @@ export default function Home() {
   const [products, setProducts] = useState<Product[]>([]);
   const [notifications, setNotifications] = useState<UserNotification[]>([]);
   const [isNotifOpen, setIsNotifOpen] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
     const webApp = window.Telegram?.WebApp;
@@ -26,7 +27,8 @@ export default function Home() {
         setProducts(productData);
         setNotifications(notificationData);
       })
-      .catch((error) => console.error("Home data load failed:", error));
+      .catch((error) => console.error("Home data load failed:", error))
+      .finally(() => setIsLoading(false));
   }, []);
 
   const hotItems = useMemo(() => products.slice(0, 6), [products]);
@@ -95,23 +97,37 @@ export default function Home() {
           </div>
 
           <div className="flex gap-4 overflow-x-auto pb-4 scrollbar-hide dir-rtl -mx-5 px-5">
-            {hotItems.map((item) => (
-              <div
-                key={item.id}
-                onClick={() => router.push("/products")}
-                className="min-w-[240px] bg-gradient-to-br from-[#0B1D33] to-[#0F0F10] border border-[#33383F] rounded-2xl p-4 flex flex-col justify-between cursor-pointer hover:border-[#E63946]/50 hover:shadow-lg hover:shadow-[#E63946]/10 transition-all active:scale-[0.98]"
-              >
-                <div className="flex justify-between items-start mb-4">
-                  <ProductIcon icon={item.icon} assetUrl={item.assetUrl} gradient={item.gradient} sizeClassName="w-10 h-10" />
-                  <span className="text-[10px] bg-[#E63946]/10 text-[#E63946] border border-[#E63946]/20 px-2 py-1 rounded-md font-bold">موجود</span>
-                </div>
-                <div>
-                  <h4 className="text-sm font-bold text-[#F5F5F5]">{item.title}</h4>
-                  <p className="text-[10px] text-[#F5F5F5]/70 mt-1">{item.subtitle}</p>
-                  <p className="text-xs font-bold text-emerald-400 mt-3">{toPersianDigits(item.variants[0]?.priceLabel || "0")} تومان</p>
-                </div>
-              </div>
-            ))}
+            {isLoading
+              ? Array.from({ length: 3 }).map((_, i) => (
+                  <div key={i} className="min-w-[240px] bg-[#0B1D33] border border-[#33383F] rounded-2xl p-4 animate-pulse flex flex-col justify-between h-[148px]">
+                    <div className="flex justify-between items-start mb-4">
+                      <div className="w-10 h-10 bg-[#33383F] rounded-xl" />
+                      <div className="w-10 h-5 bg-[#33383F] rounded-md" />
+                    </div>
+                    <div className="space-y-2">
+                      <div className="h-3 bg-[#33383F] rounded w-3/4" />
+                      <div className="h-2 bg-[#33383F] rounded w-1/2" />
+                      <div className="h-3 bg-[#33383F] rounded w-1/3 mt-3" />
+                    </div>
+                  </div>
+                ))
+              : hotItems.map((item) => (
+                  <div
+                    key={item.id}
+                    onClick={() => router.push("/products")}
+                    className="min-w-[240px] bg-gradient-to-br from-[#0B1D33] to-[#0F0F10] border border-[#33383F] rounded-2xl p-4 flex flex-col justify-between cursor-pointer hover:border-[#E63946]/50 hover:shadow-lg hover:shadow-[#E63946]/10 transition-all active:scale-[0.98]"
+                  >
+                    <div className="flex justify-between items-start mb-4">
+                      <ProductIcon icon={item.icon} assetUrl={item.assetUrl} gradient={item.gradient} sizeClassName="w-10 h-10" />
+                      <span className="text-[10px] bg-[#E63946]/10 text-[#E63946] border border-[#E63946]/20 px-2 py-1 rounded-md font-bold">موجود</span>
+                    </div>
+                    <div>
+                      <h4 className="text-sm font-bold text-[#F5F5F5]">{item.title}</h4>
+                      <p className="text-[10px] text-[#F5F5F5]/70 mt-1">{item.subtitle}</p>
+                      <p className="text-xs font-bold text-emerald-400 mt-3">{toPersianDigits(item.variants[0]?.priceLabel || "0")} تومان</p>
+                    </div>
+                  </div>
+                ))}
           </div>
         </section>
 

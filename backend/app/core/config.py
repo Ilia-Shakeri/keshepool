@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     TETRA98_API_URL: str = ""
     TETRA98_API_KEY: str = ""
     ADMIN_TELEGRAM_IDS: str = ""
+    ADMIN_GROUP_CHAT_ID: str = ""
     ADMIN_API_KEY: str = Field(default="")
     ASSET_ROOT: str = "/app/static"
     PUBLIC_ASSET_BASE_URL: str = "/static"

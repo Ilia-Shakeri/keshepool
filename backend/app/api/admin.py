@@ -1,6 +1,5 @@
 from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException, Request, Security
-from fastapi.security import APIKeyHeader
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,7 +11,6 @@ from app.core.redis import redis_client
 from app.models import InventoryItem, ItemStatus, Product, ProductVariant, Order, OrderStatus, Wallet
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
-api_key_header = APIKeyHeader(name="X-Admin-Token", auto_error=False)
 
 class VariantSchema(BaseModel):
     id: str = Field(min_length=1, max_length=120)

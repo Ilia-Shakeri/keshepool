@@ -28,6 +28,7 @@ export default function ProductsPage() {
   const [selectedVariant, setSelectedVariant] = useState<ProductVariant | null>(null);
   const [isCheckoutOpen, setIsCheckoutOpen] = useState(false);
   const [walletBalance, setWalletBalance] = useState(0);
+  const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
     Promise.all([getProducts(), getWalletBalance()])
@@ -35,7 +36,8 @@ export default function ProductsPage() {
         setProducts(productData);
         setWalletBalance(balanceData.balance);
       })
-      .catch((error) => console.error("Product page data load failed:", error));
+      .catch((error) => console.error("Product page data load failed:", error))
+      .finally(() => setIsLoading(false));
   }, []);
 
   const filteredProducts = useMemo(() => {
@@ -98,31 +100,49 @@ export default function ProductsPage() {
       </header>
 
       <main className="px-5 space-y-3 mt-2">
-        {filteredProducts.map((product) => (
-          <div
-            key={product.id}
-            onClick={() => handleProductSelect(product)}
-            className="bg-[#0B1D33] border border-[#33383F] rounded-2xl p-4 flex items-center justify-between cursor-pointer hover:bg-[#1E3C5A]/50 transition-colors group"
-          >
-            <div className="flex items-center gap-4">
-              <ProductIcon icon={product.icon} assetUrl={product.assetUrl} gradient={product.gradient} />
-              <div className="flex flex-col gap-1">
-                <h3 className="text-sm font-bold text-[#F5F5F5]">{product.brand}</h3>
-                <p className="text-[10px] text-[#F5F5F5]/50">{product.subtitle}</p>
+        {isLoading
+          ? Array.from({ length: 5 }).map((_, i) => (
+              <div key={i} className="bg-[#0B1D33] border border-[#33383F] rounded-2xl p-4 flex items-center justify-between animate-pulse">
+                <div className="flex items-center gap-4">
+                  <div className="w-11 h-11 bg-[#33383F] rounded-xl" />
+                  <div className="space-y-2">
+                    <div className="h-3 bg-[#33383F] rounded w-24" />
+                    <div className="h-2 bg-[#33383F] rounded w-16" />
+                  </div>
+                </div>
+                <div className="flex flex-col items-end gap-2">
+                  <div className="h-3 bg-[#33383F] rounded w-14" />
+                  <div className="h-2 bg-[#33383F] rounded w-8" />
+                </div>
               </div>
-            </div>
+            ))
+          : filteredProducts.map((product) => (
+              <div
+                key={product.id}
+                onClick={() => handleProductSelect(product)}
+                className="bg-[#0B1D33] border border-[#33383F] rounded-2xl p-4 flex items-center justify-between cursor-pointer hover:bg-[#1E3C5A]/50 transition-colors group"
+              >
+                <div className="flex items-center gap-4">
+                  <ProductIcon icon={product.icon} assetUrl={product.assetUrl} gradient={product.gradient} />
+                  <div className="flex flex-col gap-1">
+                    <h3 className="text-sm font-bold text-[#F5F5F5]">{product.brand}</h3>
+                    <p className="text-[10px] text-[#F5F5F5]/50">{product.subtitle}</p>
+                  </div>
+                </div>
 
-            <div className="flex flex-col items-end justify-between h-full py-1 gap-4">
-              <ChevronLeft className="w-4 h-4 text-[#F5F5F5]/50" />
-              <div className="flex flex-col items-end gap-0.5">
-                <span className="text-xs font-bold text-[#F5F5F5]">{toPersianDigits(product.variants[0]?.priceLabel || "0")}</span>
-                <span className="text-[10px] text-[#F5F5F5]/50">تومان</span>
+                <div className="flex flex-col items-end justify-between h-full py-1 gap-4">
+                  <ChevronLeft className="w-4 h-4 text-[#F5F5F5]/50" />
+                  <div className="flex flex-col items-end gap-0.5">
+                    <span className="text-xs font-bold text-[#F5F5F5]">{toPersianDigits(product.variants[0]?.priceLabel || "0")}</span>
+                    <span className="text-[10px] text-[#F5F5F5]/50">تومان</span>
+                  </div>
+                </div>
               </div>
-            </div>
-          </div>
-        ))}
+            ))}
 
-        {filteredProducts.length === 0 && <div className="text-center py-12 text-[#F5F5F5]/50 text-sm">محصولی یافت نشد.</div>}
+        {!isLoading && filteredProducts.length === 0 && (
+          <div className="text-center py-12 text-[#F5F5F5]/50 text-sm">محصولی یافت نشد.</div>
+        )}
       </main>
 
       <ProductDetailModal isOpen={isDetailModalOpen} onClose={() => setIsDetailModalOpen(false)} product={selectedProduct} onProceedToCheckout={handleProceedToCheckout} />

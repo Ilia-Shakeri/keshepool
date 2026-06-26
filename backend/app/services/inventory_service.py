@@ -100,6 +100,7 @@ async def fulfill_wallet_order(
                 wallet_id=wallet.id,
                 amount=-price,
                 type=TransactionType.PURCHASE,
+                status=TransactionStatus.SUCCESS,
                 reference_id=public_id,
                 description=f"Purchase: {variant.product.brand} {variant.duration}",
             )
