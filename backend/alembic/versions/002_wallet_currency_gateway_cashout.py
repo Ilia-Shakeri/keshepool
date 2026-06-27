@@ -3,6 +3,9 @@
 Revision ID: 002
 Revises: 001
 Create Date: 2026-06-27
+
+All DDL in upgrade() uses IF NOT EXISTS / DO-EXCEPTION guards so the
+migration is safe to re-run after a partial failure.
 """
 from typing import Sequence, Union
 
@@ -16,60 +19,74 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    # ── transactions: add currency column ──────────────────────────────────────
-    # Nullable first so existing rows don't violate NOT NULL, then backfill,
-    # then tighten to NOT NULL.
-    op.add_column(
-        "transactions",
-        sa.Column("currency", sa.String(10), nullable=True),
-    )
-    op.execute("UPDATE transactions SET currency = 'IRR' WHERE currency IS NULL")
-    op.alter_column("transactions", "currency", nullable=False)
+    conn = op.get_bind()
 
-    # ── transactions: add gateway column ─────────────────────────────────────
-    op.add_column(
-        "transactions",
-        sa.Column("gateway", sa.String(50), nullable=True),
-    )
+    # ── transactions.currency ─────────────────────────────────────────────────
+    conn.execute(sa.text(
+        "ALTER TABLE transactions ADD COLUMN IF NOT EXISTS currency VARCHAR(10)"
+    ))
+    conn.execute(sa.text(
+        "UPDATE transactions SET currency = 'IRR' WHERE currency IS NULL"
+    ))
+    # SET NOT NULL is idempotent in PostgreSQL — safe if already applied
+    conn.execute(sa.text(
+        "ALTER TABLE transactions ALTER COLUMN currency SET NOT NULL"
+    ))
 
-    # ── cashout_requests ──────────────────────────────────────────────────────
-    cashoutrequeststatus = sa.Enum(
-        "pending", "reviewed", "completed",
-        name="cashoutrequeststatus",
-    )
-    cashoutrequeststatus.create(op.get_bind())
+    # ── transactions.gateway ──────────────────────────────────────────────────
+    conn.execute(sa.text(
+        "ALTER TABLE transactions ADD COLUMN IF NOT EXISTS gateway VARCHAR(50)"
+    ))
 
-    op.create_table(
-        "cashout_requests",
-        sa.Column("id", sa.Integer(), nullable=False),
-        sa.Column("user_id", sa.Integer(), nullable=False),
-        sa.Column("source_platform", sa.String(100), nullable=False),
-        sa.Column("custom_source", sa.String(200), nullable=True),
-        sa.Column("details_text", sa.Text(), nullable=False),
-        sa.Column("status", cashoutrequeststatus, nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
-        sa.ForeignKeyConstraint(["user_id"], ["users.id"]),
-        sa.PrimaryKeyConstraint("id"),
-    )
-    op.create_index("ix_cashout_requests_id", "cashout_requests", ["id"])
-    op.create_index("ix_cashout_requests_user_id", "cashout_requests", ["user_id"])
-    op.create_index("ix_cashout_requests_status", "cashout_requests", ["status"])
-    op.create_index(
-        "ix_cashout_requests_user_created",
-        "cashout_requests",
-        ["user_id", "created_at"],
-    )
+    # ── cashoutrequeststatus enum ─────────────────────────────────────────────
+    # DO block swallows duplicate_object so re-runs are safe
+    conn.execute(sa.text("""
+        DO $$ BEGIN
+            CREATE TYPE cashoutrequeststatus AS ENUM ('pending', 'reviewed', 'completed');
+        EXCEPTION WHEN duplicate_object THEN NULL;
+        END $$
+    """))
+
+    # ── cashout_requests table ────────────────────────────────────────────────
+    conn.execute(sa.text("""
+        CREATE TABLE IF NOT EXISTS cashout_requests (
+            id          SERIAL                   NOT NULL,
+            user_id     INTEGER                  NOT NULL REFERENCES users(id),
+            source_platform VARCHAR(100)         NOT NULL,
+            custom_source   VARCHAR(200),
+            details_text    TEXT                 NOT NULL,
+            status      cashoutrequeststatus      NOT NULL,
+            created_at  TIMESTAMP WITH TIME ZONE NOT NULL,
+            updated_at  TIMESTAMP WITH TIME ZONE NOT NULL,
+            PRIMARY KEY (id)
+        )
+    """))
+
+    conn.execute(sa.text(
+        "CREATE INDEX IF NOT EXISTS ix_cashout_requests_id "
+        "ON cashout_requests (id)"
+    ))
+    conn.execute(sa.text(
+        "CREATE INDEX IF NOT EXISTS ix_cashout_requests_user_id "
+        "ON cashout_requests (user_id)"
+    ))
+    conn.execute(sa.text(
+        "CREATE INDEX IF NOT EXISTS ix_cashout_requests_status "
+        "ON cashout_requests (status)"
+    ))
+    conn.execute(sa.text(
+        "CREATE INDEX IF NOT EXISTS ix_cashout_requests_user_created "
+        "ON cashout_requests (user_id, created_at)"
+    ))
 
 
 def downgrade() -> None:
-    op.drop_index("ix_cashout_requests_user_created", "cashout_requests")
-    op.drop_index("ix_cashout_requests_status", "cashout_requests")
-    op.drop_index("ix_cashout_requests_user_id", "cashout_requests")
-    op.drop_index("ix_cashout_requests_id", "cashout_requests")
-    op.drop_table("cashout_requests")
-
-    sa.Enum(name="cashoutrequeststatus").drop(op.get_bind())
-
-    op.drop_column("transactions", "gateway")
-    op.drop_column("transactions", "currency")
+    conn = op.get_bind()
+    conn.execute(sa.text("DROP INDEX IF EXISTS ix_cashout_requests_user_created"))
+    conn.execute(sa.text("DROP INDEX IF EXISTS ix_cashout_requests_status"))
+    conn.execute(sa.text("DROP INDEX IF EXISTS ix_cashout_requests_user_id"))
+    conn.execute(sa.text("DROP INDEX IF EXISTS ix_cashout_requests_id"))
+    conn.execute(sa.text("DROP TABLE IF EXISTS cashout_requests"))
+    conn.execute(sa.text("DROP TYPE IF EXISTS cashoutrequeststatus"))
+    conn.execute(sa.text("ALTER TABLE transactions DROP COLUMN IF EXISTS gateway"))
+    conn.execute(sa.text("ALTER TABLE transactions DROP COLUMN IF EXISTS currency"))
