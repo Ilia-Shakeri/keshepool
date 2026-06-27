@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import Image from "next/image";
 import { Bell, Bot, Code, Flame, Layout, MessageCircle, MoreHorizontal, Music, PlaySquare, Shield, User, X } from "lucide-react";
 import ProductIcon from "@/components/ProductIcon";
-import { getNotifications, getProducts, type UserNotification } from "@/lib/api";
+import { getNotifications, getProducts, markNotificationsRead, type UserNotification } from "@/lib/api";
 import type { Product } from "@/lib/products";
 import { toPersianDigits } from "@/lib/utils";
 
@@ -85,7 +85,15 @@ export default function Home() {
         <div className="relative">
           <button
             ref={bellRef}
-            onClick={() => setIsNotifOpen((v) => !v)}
+            onClick={() => {
+              const opening = !isNotifOpen;
+              setIsNotifOpen(opening);
+              if (opening && unreadCount > 0) {
+                markNotificationsRead().then(() =>
+                  setNotifications((prev) => prev.map((n) => ({ ...n, isRead: true })))
+                ).catch(() => {});
+              }
+            }}
             className="relative p-2.5 rounded-full border border-white/10 active:scale-95 transition-all"
             style={{ background: "rgba(255,255,255,0.06)", backdropFilter: "blur(12px)" }}
             aria-label="اعلانات"
@@ -232,7 +240,7 @@ export default function Home() {
               { icon: <Bot className="w-5 h-5" />, label: "هوش مصنوعی", category: "ai" },
               { icon: <MessageCircle className="w-5 h-5" />, label: "اجتماعی", category: "social" },
               { icon: <Code className="w-5 h-5" />, label: "برنامه‌نویسی", category: "tools" },
-              { icon: <Layout className="w-5 h-5" />, label: "طراحی", category: "tools" },
+              { icon: <Layout className="w-5 h-5" />, label: "آموزش", category: "edu" },
               { icon: <MoreHorizontal className="w-5 h-5" />, label: "بیشتر", category: "all" },
             ].map((cat) => (
               <button

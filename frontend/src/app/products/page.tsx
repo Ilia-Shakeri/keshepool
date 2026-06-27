@@ -18,6 +18,9 @@ const CATEGORIES: { id: ProductCategory | "all"; label: string }[] = [
   { id: "music", label: "موسیقی" },
   { id: "tools", label: "ابزار" },
   { id: "gaming", label: "گیمینگ" },
+  { id: "social", label: "اجتماعی" },
+  { id: "edu", label: "آموزشی" },
+  { id: "finance", label: "مالی" },
 ];
 
 function ProductsContent() {
@@ -175,6 +178,7 @@ function ProductsContent() {
           product={selectedProduct}
           variant={selectedVariant}
           walletBalance={walletBalance}
+          onSuccess={() => getWalletBalance().then((d) => setWalletBalance(d.balance)).catch(() => {})}
         />
       )}
     </div>

@@ -24,3 +24,4 @@ class AdminPanelStates(StatesGroup):
     awaiting_broadcast_message = State()
     awaiting_search_query = State()
     awaiting_notification_text = State()
+    awaiting_usdt_rate = State()

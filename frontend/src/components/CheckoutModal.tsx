@@ -15,6 +15,7 @@ interface CheckoutModalProps {
   product: Product;
   variant: ProductVariant;
   walletBalance: number;
+  onSuccess?: () => void;
 }
 
 interface OrderResult {
@@ -42,7 +43,7 @@ const BACK_BTN_STYLE: React.CSSProperties = {
   border: "1px solid rgba(255,255,255,0.1)",
 };
 
-export default function CheckoutModal({ isOpen, setIsOpen, product, variant, walletBalance }: CheckoutModalProps) {
+export default function CheckoutModal({ isOpen, setIsOpen, product, variant, walletBalance, onSuccess }: CheckoutModalProps) {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [orderResult, setOrderResult] = useState<OrderResult | null>(null);
@@ -62,6 +63,7 @@ export default function CheckoutModal({ isOpen, setIsOpen, product, variant, wal
         productBrand: result.order.productBrand,
         variantDuration: result.order.variantDuration,
       });
+      onSuccess?.();
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "ثبت سفارش ناموفق بود.");
     } finally {

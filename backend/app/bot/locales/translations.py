@@ -66,6 +66,13 @@ UI_TEXT = {
         # Tickets (legacy alias — routes to cashouts)
         "tickets_title": "💱 Cashout Requests",
         "tickets_empty": "No pending cashout requests.",
+        # Exchange rate management
+        "rates_title": "💹 Exchange Rates",
+        "rates_btn": "💹 Exchange Rates",
+        "rates_info": "💹 <b>Exchange Rate Settings</b>\n\nCurrent USDT → Toman rate:\n<b>{rate:,} Toman per USDT</b>\n\n⚠️ This rate is applied immediately to all incoming USDT deposits.",
+        "enter_usdt_rate": "Send the new USDT rate in Toman (positive integer only).\nExample: <code>92000</code>\n\n/cancel to abort.",
+        "rate_updated": "✅ USDT rate updated to <b>{rate:,} Toman</b>.",
+        "rate_invalid": "❌ Invalid value. Send a positive integer (e.g. 92000).",
     },
     "fa": {
         # Navigation
@@ -134,6 +141,13 @@ UI_TEXT = {
         # Tickets (legacy)
         "tickets_title": "💱 درخواست‌های نقد",
         "tickets_empty": "هیچ درخواست معلقی وجود ندارد.",
+        # Exchange rate management
+        "rates_title": "💹 نرخ ارز",
+        "rates_btn": "💹 نرخ ارز",
+        "rates_info": "💹 <b>تنظیمات نرخ ارز</b>\n\nنرخ فعلی USDT → تومان:\n<b>{rate:,} تومان</b>\n\n⚠️ این نرخ بلافاصله روی همه واریزهای USDT اعمال می‌شود.",
+        "enter_usdt_rate": "نرخ جدید USDT را به تومان ارسال کنید (عدد صحیح مثبت).\nمثال: <code>92000</code>\n\n/cancel برای لغو.",
+        "rate_updated": "✅ نرخ USDT به <b>{rate:,} تومان</b> بروزرسانی شد.",
+        "rate_invalid": "❌ مقدار نامعتبر. یک عدد صحیح مثبت ارسال کنید (مثال: 92000).",
     },
 }
 

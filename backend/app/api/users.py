@@ -2,7 +2,7 @@ from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -161,3 +161,16 @@ async def get_notifications(user: User = Depends(current_user), db: AsyncSession
         }
         for item in notifications
     ]
+
+
+@router.post("/notifications/mark-read")
+async def mark_notifications_read(user: User = Depends(current_user), db: AsyncSession = Depends(get_db)):
+    result = await db.execute(
+        update(Notification)
+        .where(Notification.user_id == user.id, Notification.is_read.is_(False))
+        .values(is_read=True)
+        .returning(Notification.id)
+    )
+    marked = len(result.fetchall())
+    await db.commit()
+    return {"marked": marked}

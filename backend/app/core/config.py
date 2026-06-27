@@ -25,6 +25,8 @@ class Settings(BaseSettings):
     ASSET_ROOT: str = "/app/static"
     PUBLIC_ASSET_BASE_URL: str = "/static"
     ALLOW_INSECURE_DEV_AUTH: bool = Field(default=False)
+    USDT_TO_IRR_RATE: int = Field(default=85000, description="USDT to Toman exchange rate (Toman per 1 USDT)")
+    TETRA98_SIG_HEADER: str = Field(default="X-Tetra98-Signature", description="Header name Tetra98 uses for HMAC signature")
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 

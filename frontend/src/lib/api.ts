@@ -220,3 +220,7 @@ export function createCashoutRequest(
     }),
   });
 }
+
+export function markNotificationsRead() {
+  return apiFetch<{ marked: number }>("/notifications/mark-read", { method: "POST" });
+}

@@ -20,6 +20,7 @@ from app.bot.filters import IsAdminFilter
 from app.bot.states import AdminPanelStates
 from app.core.database import AsyncSessionLocal
 from app.core.redis import redis_client
+from app.services.rate_service import get_usdt_rate, set_usdt_rate
 from app.models import (
     CashoutRequest,
     CashoutRequestStatus,
@@ -85,7 +86,10 @@ def get_main_menu_markup(lang: str) -> InlineKeyboardMarkup:
                 InlineKeyboardButton(text="🔍 " + get_text(lang, "search_user_title"), callback_data="search_user"),
             ],
             [
+                InlineKeyboardButton(text=get_text(lang, "rates_btn"), callback_data="manage_rates"),
                 InlineKeyboardButton(text=get_text(lang, "report_btn"), callback_data="force_report"),
+            ],
+            [
                 InlineKeyboardButton(text=get_text(lang, "toggle_lang"), callback_data="toggle_language"),
             ],
         ]
@@ -727,3 +731,52 @@ async def _update_cashout_status(
         parse_mode="HTML",
     )
     await callback.answer(f"✅ Status updated to {new_status.value}", show_alert=False)
+
+
+# ── Exchange rate management ──────────────────────────────────────────────────
+
+def _rates_markup(lang: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="✏️ " + get_text(lang, "rates_btn"), callback_data="set_usdt_rate")],
+            [InlineKeyboardButton(text=get_text(lang, "back_to_menu"), callback_data="main_menu")],
+        ]
+    )
+
+
+@admin_router.callback_query(F.data == "manage_rates")
+async def show_rates(callback: CallbackQuery):
+    lang = await get_admin_lang(callback.from_user.id)
+    rate = await get_usdt_rate()
+    text = get_text(lang, "rates_info").format(rate=int(rate))
+    await callback.message.edit_text(text=text, reply_markup=_rates_markup(lang), parse_mode="HTML")
+    await callback.answer()
+
+
+@admin_router.callback_query(F.data == "set_usdt_rate")
+async def prompt_usdt_rate(callback: CallbackQuery, state: FSMContext):
+    lang = await get_admin_lang(callback.from_user.id)
+    await callback.message.answer(get_text(lang, "enter_usdt_rate"), parse_mode="HTML")
+    await state.set_state(AdminPanelStates.awaiting_usdt_rate)
+    await callback.answer()
+
+
+@admin_router.message(AdminPanelStates.awaiting_usdt_rate)
+async def process_usdt_rate(message: Message, state: FSMContext):
+    lang = await get_admin_lang(message.from_user.id)
+    raw = (message.text or "").strip().replace(",", "").replace("٬", "")
+
+    if not raw.isdigit() or int(raw) <= 0:
+        await message.answer(get_text(lang, "rate_invalid"))
+        return
+
+    new_rate = int(raw)
+    await set_usdt_rate(new_rate)
+    await state.clear()
+
+    logger.info("Admin %s updated USDT rate to %d", message.from_user.id, new_rate)
+    await message.answer(
+        get_text(lang, "rate_updated").format(rate=new_rate),
+        reply_markup=_rates_markup(lang),
+        parse_mode="HTML",
+    )

@@ -18,7 +18,7 @@ async def _check_low_stock(session) -> list[str]:
 
     Uses a LEFT JOIN so variants with zero available items are also included.
     """
-    from sqlalchemy import outerjoin, case, literal
+    from sqlalchemy import case
 
     subq = (
         select(

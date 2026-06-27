@@ -14,6 +14,7 @@ from app.api.users import current_user
 from app.core.config import settings
 from app.core.database import get_db
 from app.core.redis import redis_client
+from app.services.rate_service import get_usdt_rate
 from app.models import (
     Transaction,
     TransactionStatus,
@@ -88,7 +89,7 @@ async def _try_auto_purchase(db: AsyncSession, user: User, tx_id: int) -> None:
 #             200 success: { status:"100" }
 
 class Tetra98PaymentRequest(BaseModel):
-    amount: int = Field(gt=9999, le=500000000, description="Amount in Rials (IRR)")
+    amount: int = Field(gt=9999, le=50000000, description="Amount in Toman (minimum 10,000)")
     product_id: str | None = Field(default=None, max_length=120)
     variant_id: str | None = Field(default=None, max_length=120)
 
@@ -115,7 +116,8 @@ async def create_tetra98_payment(
     if not wallet:
         raise HTTPException(status_code=404, detail="Wallet not found.")
 
-    # Create a pending transaction first so we have a DB-backed ID to use as Hash_id
+    # Create a pending transaction first so we have a DB-backed ID to use as Hash_id.
+    # amount is stored in Toman to match the wallet balance unit.
     pending_tx = Transaction(
         wallet_id=wallet.id,
         amount=to_decimal(payload.amount),
@@ -135,18 +137,18 @@ async def create_tetra98_payment(
         intent = json.dumps({"product_id": payload.product_id, "variant_id": payload.variant_id})
         await redis_client.setex(_purchase_intent_key(pending_tx.id), PURCHASE_INTENT_TTL, intent)
 
-    # Tetra98 create_order request — field names are case-sensitive as shown in their docs
+    # Tetra98 expects Amount in Rials; payload.amount is in Toman → multiply by 10.
     gateway_payload = {
         "ApiKey": settings.TETRA98_API_KEY,
         "Hash_id": str(pending_tx.id),      # our transaction ID; returned as hash_id in callback
-        "Amount": payload.amount,
+        "Amount": payload.amount * 10,
         "Description": f"Keshepool deposit — user {user.telegram_id}",
         "Email": "",
         "Mobile": "",
         "CallbackURL": settings.tetra98_callback_url,
     }
 
-    logger.info("Tetra98 create_order for tx %d, amount %d IRR", pending_tx.id, payload.amount)
+    logger.info("Tetra98 create_order for tx %d, amount %d Toman (%d IRR)", pending_tx.id, payload.amount, payload.amount * 10)
 
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
@@ -195,6 +197,12 @@ async def tetra98_payment_callback(request: Request, db: AsyncSession = Depends(
     status == 100 means the user completed the payment flow; we then call /verify to confirm.
     """
     raw_body = await request.body()
+
+    if settings.TETRA98_WEBHOOK_SECRET:
+        received_sig = request.headers.get(settings.TETRA98_SIG_HEADER, "")
+        if not _verify_hmac_signature(settings.TETRA98_WEBHOOK_SECRET, raw_body, received_sig):
+            logger.warning("Tetra98 callback signature validation failed.")
+            raise HTTPException(status_code=403, detail="Invalid webhook signature.")
 
     # Parse JSON body; Tetra98 sends application/json
     try:
@@ -284,10 +292,10 @@ async def tetra98_payment_callback(request: Request, db: AsyncSession = Depends(
     wallet.balance = to_decimal(wallet.balance) + to_decimal(locked_tx.amount)
     locked_tx.status = TransactionStatus.SUCCESS
     locked_tx.reference_id = authority
-    locked_tx.description = f"Tetra98 IRR deposit verified (authority: {authority[:12]}...)"
+    locked_tx.description = f"Tetra98 deposit verified — {locked_tx.amount} Toman (authority: {authority[:12]}...)"
     await db.commit()
 
-    logger.info("Tetra98: tx %d credited %.2f IRR to wallet %d", tx_id, locked_tx.amount, wallet.id)
+    logger.info("Tetra98: tx %d credited %.2f Toman to wallet %d", tx_id, locked_tx.amount, wallet.id)
 
     from app.models import User as UserModel
     user_result = await db.execute(select(UserModel).where(UserModel.id == wallet.user_id))
@@ -423,10 +431,14 @@ async def crypto_payment_callback(request: Request, db: AsyncSession = Depends(g
     if not wallet:
         raise HTTPException(status_code=404, detail="Wallet not found.")
 
-    wallet.balance = to_decimal(wallet.balance) + to_decimal(pending_tx.amount)
+    # Convert USDT to Toman using the live exchange rate before crediting the wallet.
+    # Transaction.amount is stored in USDT; wallet.balance is always in Toman.
+    rate = await get_usdt_rate()
+    toman_credit = to_decimal(pending_tx.amount) * rate
+    wallet.balance = to_decimal(wallet.balance) + toman_credit
     pending_tx.status = TransactionStatus.SUCCESS
     pending_tx.reference_id = tx_hash
-    pending_tx.description = f"USDT deposit confirmed — {tx_hash[:16]}..."
+    pending_tx.description = f"USDT deposit confirmed — {confirmed_amount} USDT @ {int(rate):,} T/USDT — {tx_hash[:16]}..."
     await db.commit()
 
     from app.models import User as UserModel

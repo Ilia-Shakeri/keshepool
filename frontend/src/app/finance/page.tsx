@@ -21,7 +21,6 @@ import {
   createCashoutRequest,
   createTetra98Payment,
   getCashoutPlatforms,
-  getCryptoDepositAddress,
   getWalletBalance,
   getWalletTransactions,
   initiateCryptoDeposit,
