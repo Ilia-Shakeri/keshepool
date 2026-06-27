@@ -144,6 +144,15 @@
     font: inherit;
   }
 
+  /* Pointer cursor on all interactive elements (desktop only — phones ignore it) */
+  button,
+  [role="button"],
+  select,
+  label[for],
+  a {
+    cursor: pointer;
+  }
+
   /* Smooth tap highlight removal on mobile */
   button, a {
     -webkit-tap-highlight-color: transparent;

@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import Image from "next/image";
 import { Bell, Bot, Code, Flame, Layout, MessageCircle, MoreHorizontal, Music, PlaySquare, Shield, User, X } from "lucide-react";
 import ProductIcon from "@/components/ProductIcon";
 import { getNotifications, getProducts, type UserNotification } from "@/lib/api";
@@ -15,24 +16,22 @@ export default function Home() {
   const [notifications, setNotifications] = useState<UserNotification[]>([]);
   const [isNotifOpen, setIsNotifOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
+  const bellRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     const webApp = window.Telegram?.WebApp;
-    if (webApp) {
-      setTgUser(webApp.initDataUnsafe?.user || null);
-    }
-
+    if (webApp) setTgUser(webApp.initDataUnsafe?.user || null);
     Promise.all([getProducts(), getNotifications()])
-      .then(([productData, notificationData]) => {
+      .then(([productData, notifData]) => {
         setProducts(productData);
-        setNotifications(notificationData);
+        setNotifications(notifData);
       })
       .catch((error) => console.error("Home data load failed:", error))
       .finally(() => setIsLoading(false));
   }, []);
 
   const hotItems = useMemo(() => products.slice(0, 6), [products]);
-  const unreadCount = notifications.filter((item) => !item.isRead).length;
+  const unreadCount = notifications.filter((n) => !n.isRead).length;
 
   return (
     <div className="min-h-screen font-sans pb-28">
@@ -43,15 +42,17 @@ export default function Home() {
       </div>
 
       <header className="relative z-10 flex justify-between items-center px-5 py-4">
+        {/* Left: user profile */}
         <button
           onClick={() => router.push("/profile")}
           className="flex items-center gap-3 active:scale-95 transition-transform"
         >
-          <div className="w-10 h-10 rounded-full flex items-center justify-center overflow-hidden border border-white/10"
-            style={{ background: "linear-gradient(135deg, rgba(255,255,255,0.1) 0%, rgba(255,255,255,0.04) 100%)" }}>
+          <div
+            className="w-10 h-10 rounded-full flex items-center justify-center overflow-hidden border border-white/10"
+            style={{ background: "linear-gradient(135deg, rgba(255,255,255,0.1) 0%, rgba(255,255,255,0.04) 100%)" }}
+          >
             <User className="w-5 h-5 text-[#F5F5F5]/60" />
           </div>
-
           <div className="flex flex-col items-start">
             <h1 className="text-sm font-bold text-[#F5F5F5] leading-tight">
               سلام، {tgUser?.first_name || "کاربر عزیز"} 👋
@@ -60,57 +61,98 @@ export default function Home() {
           </div>
         </button>
 
+        {/* Center: brand logos (absolute so it doesn't disturb the flex layout) */}
+        <div className="absolute left-1/2 -translate-x-1/2 flex items-center gap-1.5 pointer-events-none">
+          <Image
+            src="/logo/logo keshepool.png"
+            alt="Keshepool icon"
+            width={32}
+            height={32}
+            className="rounded-lg object-contain"
+            unoptimized
+          />
+          <Image
+            src="/logo/keshepool-text.png"
+            alt="Keshepool"
+            width={90}
+            height={28}
+            className="object-contain"
+            unoptimized
+          />
+        </div>
+
+        {/* Right: notification bell */}
         <div className="relative">
           <button
-            onClick={() => setIsNotifOpen(!isNotifOpen)}
+            ref={bellRef}
+            onClick={() => setIsNotifOpen((v) => !v)}
             className="relative p-2.5 rounded-full border border-white/10 active:scale-95 transition-all"
             style={{ background: "rgba(255,255,255,0.06)", backdropFilter: "blur(12px)" }}
+            aria-label="اعلانات"
           >
             <Bell className="w-[18px] h-[18px] text-[#F5F5F5]" />
             {unreadCount > 0 && (
               <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-[#E63946] rounded-full border border-[#0F0F10] shadow-sm" />
             )}
           </button>
-
-          {isNotifOpen && (
-            <>
-              <div className="fixed inset-0 z-40" onClick={() => setIsNotifOpen(false)} />
-              <div
-                className="absolute left-0 top-12 w-72 rounded-2xl z-50 overflow-hidden"
-                style={{
-                  background: "rgba(15,20,30,0.92)",
-                  backdropFilter: "blur(24px)",
-                  WebkitBackdropFilter: "blur(24px)",
-                  border: "1px solid rgba(255,255,255,0.1)",
-                  boxShadow: "0 20px 60px rgba(0,0,0,0.5)",
-                }}
-              >
-                <div className="flex justify-between items-center px-4 py-3 border-b border-white/[0.07]">
-                  <span className="text-sm font-bold text-[#F5F5F5]">اعلانات</span>
-                  <button onClick={() => setIsNotifOpen(false)} className="p-1 rounded-lg hover:bg-white/10 transition-colors">
-                    <X className="w-3.5 h-3.5 text-[#F5F5F5]/60" />
-                  </button>
-                </div>
-                <div className="max-h-72 overflow-y-auto">
-                  {notifications.length === 0 ? (
-                    <div className="p-6 text-center text-xs text-[#F5F5F5]/40">اعلان جدیدی ندارید.</div>
-                  ) : (
-                    notifications.map((notification) => (
-                      <div
-                        key={notification.id}
-                        className={`px-4 py-3 border-b border-white/[0.05] ${notification.isRead ? "opacity-50" : ""}`}
-                      >
-                        <h4 className="text-xs font-bold text-[#F5F5F5]">{notification.title}</h4>
-                        <p className="text-[10px] text-[#F5F5F5]/60 mt-1 leading-relaxed">{notification.description}</p>
-                      </div>
-                    ))
-                  )}
-                </div>
-              </div>
-            </>
-          )}
         </div>
       </header>
+
+      {/* Notification dropdown — rendered outside header to escape its stacking context */}
+      {isNotifOpen && (
+        <>
+          {/* Full-screen overlay — catches outside clicks */}
+          <div
+            className="fixed inset-0 z-[9998]"
+            onClick={() => setIsNotifOpen(false)}
+            aria-hidden="true"
+          />
+          {/* Panel — fixed so it always floats above everything including BottomNav */}
+          <div
+            className="fixed right-5 z-[9999] w-72 rounded-2xl overflow-hidden"
+            style={{
+              top: "72px",
+              background: "#111318",
+              border: "1px solid rgba(255,255,255,0.12)",
+              boxShadow: "0 24px 64px rgba(0,0,0,0.7), 0 4px 16px rgba(0,0,0,0.4)",
+            }}
+          >
+            <div
+              className="flex justify-between items-center px-4 py-3"
+              style={{ borderBottom: "1px solid rgba(255,255,255,0.08)" }}
+            >
+              <span className="text-sm font-bold text-[#F5F5F5]">اعلانات</span>
+              <button
+                onClick={() => setIsNotifOpen(false)}
+                className="p-1 rounded-lg transition-colors hover:bg-white/10"
+              >
+                <X className="w-3.5 h-3.5 text-[#F5F5F5]/60" />
+              </button>
+            </div>
+            <div className="max-h-72 overflow-y-auto">
+              {notifications.length === 0 ? (
+                <div className="p-6 text-center text-xs text-[#F5F5F5]/40">اعلان جدیدی ندارید.</div>
+              ) : (
+                notifications.map((notification) => (
+                  <div
+                    key={notification.id}
+                    className={`px-4 py-3 ${notification.isRead ? "opacity-50" : ""}`}
+                    style={{ borderBottom: "1px solid rgba(255,255,255,0.05)" }}
+                  >
+                    <div className="flex items-center gap-2 mb-0.5">
+                      {!notification.isRead && (
+                        <span className="w-1.5 h-1.5 rounded-full bg-[#E63946] flex-shrink-0" />
+                      )}
+                      <h4 className="text-xs font-bold text-[#F5F5F5]">{notification.title}</h4>
+                    </div>
+                    <p className="text-[10px] text-[#F5F5F5]/55 leading-relaxed">{notification.description}</p>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        </>
+      )}
 
       <main className="relative z-10 px-5 space-y-8 mt-2">
         {/* Featured products horizontal scroll */}
@@ -141,7 +183,7 @@ export default function Home() {
                   <div
                     key={item.id}
                     onClick={() => router.push(`/products?category=${item.category}`)}
-                    className="min-w-[210px] rounded-2xl p-4 flex flex-col justify-between cursor-pointer transition-all duration-300 active:scale-[0.97] flex-shrink-0"
+                    className="min-w-[210px] rounded-2xl p-4 flex flex-col justify-between cursor-pointer transition-all duration-300 active:scale-[0.97] hover:scale-[1.02] flex-shrink-0"
                     style={{
                       background: "linear-gradient(135deg, rgba(255,255,255,0.07) 0%, rgba(255,255,255,0.02) 100%)",
                       backdropFilter: "blur(20px)",

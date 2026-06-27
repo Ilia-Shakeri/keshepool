@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { ChevronRight, Shield, Zap, Clock, Headphones } from "lucide-react";
+import { useEffect, useMemo } from "react";
+import { useState } from "react";
+import { ChevronRight, CheckCircle2, Clock, Headphones, Shield, Zap } from "lucide-react";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import ProductIcon from "@/components/ProductIcon";
 import type { Product, ProductVariant } from "@/lib/products";
@@ -14,11 +15,19 @@ interface ProductDetailModalProps {
   onProceedToCheckout: (variant: ProductVariant) => void;
 }
 
-const FEATURES = [
-  { icon: <Shield className="w-4 h-4 text-emerald-400" />, label: "تحویل امن" },
-  { icon: <Zap className="w-4 h-4 text-yellow-400" />, label: "تحویل فوری" },
-  { icon: <Clock className="w-4 h-4 text-blue-400" />, label: "گارانتی ۷ روزه" },
-  { icon: <Headphones className="w-4 h-4 text-purple-400" />, label: "پشتیبانی ۲۴ ساعته" },
+// Default feature icons assigned by index position
+const FEATURE_ICONS = [
+  <Shield key="0" className="w-4 h-4 text-emerald-400" />,
+  <Zap key="1" className="w-4 h-4 text-yellow-400" />,
+  <Clock key="2" className="w-4 h-4 text-blue-400" />,
+  <Headphones key="3" className="w-4 h-4 text-purple-400" />,
+];
+
+const DEFAULT_FEATURES = [
+  { icon: FEATURE_ICONS[0], label: "تحویل امن" },
+  { icon: FEATURE_ICONS[1], label: "تحویل فوری" },
+  { icon: FEATURE_ICONS[2], label: "گارانتی ۷ روزه" },
+  { icon: FEATURE_ICONS[3], label: "پشتیبانی ۲۴ ساعته" },
 ];
 
 export default function ProductDetailModal({ isOpen, onClose, product, onProceedToCheckout }: ProductDetailModalProps) {
@@ -36,6 +45,15 @@ export default function ProductDetailModal({ isOpen, onClose, product, onProceed
   if (!product) return null;
 
   const outOfStock = !activeVariant || (activeVariant.stockCount ?? 0) <= 0;
+
+  // Use product-specific features from DB if set, otherwise fall back to defaults
+  const features =
+    product.features && product.features.length > 0
+      ? product.features.map((label, i) => ({
+          icon: FEATURE_ICONS[i] ?? <CheckCircle2 key={i} className="w-4 h-4 text-emerald-400" />,
+          label,
+        }))
+      : DEFAULT_FEATURES;
 
   return (
     <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
@@ -94,7 +112,7 @@ export default function ProductDetailModal({ isOpen, onClose, product, onProceed
           {/* Feature chips */}
           <div className="px-5 mb-6">
             <div className="grid grid-cols-2 gap-2">
-              {FEATURES.map((f) => (
+              {features.map((f) => (
                 <div
                   key={f.label}
                   className="flex items-center gap-2.5 px-3 py-2.5 rounded-xl"

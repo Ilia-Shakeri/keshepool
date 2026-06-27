@@ -80,6 +80,7 @@ async def get_all_products(
                 "assetUrl": product.asset_url,
                 "gradient": product.gradient or "from-gray-700 to-black",
                 "category": product.category or "tools",
+                "features": json.loads(product.features) if product.features else None,
                 "variants": [
                     {
                         "id": variant.id,

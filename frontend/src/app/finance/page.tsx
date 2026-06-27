@@ -367,9 +367,21 @@ export default function FinancePage() {
                 <div>
                   <h2 className="text-sm font-bold">نقد کردن درآمد ارزی</h2>
                   <p className="text-[11px] text-[#F5F5F5]/45 mt-0.5">
-                    درخواست خود را ثبت کنید تا تیم ما با شما تماس بگیرد.
+                    درخواست ثبت کن — ادمین مستقیم در تلگرام باهات تماس می‌گیره.
                   </p>
                 </div>
+              </div>
+
+              {/* Admin contact notice */}
+              <div
+                className="flex items-start gap-2.5 p-3.5 rounded-2xl mb-4"
+                style={{ background: "rgba(230,57,70,0.07)", border: "1px solid rgba(230,57,70,0.15)" }}
+              >
+                <span className="text-base leading-none mt-0.5">💬</span>
+                <p className="text-[11px] text-[#F5F5F5]/70 leading-relaxed">
+                  بعد از ثبت درخواست، یکی از ادمین‌های ما از طریق تلگرام با شما ارتباط می‌گیرد تا روند نقد کردن را راهنمایی کند.
+                  نیازی به ارائه شماره حساب یا کیف پول در اینجا نیست.
+                </p>
               </div>
 
               {cashoutSuccess ? (
@@ -448,7 +460,7 @@ export default function FinancePage() {
                     <textarea
                       value={cashoutDetails}
                       onChange={(e) => setCashoutDetails(e.target.value)}
-                      placeholder="مبلغ، نوع ارز، شماره حساب یا کیف پول مقصد و سایر اطلاعات لازم را وارد کنید..."
+                      placeholder="توضیح بده که چه مقدار درآمد ارزی داری و از کجا. ادمین بعداً با تو در تلگرام هماهنگ می‌کنه..."
                       rows={5}
                       maxLength={2000}
                       className="w-full rounded-xl px-4 py-3 text-sm focus:outline-none transition-all resize-none leading-relaxed"

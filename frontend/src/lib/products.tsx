@@ -27,4 +27,5 @@ export interface Product {
   assetUrl?: string | null;
   gradient: string;
   category: ProductCategory;
+  features?: string[] | null;
 }

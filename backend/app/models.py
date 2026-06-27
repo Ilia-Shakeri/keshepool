@@ -115,6 +115,7 @@ class Product(Base):
     gradient = Column(String, default="from-gray-700 to-black", nullable=False)
     category = Column(String, default="tools", index=True, nullable=False)
     is_active = Column(Boolean, default=True, nullable=False)
+    features = Column(Text, nullable=True)  # JSON list of feature label strings shown in product modal
     created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
     updated_at = Column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
 
