@@ -15,27 +15,20 @@ export default function AppHeader() {
     >
       <div className="flex items-center justify-center h-full max-w-md mx-auto px-5">
         <div className="flex items-center gap-2.5">
-          <div
-            className="w-7 h-7 rounded-xl overflow-hidden flex-shrink-0"
-            style={{ boxShadow: "0 0 14px rgba(230,57,70,0.25)" }}
-          >
+          <div className="w-8 h-8 flex-shrink-0 rounded-xl overflow-hidden">
             <Image
               src="/logo/main-logo.png"
               alt="Keshepool"
-              width={28}
-              height={28}
+              width={1254}
+              height={1254}
               className="w-full h-full object-contain"
               priority
             />
           </div>
-          <Image
-            src="/logo/text-logo.png"
-            alt="Keshepool"
-            width={110}
-            height={22}
-            className="h-[22px] w-auto object-contain select-none"
-            priority
-          />
+          <span className="text-[16px] font-bold tracking-wide select-none leading-none">
+            <span style={{ color: "rgba(230,230,230,0.92)" }}>Keshe</span>
+            <span style={{ color: "#E63946" }}>Pool</span>
+          </span>
         </div>
       </div>
     </div>
