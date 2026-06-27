@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { ChevronLeft, SlidersHorizontal } from "lucide-react";
+import { Suspense, useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "next/navigation";
+import { Search, SlidersHorizontal } from "lucide-react";
 import ProductDetailModal from "@/components/ProductDetailModal";
 import CheckoutModal from "@/components/CheckoutModal";
 import ProductIcon from "@/components/ProductIcon";
@@ -19,9 +20,12 @@ const CATEGORIES: { id: ProductCategory | "all"; label: string }[] = [
   { id: "gaming", label: "گیمینگ" },
 ];
 
-export default function ProductsPage() {
+function ProductsContent() {
+  const searchParams = useSearchParams();
+  const initialCategory = (searchParams.get("category") as ProductCategory | "all") || "all";
+
   const [products, setProducts] = useState<Product[]>([]);
-  const [activeCategory, setActiveCategory] = useState<ProductCategory | "all">("all");
+  const [activeCategory, setActiveCategory] = useState<ProductCategory | "all">(initialCategory);
   const [query, setQuery] = useState("");
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [isDetailModalOpen, setIsDetailModalOpen] = useState(false);
@@ -65,32 +69,32 @@ export default function ProductsPage() {
   };
 
   return (
-    <div className="min-h-screen bg-[#0F0F10] text-[#F5F5F5] font-sans pb-32">
-      <header className="p-5 pt-6 pb-2">
-        <div className="flex justify-center items-center mb-6 relative">
-          <h1 className="text-base font-bold text-[#F5F5F5] absolute left-1/2 -translate-x-1/2">محصولات</h1>
-        </div>
-
-        <div className="relative mb-6">
+    <div className="min-h-screen text-[#F5F5F5] font-sans pb-32">
+      <header className="px-5 pt-4 pb-2">
+        <h1 className="text-base font-bold text-[#F5F5F5] text-center mb-4">محصولات</h1>
+        <div className="relative mb-5">
+          <Search className="absolute right-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-[#F5F5F5]/40 pointer-events-none" />
           <input
             type="text"
             placeholder="جستجو بین سرویس‌ها..."
             value={query}
             onChange={(event) => setQuery(event.target.value)}
-            className="w-full bg-[#0B1D33] border border-[#33383F] rounded-2xl py-3.5 pr-4 pl-12 text-sm text-[#F5F5F5] focus:outline-none focus:border-[#E63946]/50 transition-colors placeholder:text-[#F5F5F5]/50"
+            className="w-full bg-white/[0.05] border border-white/10 rounded-2xl py-3 pr-10 pl-11 text-sm text-[#F5F5F5] focus:outline-none focus:border-[#E63946]/50 focus:bg-white/[0.07] transition-all placeholder:text-[#F5F5F5]/35 backdrop-blur-sm"
           />
-          <button className="absolute left-3 top-1/2 -translate-y-1/2 p-1 text-[#F5F5F5]/70 hover:text-[#F5F5F5]">
-            <SlidersHorizontal className="w-5 h-5" />
+          <button className="absolute left-3.5 top-1/2 -translate-y-1/2 p-1 text-[#F5F5F5]/40 hover:text-[#F5F5F5]/70 transition-colors">
+            <SlidersHorizontal className="w-4 h-4" />
           </button>
         </div>
 
-        <div className="flex gap-2 overflow-x-auto scrollbar-hide dir-rtl pb-2 -mx-5 px-5">
+        <div className="flex gap-2 overflow-x-auto scrollbar-hide dir-rtl pb-1 -mx-5 px-5">
           {CATEGORIES.map((cat) => (
             <button
               key={cat.id}
               onClick={() => setActiveCategory(cat.id)}
-              className={`whitespace-nowrap px-5 py-2 rounded-xl text-xs font-medium transition-all ${
-                activeCategory === cat.id ? "bg-[#E63946] text-[#F5F5F5]" : "bg-[#0B1D33] text-[#F5F5F5]/70 border border-[#33383F] hover:bg-[#33383F]/50"
+              className={`whitespace-nowrap px-4 py-1.5 rounded-xl text-xs font-semibold transition-all duration-200 ${
+                activeCategory === cat.id
+                  ? "bg-[#E63946] text-white shadow-lg shadow-[#E63946]/25"
+                  : "bg-white/[0.06] text-[#F5F5F5]/60 border border-white/[0.08] hover:bg-white/[0.1] hover:text-[#F5F5F5]/80"
               }`}
             >
               {cat.label}
@@ -99,57 +103,92 @@ export default function ProductsPage() {
         </div>
       </header>
 
-      <main className="px-5 space-y-3 mt-2">
-        {isLoading
-          ? Array.from({ length: 5 }).map((_, i) => (
-              <div key={i} className="bg-[#0B1D33] border border-[#33383F] rounded-2xl p-4 flex items-center justify-between animate-pulse">
-                <div className="flex items-center gap-4">
-                  <div className="w-11 h-11 bg-[#33383F] rounded-xl" />
-                  <div className="space-y-2">
-                    <div className="h-3 bg-[#33383F] rounded w-24" />
-                    <div className="h-2 bg-[#33383F] rounded w-16" />
-                  </div>
-                </div>
-                <div className="flex flex-col items-end gap-2">
-                  <div className="h-3 bg-[#33383F] rounded w-14" />
-                  <div className="h-2 bg-[#33383F] rounded w-8" />
-                </div>
-              </div>
-            ))
-          : filteredProducts.map((product) => (
-              <div
-                key={product.id}
-                onClick={() => handleProductSelect(product)}
-                className="bg-[#0B1D33] border border-[#33383F] rounded-2xl p-4 flex items-center justify-between cursor-pointer hover:bg-[#1E3C5A]/50 transition-colors group"
-              >
-                <div className="flex items-center gap-4">
-                  <ProductIcon icon={product.icon} assetUrl={product.assetUrl} gradient={product.gradient} />
-                  <div className="flex flex-col gap-1">
-                    <h3 className="text-sm font-bold text-[#F5F5F5]">{product.brand}</h3>
-                    <p className="text-[10px] text-[#F5F5F5]/50">{product.subtitle}</p>
-                  </div>
-                </div>
+      <main className="px-4 mt-4">
+        <div className="grid grid-cols-2 gap-3">
+          {isLoading
+            ? Array.from({ length: 6 }).map((_, i) => (
+                <div
+                  key={i}
+                  className="aspect-square rounded-3xl bg-white/[0.04] border border-white/[0.08] animate-pulse"
+                />
+              ))
+            : filteredProducts.map((product) => (
+                <button
+                  key={product.id}
+                  onClick={() => handleProductSelect(product)}
+                  className="group relative aspect-square rounded-3xl overflow-hidden cursor-pointer transition-all duration-300 active:scale-95 hover:scale-[1.02]"
+                  style={{
+                    background: "linear-gradient(135deg, rgba(255,255,255,0.07) 0%, rgba(255,255,255,0.02) 100%)",
+                    backdropFilter: "blur(20px)",
+                    WebkitBackdropFilter: "blur(20px)",
+                    border: "1px solid rgba(255,255,255,0.1)",
+                    boxShadow: "0 8px 32px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.08)",
+                  }}
+                >
+                  <div className="absolute inset-0 bg-gradient-to-br from-white/[0.04] to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
 
-                <div className="flex flex-col items-end justify-between h-full py-1 gap-4">
-                  <ChevronLeft className="w-4 h-4 text-[#F5F5F5]/50" />
-                  <div className="flex flex-col items-end gap-0.5">
-                    <span className="text-xs font-bold text-[#F5F5F5]">{toPersianDigits(product.variants[0]?.priceLabel || "0")}</span>
-                    <span className="text-[10px] text-[#F5F5F5]/50">تومان</span>
+                  <div className="relative h-full flex flex-col items-center justify-center p-4 gap-3 text-center">
+                    <ProductIcon
+                      icon={product.icon}
+                      assetUrl={product.assetUrl}
+                      gradient={product.gradient}
+                      category={product.category}
+                      sizeClassName="w-16 h-16"
+                      iconSizeClassName="w-7 h-7"
+                    />
+
+                    <div className="flex flex-col gap-0.5 w-full">
+                      <h3 className="text-sm font-bold text-[#F5F5F5] leading-tight truncate">{product.brand}</h3>
+                      <p className="text-[10px] text-[#F5F5F5]/50 leading-tight line-clamp-2">{product.subtitle}</p>
+                    </div>
+
+                    <div className="w-full pt-1 border-t border-white/[0.08]">
+                      <span className="text-xs font-bold text-emerald-400">{toPersianDigits(product.variants[0]?.priceLabel || "0")}</span>
+                      <span className="text-[9px] text-[#F5F5F5]/40 mr-1">تومان</span>
+                    </div>
                   </div>
-                </div>
-              </div>
-            ))}
+
+                  <div className="absolute inset-0 rounded-3xl opacity-0 group-hover:opacity-100 transition-opacity duration-300 pointer-events-none"
+                    style={{ boxShadow: "0 0 0 1px rgba(230,57,70,0.3), 0 0 20px rgba(230,57,70,0.08)" }} />
+                </button>
+              ))}
+        </div>
 
         {!isLoading && filteredProducts.length === 0 && (
-          <div className="text-center py-12 text-[#F5F5F5]/50 text-sm">محصولی یافت نشد.</div>
+          <div className="text-center py-20">
+            <p className="text-[#F5F5F5]/30 text-sm">محصولی یافت نشد.</p>
+          </div>
         )}
       </main>
 
-      <ProductDetailModal isOpen={isDetailModalOpen} onClose={() => setIsDetailModalOpen(false)} product={selectedProduct} onProceedToCheckout={handleProceedToCheckout} />
+      <ProductDetailModal
+        isOpen={isDetailModalOpen}
+        onClose={() => setIsDetailModalOpen(false)}
+        product={selectedProduct}
+        onProceedToCheckout={handleProceedToCheckout}
+      />
 
       {selectedProduct && selectedVariant && (
-        <CheckoutModal isOpen={isCheckoutOpen} setIsOpen={setIsCheckoutOpen} product={selectedProduct} variant={selectedVariant} walletBalance={walletBalance} />
+        <CheckoutModal
+          isOpen={isCheckoutOpen}
+          setIsOpen={setIsCheckoutOpen}
+          product={selectedProduct}
+          variant={selectedVariant}
+          walletBalance={walletBalance}
+        />
       )}
     </div>
+  );
+}
+
+export default function ProductsPage() {
+  return (
+    <Suspense fallback={
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="w-8 h-8 border-2 border-[#E63946]/30 border-t-[#E63946] rounded-full animate-spin" />
+      </div>
+    }>
+      <ProductsContent />
+    </Suspense>
   );
 }

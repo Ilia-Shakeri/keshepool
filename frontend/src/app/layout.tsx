@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import Script from "next/script";
+import AppHeader from "@/components/AppHeader";
 import BottomNav from "@/components/BottomNav";
 import TelegramBootstrap from "@/components/TelegramBootstrap";
 import "./globals.css";
@@ -19,10 +20,13 @@ export default function RootLayout({
       <body className="font-sans antialiased bg-[#0F0F10] text-[#F5F5F5]" suppressHydrationWarning>
         <Script src="https://telegram.org/js/telegram-web-app.js" strategy="beforeInteractive" />
         <TelegramBootstrap />
-        <main className="min-h-screen overflow-x-hidden relative max-w-md mx-auto bg-[#0F0F10] shadow-2xl border-x border-[#33383F]/50">
-          {children}
+        <div className="min-h-screen overflow-x-hidden relative max-w-md mx-auto bg-[#0F0F10] shadow-2xl border-x border-[#33383F]/50">
+          <AppHeader />
+          <main className="pt-[52px]">
+            {children}
+          </main>
           <BottomNav />
-        </main>
+        </div>
       </body>
     </html>
   );

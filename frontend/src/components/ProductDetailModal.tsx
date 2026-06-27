@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { ChevronRight } from "lucide-react";
+import { ChevronRight, Shield, Zap, Clock, Headphones } from "lucide-react";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import ProductIcon from "@/components/ProductIcon";
 import type { Product, ProductVariant } from "@/lib/products";
@@ -14,8 +14,14 @@ interface ProductDetailModalProps {
   onProceedToCheckout: (variant: ProductVariant) => void;
 }
 
+const FEATURES = [
+  { icon: <Shield className="w-4 h-4 text-emerald-400" />, label: "تحویل امن" },
+  { icon: <Zap className="w-4 h-4 text-yellow-400" />, label: "تحویل فوری" },
+  { icon: <Clock className="w-4 h-4 text-blue-400" />, label: "گارانتی ۷ روزه" },
+  { icon: <Headphones className="w-4 h-4 text-purple-400" />, label: "پشتیبانی ۲۴ ساعته" },
+];
+
 export default function ProductDetailModal({ isOpen, onClose, product, onProceedToCheckout }: ProductDetailModalProps) {
-  const [activeTab, setActiveTab] = useState<"features" | "details">("details");
   const [selectedVariantId, setSelectedVariantId] = useState("");
 
   useEffect(() => {
@@ -24,7 +30,7 @@ export default function ProductDetailModal({ isOpen, onClose, product, onProceed
 
   const activeVariant = useMemo(() => {
     if (!product || product.variants.length === 0) return null;
-    return product.variants.find((variant) => variant.id === selectedVariantId) || product.variants[0];
+    return product.variants.find((v) => v.id === selectedVariantId) || product.variants[0];
   }, [product, selectedVariantId]);
 
   if (!product) return null;
@@ -33,100 +39,158 @@ export default function ProductDetailModal({ isOpen, onClose, product, onProceed
 
   return (
     <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="bg-[#0F0F10] border-none text-[#F5F5F5] w-full h-[100dvh] max-w-md mx-auto p-0 font-sans dir-rtl rounded-none flex flex-col">
-        <DialogTitle className="sr-only">{product.title} Details</DialogTitle>
+      <DialogContent className="bg-[#0A0A0B] border-none text-[#F5F5F5] w-full h-[100dvh] max-w-md mx-auto p-0 font-sans dir-rtl rounded-none flex flex-col">
+        <DialogTitle className="sr-only">{product.title}</DialogTitle>
 
-        <header className="flex justify-between items-center p-5 pt-6 sticky top-0 bg-[#0F0F10]/90 backdrop-blur-md z-20">
-          <button onClick={onClose} className="p-2 bg-[#33383F] rounded-full hover:bg-[#33383F]/80 transition-colors">
-            <ChevronRight className="w-5 h-5 text-[#F5F5F5]/80" />
+        {/* Sticky back button */}
+        <header
+          className="sticky top-0 z-20 flex items-center px-5 py-3"
+          style={{
+            background: "rgba(10,10,11,0.85)",
+            backdropFilter: "blur(20px)",
+            WebkitBackdropFilter: "blur(20px)",
+            borderBottom: "1px solid rgba(255,255,255,0.06)",
+          }}
+        >
+          <button
+            onClick={onClose}
+            className="p-2 rounded-full transition-colors hover:bg-white/10 active:scale-95"
+            style={{ background: "rgba(255,255,255,0.07)", border: "1px solid rgba(255,255,255,0.1)" }}
+          >
+            <ChevronRight className="w-4 h-4 text-[#F5F5F5]/80" />
           </button>
         </header>
 
-        <div className="flex-1 overflow-y-auto pb-28 px-5">
-          <div className="flex flex-col items-center text-center mt-2 mb-6">
-            <ProductIcon icon={product.icon} assetUrl={product.assetUrl} gradient={product.gradient} sizeClassName="w-20 h-20" />
-            <h1 className="text-xl font-bold text-[#F5F5F5] mb-1 mt-4">{product.brand}</h1>
-            <p className="text-xs text-[#F5F5F5]/70 mb-3">{product.subtitle}</p>
+        <div className="flex-1 overflow-y-auto">
+          {/* Hero section */}
+          <div className="flex flex-col items-center text-center px-5 pt-6 pb-6">
+            <ProductIcon
+              icon={product.icon}
+              assetUrl={product.assetUrl}
+              gradient={product.gradient}
+              category={product.category}
+              sizeClassName="w-24 h-24"
+              iconSizeClassName="w-10 h-10"
+            />
+            <h1 className="text-2xl font-bold text-[#F5F5F5] mt-4 mb-1">{product.brand}</h1>
+            <p className="text-sm text-[#F5F5F5]/50 leading-relaxed max-w-xs">{product.subtitle}</p>
 
             <div className="flex gap-2 mt-4">
-              <span className="bg-[#33383F]/80 text-[#F5F5F5]/80 text-[10px] px-3 py-1 rounded-full border border-[#33383F]">گارانتی ۷ روزه</span>
-              <span className="bg-[#E63946]/10 text-[#E63946] text-[10px] px-3 py-1 rounded-full border border-[#E63946]/20">تحویل فوری</span>
+              <span
+                className="text-[10px] px-3 py-1 rounded-full font-semibold"
+                style={{ background: "rgba(16,185,129,0.12)", color: "#10b981", border: "1px solid rgba(16,185,129,0.2)" }}
+              >
+                گارانتی ۷ روزه
+              </span>
+              <span
+                className="text-[10px] px-3 py-1 rounded-full font-semibold"
+                style={{ background: "rgba(230,57,70,0.12)", color: "#E63946", border: "1px solid rgba(230,57,70,0.2)" }}
+              >
+                تحویل فوری
+              </span>
             </div>
           </div>
 
-          <div className="flex gap-4 border-b border-[#33383F] mb-5">
-            <button onClick={() => setActiveTab("features")} className={`pb-3 text-sm font-medium transition-all relative ${activeTab === "features" ? "text-[#F5F5F5]" : "text-[#F5F5F5]/50"}`}>
-              ویژگی‌ها
-              {activeTab === "features" && <div className="absolute bottom-0 left-0 w-full h-0.5 bg-[#F5F5F5] rounded-t-full" />}
-            </button>
-            <button onClick={() => setActiveTab("details")} className={`pb-3 text-sm font-medium transition-all relative ${activeTab === "details" ? "text-[#E63946]" : "text-[#F5F5F5]/50"}`}>
-              جزئیات
-              {activeTab === "details" && <div className="absolute bottom-0 left-0 w-full h-0.5 bg-[#E63946] rounded-t-full" />}
-            </button>
+          {/* Feature chips */}
+          <div className="px-5 mb-6">
+            <div className="grid grid-cols-2 gap-2">
+              {FEATURES.map((f) => (
+                <div
+                  key={f.label}
+                  className="flex items-center gap-2.5 px-3 py-2.5 rounded-xl"
+                  style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.07)" }}
+                >
+                  {f.icon}
+                  <span className="text-xs text-[#F5F5F5]/70 font-medium">{f.label}</span>
+                </div>
+              ))}
+            </div>
           </div>
 
-          <div className="mb-8">
-            {activeTab === "details" ? (
-              <div className="animate-in fade-in zoom-in-95 duration-200">
-                <p className="text-xs text-[#F5F5F5]/70 leading-relaxed mb-6">
-                  دسترسی کامل به {product.brand} با تحویل امن و پشتیبانی.
-                </p>
-                <h3 className="text-sm font-bold text-[#F5F5F5] mb-4 text-center">انتخاب مدت زمان</h3>
-                <div className="space-y-3">
-                  {product.variants.map((variant) => {
-                    const isSelected = (selectedVariantId || product.variants[0].id) === variant.id;
-                    const variantOutOfStock = (variant.stockCount ?? 0) <= 0;
-                    return (
-                      <button
-                        key={variant.id}
-                        onClick={() => setSelectedVariantId(variant.id)}
-                        className={`w-full flex items-center justify-between p-4 rounded-2xl border transition-all ${
-                          isSelected ? "border-[#E63946] bg-[#E63946]/5" : "border-[#33383F] bg-[#0F0F10]/40 hover:bg-[#33383F]/60"
-                        }`}
+          {/* Plan selector */}
+          <div className="px-5">
+            <h3 className="text-sm font-bold text-[#F5F5F5] mb-3">انتخاب پلن</h3>
+            <div className="space-y-2.5">
+              {product.variants.map((variant) => {
+                const isSelected = (selectedVariantId || product.variants[0].id) === variant.id;
+                const variantOutOfStock = (variant.stockCount ?? 0) <= 0;
+
+                return (
+                  <button
+                    key={variant.id}
+                    onClick={() => setSelectedVariantId(variant.id)}
+                    className="w-full flex items-center justify-between p-4 rounded-2xl transition-all duration-200"
+                    style={
+                      isSelected
+                        ? {
+                            background: "rgba(230,57,70,0.08)",
+                            border: "1.5px solid rgba(230,57,70,0.6)",
+                            boxShadow: "0 0 20px rgba(230,57,70,0.08)",
+                          }
+                        : {
+                            background: "rgba(255,255,255,0.04)",
+                            border: "1px solid rgba(255,255,255,0.08)",
+                          }
+                    }
+                  >
+                    <div className="flex items-center gap-3">
+                      <div
+                        className="w-5 h-5 rounded-full border-2 flex items-center justify-center flex-shrink-0 transition-all"
+                        style={
+                          isSelected
+                            ? { borderColor: "#E63946", background: "#E63946" }
+                            : { borderColor: "rgba(255,255,255,0.2)" }
+                        }
                       >
-                        <div className="flex flex-col items-start gap-1">
-                          <span className="text-sm font-bold text-[#F5F5F5]">{variant.duration}</span>
-                          <span className={`text-[10px] ${variantOutOfStock ? "text-[#E63946]" : "text-emerald-400"}`}>
-                            {variantOutOfStock ? "ناموجود" : `موجودی: ${toPersianDigits(variant.stockCount || 0)}`}
-                          </span>
-                        </div>
-                        <div className="flex items-center gap-3">
-                          <span className="text-sm font-bold text-[#F5F5F5]">
-                            {toPersianDigits(variant.priceLabel)} <span className="text-[10px] font-normal text-[#F5F5F5]/50">تومان</span>
-                          </span>
-                          <div className={`w-4 h-4 rounded-full border-2 flex items-center justify-center ${isSelected ? "border-[#E63946]" : "border-[#33383F]"}`}>
-                            {isSelected && <div className="w-2 h-2 bg-[#E63946] rounded-full" />}
-                          </div>
-                        </div>
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-            ) : (
-              <div className="animate-in fade-in zoom-in-95 duration-200">
-                <h3 className="text-sm font-bold text-[#F5F5F5] mb-4 text-center">ویژگی‌های سرویس</h3>
-                <div className="grid grid-cols-2 gap-3">
-                  {["تحویل امن", "ثبت سفارش خودکار", "بدون اطلاعات ساختگی", "پشتیبانی ۲۴ ساعته", "موجودی لحظه‌ای", "کیف پول امن"].map((feature) => (
-                    <div key={feature} className="bg-[#0B1D33] border border-[#33383F] rounded-xl p-3 text-center text-[10px] text-[#F5F5F5]/80">
-                      {feature}
+                        {isSelected && <div className="w-2 h-2 bg-white rounded-full" />}
+                      </div>
+                      <div className="text-right">
+                        <p className="text-sm font-bold text-[#F5F5F5]">{variant.duration}</p>
+                        <p
+                          className="text-[10px] mt-0.5"
+                          style={{ color: variantOutOfStock ? "#E63946" : "#10b981" }}
+                        >
+                          {variantOutOfStock ? "ناموجود" : `موجودی: ${toPersianDigits(variant.stockCount || 0)}`}
+                        </p>
+                      </div>
                     </div>
-                  ))}
-                </div>
-              </div>
-            )}
+
+                    <div className="text-left">
+                      <p className="text-base font-bold text-[#F5F5F5]">{toPersianDigits(variant.priceLabel)}</p>
+                      <p className="text-[10px] text-[#F5F5F5]/40">تومان</p>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
           </div>
         </div>
 
-        <div className="fixed bottom-0 w-full p-5 bg-[#0F0F10] border-t border-[#33383F] z-30 max-w-md left-1/2 -translate-x-1/2">
+        {/* Sticky bottom buy button - flex sibling, no positioning */}
+        <div
+          className="p-5 flex-shrink-0"
+          style={{
+            background: "rgba(10,10,11,0.95)",
+            borderTop: "1px solid rgba(255,255,255,0.07)",
+          }}
+        >
           <button
             disabled={outOfStock}
             onClick={() => activeVariant && onProceedToCheckout(activeVariant)}
-            className={`w-full py-4 rounded-2xl text-sm font-bold shadow-lg transition-all active:scale-95 border-none ${
-              outOfStock ? "bg-[#33383F] text-[#F5F5F5]/40 cursor-not-allowed" : "bg-[#E63946] hover:bg-[#E63946]/90 text-[#F5F5F5] shadow-[#E63946]/20"
-            }`}
+            className="w-full py-4 rounded-2xl text-sm font-bold transition-all active:scale-95"
+            style={
+              outOfStock
+                ? { background: "rgba(255,255,255,0.06)", color: "rgba(245,245,245,0.3)", cursor: "not-allowed" }
+                : {
+                    background: "linear-gradient(135deg, #E63946 0%, #c0303c 100%)",
+                    color: "white",
+                    boxShadow: "0 8px 32px rgba(230,57,70,0.35)",
+                  }
+            }
           >
-            {outOfStock ? "ناموجود" : `خرید الان ${toPersianDigits(activeVariant?.priceLabel || "0")} تومان`}
+            {outOfStock
+              ? "ناموجود"
+              : `خرید — ${toPersianDigits(activeVariant?.priceLabel || "0")} تومان`}
           </button>
         </div>
       </DialogContent>

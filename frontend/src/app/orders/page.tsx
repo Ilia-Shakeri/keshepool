@@ -35,7 +35,7 @@ export default function OrdersPage() {
   };
 
   return (
-    <div className="min-h-screen bg-[#0F0F10] text-[#F5F5F5] font-sans pb-32">
+    <div className="min-h-screen text-[#F5F5F5] font-sans pb-32">
       <header className="p-5 pt-6 flex justify-between items-center relative">
         <div className="w-6" />
         <h1 className="text-base font-bold text-[#F5F5F5] absolute left-1/2 -translate-x-1/2">سفارش‌ها</h1>
@@ -43,10 +43,24 @@ export default function OrdersPage() {
       </header>
 
       <main className="px-5 mt-2">
-        <div className="bg-[#0B1D33] p-1 rounded-xl flex items-center justify-between mb-6 border border-[#33383F]">
-          <button onClick={() => setActiveTab("all")} className={`flex-1 py-2 text-xs font-medium rounded-lg transition-colors ${activeTab === "all" ? "bg-[#33383F] text-[#F5F5F5]" : "text-[#F5F5F5]/50"}`}>همه</button>
-          <button onClick={() => setActiveTab("active")} className={`flex-1 py-2 text-xs font-medium rounded-lg transition-colors ${activeTab === "active" ? "bg-[#33383F] text-[#F5F5F5]" : "text-[#F5F5F5]/50"}`}>فعال</button>
-          <button onClick={() => setActiveTab("expired")} className={`flex-1 py-2 text-xs font-medium rounded-lg transition-colors ${activeTab === "expired" ? "bg-[#33383F] text-[#F5F5F5]" : "text-[#F5F5F5]/50"}`}>منقضی شده</button>
+        <div
+          className="p-1 rounded-xl flex items-center justify-between mb-6"
+          style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.07)" }}
+        >
+          {(["all", "active", "expired"] as const).map((tab) => (
+            <button
+              key={tab}
+              onClick={() => setActiveTab(tab)}
+              className="flex-1 py-2 text-xs font-medium rounded-lg transition-all"
+              style={
+                activeTab === tab
+                  ? { background: "rgba(230,57,70,0.15)", color: "#E63946" }
+                  : { color: "rgba(245,245,245,0.45)" }
+              }
+            >
+              {tab === "all" ? "همه" : tab === "active" ? "فعال" : "منقضی"}
+            </button>
+          ))}
         </div>
 
         <div className="space-y-3">
@@ -54,7 +68,15 @@ export default function OrdersPage() {
             <div className="text-center py-10 text-sm text-[#F5F5F5]/50">سفارشی ثبت نشده است.</div>
           ) : (
             filteredOrders.map((order) => (
-              <div key={order.id} onClick={() => setSelectedOrder(order)} className="bg-[#0B1D33] border border-[#33383F] rounded-2xl p-4 flex items-center justify-between cursor-pointer hover:bg-[#1E3C5A]/50 transition-colors">
+              <div
+                key={order.id}
+                onClick={() => setSelectedOrder(order)}
+                className="rounded-2xl p-4 flex items-center justify-between cursor-pointer transition-all active:scale-[0.98]"
+                style={{
+                  background: "linear-gradient(135deg, rgba(255,255,255,0.06) 0%, rgba(255,255,255,0.02) 100%)",
+                  border: "1px solid rgba(255,255,255,0.09)",
+                }}
+              >
                 <div className="flex items-center gap-4">
                   <ProductIcon icon={order.icon} assetUrl={order.assetUrl} gradient={order.gradient} />
                   <div className="flex flex-col gap-1">
@@ -74,27 +96,30 @@ export default function OrdersPage() {
       </main>
 
       <Dialog open={!!selectedOrder} onOpenChange={(open) => !open && setSelectedOrder(null)}>
-        <DialogContent className="bg-[#0F0F10] border-none text-[#F5F5F5] w-full h-[100dvh] max-w-md mx-auto p-0 font-sans dir-rtl rounded-none flex flex-col">
+        <DialogContent className="text-[#F5F5F5] w-full h-[100dvh] max-w-md mx-auto p-0 font-sans dir-rtl rounded-none flex flex-col border-none" style={{ background: "#0A0A0B" }}>
           <DialogTitle className="sr-only">Order Details</DialogTitle>
 
-          <DialogHeader className="flex flex-row justify-between items-center p-5 pt-6 border-b border-[#33383F] sticky top-0 bg-[#0F0F10]/90 backdrop-blur-md z-20">
-            <button onClick={() => setSelectedOrder(null)} className="p-2 -mr-2 text-[#F5F5F5]/50 hover:text-[#F5F5F5] transition-colors">
-              <ChevronLeft className="w-5 h-5" />
+          <DialogHeader
+            className="flex flex-row justify-between items-center px-5 py-4 sticky top-0 z-20"
+            style={{ background: "rgba(10,10,11,0.9)", backdropFilter: "blur(20px)", borderBottom: "1px solid rgba(255,255,255,0.07)" }}
+          >
+            <button onClick={() => setSelectedOrder(null)} className="p-2 rounded-full hover:bg-white/10 transition-colors" style={{ background: "rgba(255,255,255,0.07)" }}>
+              <ChevronLeft className="w-4 h-4" />
             </button>
             <h2 className="text-base font-bold">جزئیات سفارش</h2>
-            <button className="p-2 -ml-2 text-[#F5F5F5]/50 hover:text-[#F5F5F5] transition-colors">
-              <Headphones className="w-5 h-5" />
+            <button className="p-2 rounded-full hover:bg-white/10 transition-colors" style={{ background: "rgba(255,255,255,0.07)" }}>
+              <Headphones className="w-4 h-4 text-[#F5F5F5]/60" />
             </button>
           </DialogHeader>
 
           {selectedOrder && (
-            <div className="p-5 space-y-6 flex-1 overflow-y-auto pb-24">
-              <div className="bg-[#0B1D33] border border-[#33383F] rounded-2xl p-4 flex items-center justify-between">
+            <div className="p-5 space-y-5 flex-1 overflow-y-auto">
+              <div className="rounded-2xl p-4 flex items-center justify-between" style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.09)" }}>
                 <div className="flex items-center gap-3">
-                  <ProductIcon icon={selectedOrder.icon} assetUrl={selectedOrder.assetUrl} gradient={selectedOrder.gradient} sizeClassName="w-10 h-10" />
+                  <ProductIcon icon={selectedOrder.icon} assetUrl={selectedOrder.assetUrl} gradient={selectedOrder.gradient} sizeClassName="w-10 h-10" iconSizeClassName="w-4 h-4" />
                   <div>
                     <h3 className="text-sm font-bold text-[#F5F5F5]">{selectedOrder.brand}</h3>
-                    <p className="text-[10px] text-[#F5F5F5]/70 mt-1">{selectedOrder.duration}</p>
+                    <p className="text-[10px] text-[#F5F5F5]/55 mt-0.5">{selectedOrder.duration}</p>
                   </div>
                 </div>
                 <div className={`text-[10px] font-bold px-3 py-1 rounded-full border ${selectedOrder.status === "active" ? "text-emerald-400 border-emerald-400/40 bg-emerald-400/10" : "text-[#E63946] border-[#E63946]/20 bg-[#E63946]/5"}`}>
@@ -102,23 +127,23 @@ export default function OrdersPage() {
                 </div>
               </div>
 
-              <div className="space-y-4 px-2">
+              <div className="space-y-3 px-1">
                 <div className="flex justify-between items-center text-xs">
-                  <span className="text-[#F5F5F5]/50">تاریخ خرید</span>
-                  <span className="text-[#F5F5F5] font-medium">{new Date(selectedOrder.createdAt).toLocaleString("fa-IR")}</span>
+                  <span className="text-[#F5F5F5]/45">تاریخ خرید</span>
+                  <span className="text-[#F5F5F5]/80 font-medium">{new Date(selectedOrder.createdAt).toLocaleString("fa-IR")}</span>
                 </div>
                 <div className="flex justify-between items-center text-xs">
-                  <span className="text-[#F5F5F5]/50">شماره سفارش</span>
-                  <span className="text-[#F5F5F5] font-mono font-medium">{toPersianDigits(selectedOrder.id)}</span>
+                  <span className="text-[#F5F5F5]/45">شماره سفارش</span>
+                  <span className="text-[#F5F5F5]/80 font-mono">{toPersianDigits(selectedOrder.id)}</span>
                 </div>
               </div>
 
-              <div className="pt-4 border-t border-[#33383F]">
-                <h4 className="text-sm font-bold text-[#F5F5F5] mb-4">اطلاعات سرویس</h4>
-                <div className="bg-[#0B1D33] border border-[#33383F] rounded-xl p-3.5 flex items-center justify-between">
-                  <span className="text-sm text-[#F5F5F5]/80 font-mono whitespace-pre-wrap break-all">{selectedOrder.credentials}</span>
-                  <button onClick={() => handleCopy(selectedOrder.credentials, "credentials")} className="text-[#F5F5F5]/50 hover:text-[#F5F5F5] transition-colors">
-                    {copiedField === "credentials" ? <Check className="w-4 h-4 text-[#1E3C5A]" /> : <Copy className="w-4 h-4" />}
+              <div className="pt-4" style={{ borderTop: "1px solid rgba(255,255,255,0.07)" }}>
+                <h4 className="text-sm font-bold text-[#F5F5F5] mb-3">اطلاعات سرویس</h4>
+                <div className="rounded-2xl p-4 flex items-start justify-between gap-3" style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)" }}>
+                  <span className="text-sm text-[#F5F5F5]/80 font-mono whitespace-pre-wrap break-all leading-relaxed flex-1">{selectedOrder.credentials}</span>
+                  <button onClick={() => handleCopy(selectedOrder.credentials, "credentials")} className="text-[#F5F5F5]/40 hover:text-[#F5F5F5] transition-colors flex-shrink-0 mt-0.5">
+                    {copiedField === "credentials" ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
                   </button>
                 </div>
               </div>
