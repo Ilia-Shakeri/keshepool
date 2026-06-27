@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pythonjsonlogger import jsonlogger
 
-from app.api import admin, payments, products, users
+from app.api import admin, cashout, payments, products, users
 from app.bot.handlers.admin_panel import admin_router
 from app.bot.handlers.products_admin import products_router
 from app.bot.services.scheduler import start_scheduler
@@ -104,6 +104,7 @@ app.add_middleware(
 app.include_router(users.router)
 app.include_router(products.router)
 app.include_router(payments.router)
+app.include_router(cashout.router)
 app.include_router(admin.router)
 
 app.mount("/static", StaticFiles(directory=settings.ASSET_ROOT), name="static")

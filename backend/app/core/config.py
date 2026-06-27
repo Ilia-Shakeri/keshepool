@@ -16,6 +16,9 @@ class Settings(BaseSettings):
     BOT_USERNAME: str = Field(default="keshepoolbot")
     TETRA98_API_URL: str = ""
     TETRA98_API_KEY: str = ""
+    TETRA98_WEBHOOK_SECRET: str = ""
+    CRYPTO_WEBHOOK_SECRET: str = ""
+    CRYPTO_DEPOSIT_ADDRESS_USDT: str = ""
     ADMIN_TELEGRAM_IDS: str = ""
     ADMIN_GROUP_CHAT_ID: str = ""
     ADMIN_API_KEY: str = Field(default="")

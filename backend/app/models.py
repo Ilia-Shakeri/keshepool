@@ -47,6 +47,11 @@ class OrderStatus(str, enum.Enum):
     CANCELLED = "cancelled"
     REFUNDED = "refunded"
 
+class CashoutRequestStatus(str, enum.Enum):
+    PENDING = "pending"
+    REVIEWED = "reviewed"
+    COMPLETED = "completed"
+
 class User(Base):
     __tablename__ = "users"
 
@@ -67,6 +72,7 @@ class User(Base):
     wallet = relationship("Wallet", back_populates="user", uselist=False, cascade="all, delete-orphan")
     orders = relationship("Order", back_populates="user")
     notifications = relationship("Notification", back_populates="user")
+    cashout_requests = relationship("CashoutRequest", back_populates="user")
     referrer = relationship("User", remote_side=[id])
 
 class Wallet(Base):
@@ -87,8 +93,10 @@ class Transaction(Base):
     id = Column(Integer, primary_key=True, index=True)
     wallet_id = Column(Integer, ForeignKey("wallets.id"), nullable=False)
     amount = Column(Numeric(precision=18, scale=2), nullable=False)
+    currency = Column(String(10), default="IRR", nullable=False)
     type = Column(Enum(TransactionType), nullable=False)
     status = Column(Enum(TransactionStatus), default=TransactionStatus.PENDING, nullable=False)
+    gateway = Column(String(50), nullable=True)
     reference_id = Column(String, nullable=True, index=True)
     description = Column(String, nullable=True)
     created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
@@ -176,3 +184,19 @@ class Notification(Base):
     created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
 
     user = relationship("User", back_populates="notifications")
+
+
+class CashoutRequest(Base):
+    __tablename__ = "cashout_requests"
+    __table_args__ = (Index("ix_cashout_requests_user_created", "user_id", "created_at"),)
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), index=True, nullable=False)
+    source_platform = Column(String(100), nullable=False)
+    custom_source = Column(String(200), nullable=True)
+    details_text = Column(Text, nullable=False)
+    status = Column(Enum(CashoutRequestStatus), default=CashoutRequestStatus.PENDING, nullable=False, index=True)
+    created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+
+    user = relationship("User", back_populates="cashout_requests")

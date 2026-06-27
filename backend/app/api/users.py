@@ -100,6 +100,8 @@ async def get_wallet_transactions(user: User = Depends(current_user), db: AsyncS
             "amount": float(tx.amount),
             "type": tx.type.value,
             "status": tx.status.value,
+            "currency": tx.currency,
+            "gateway": tx.gateway,
             "referenceId": tx.reference_id,
             "description": tx.description,
             "createdAt": tx.created_at.isoformat(),

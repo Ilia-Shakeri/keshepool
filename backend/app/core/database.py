@@ -20,9 +20,9 @@ AsyncSessionLocal = sessionmaker(engine, class_=AsyncSession, expire_on_commit=F
 
 
 async def init_db() -> None:
-    async with engine.begin() as connection:
-        await connection.run_sync(Base.metadata.create_all)
-    logger.info("Database metadata is ready.")
+    # Schema is fully managed by Alembic migrations (entrypoint.sh runs `alembic upgrade head`
+    # before this application starts). No create_all here to prevent silent schema drift.
+    logger.info("Database connection pool ready.")
 
 
 async def get_db():

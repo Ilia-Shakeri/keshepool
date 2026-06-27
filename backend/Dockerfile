@@ -20,9 +20,13 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 RUN adduser --disabled-password --gecos "" appuser
 
 COPY ./app ./app
+COPY ./alembic ./alembic
+COPY ./alembic.ini ./alembic.ini
+COPY ./entrypoint.sh ./entrypoint.sh
 
-RUN chown -R appuser:appuser /app
+RUN chown -R appuser:appuser /app \
+    && chmod +x /app/entrypoint.sh
 
 USER appuser
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips", "*"]
+CMD ["/app/entrypoint.sh"]

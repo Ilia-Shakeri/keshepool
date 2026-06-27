@@ -5,7 +5,7 @@ from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Transaction, TransactionType, Wallet
+from app.models import Transaction, TransactionStatus, TransactionType, Wallet
 
 
 def to_decimal(value) -> Decimal:
@@ -19,7 +19,16 @@ async def apply_wallet_transaction(
     tx_type: TransactionType,
     ref_id: Optional[str] = None,
     description: Optional[str] = None,
+    currency: str = "IRR",
+    gateway: Optional[str] = None,
+    auto_commit: bool = True,
 ) -> Wallet:
+    """
+    Adjust a user's wallet balance and record the transaction.
+
+    Pass auto_commit=False when the caller manages its own transaction boundary
+    (e.g., inside an atomic deposit-and-purchase flow) to avoid double-commits.
+    """
     amount_decimal = to_decimal(amount)
 
     try:
@@ -39,18 +48,25 @@ async def apply_wallet_transaction(
             Transaction(
                 wallet_id=wallet.id,
                 amount=amount_decimal,
+                currency=currency,
+                gateway=gateway,
                 type=tx_type,
+                status=TransactionStatus.SUCCESS,
                 reference_id=ref_id,
                 description=description,
             )
         )
 
-        await db.commit()
-        await db.refresh(wallet)
+        if auto_commit:
+            await db.commit()
+            await db.refresh(wallet)
+
         return wallet
     except HTTPException:
-        await db.rollback()
+        if auto_commit:
+            await db.rollback()
         raise
     except Exception as exc:
-        await db.rollback()
+        if auto_commit:
+            await db.rollback()
         raise HTTPException(status_code=500, detail="Wallet transaction failed.") from exc

@@ -16,6 +16,7 @@ from app.models import (
     Product,
     ProductVariant,
     Transaction,
+    TransactionStatus,
     TransactionType,
     User,
     Wallet,
@@ -99,6 +100,8 @@ async def fulfill_wallet_order(
             Transaction(
                 wallet_id=wallet.id,
                 amount=-price,
+                currency="IRR",
+                gateway="wallet",
                 type=TransactionType.PURCHASE,
                 status=TransactionStatus.SUCCESS,
                 reference_id=public_id,

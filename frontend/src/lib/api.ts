@@ -19,6 +19,9 @@ export interface WalletTransaction {
   id: number;
   amount: number;
   type: string;
+  status: "pending" | "success" | "failed";
+  currency?: string;
+  gateway?: string | null;
   referenceId?: string | null;
   description?: string | null;
   createdAt: string;
@@ -148,9 +151,67 @@ export function checkoutWithWallet(productId: string, variantId: string) {
   });
 }
 
-export function createTetra98Payment(amount: number) {
-  return apiFetch<{ status: string; paymentUrl: string; currency: string }>("/pay/tetra98", {
+export function createTetra98Payment(
+  amount: number,
+  productId?: string | null,
+  variantId?: string | null,
+) {
+  return apiFetch<{ status: string; paymentUrl: string; currency: string; transactionId: number }>(
+    "/pay/tetra98",
+    {
+      method: "POST",
+      body: JSON.stringify({ amount, product_id: productId ?? null, variant_id: variantId ?? null }),
+    },
+  );
+}
+
+export function getCryptoDepositAddress() {
+  return apiFetch<{ address: string; network: string; currency: string }>("/pay/crypto/deposit-address");
+}
+
+export function initiateCryptoDeposit(
+  amountUsdt: number,
+  productId?: string | null,
+  variantId?: string | null,
+) {
+  return apiFetch<{
+    status: string;
+    transactionId: number;
+    depositAddress: string;
+    network: string;
+    expectedAmount: string;
+    currency: string;
+    message: string;
+  }>("/pay/crypto/initiate", {
     method: "POST",
-    body: JSON.stringify({ amount }),
+    body: JSON.stringify({
+      amount_usdt: amountUsdt,
+      product_id: productId ?? null,
+      variant_id: variantId ?? null,
+    }),
+  });
+}
+
+export interface CashoutPlatform {
+  value: string;
+  label: string;
+}
+
+export function getCashoutPlatforms() {
+  return apiFetch<{ platforms: CashoutPlatform[] }>("/cashout/platforms");
+}
+
+export function createCashoutRequest(
+  sourcePlatform: string,
+  detailsText: string,
+  customSource?: string | null,
+) {
+  return apiFetch<{ status: string; requestId: number; message: string }>("/cashout", {
+    method: "POST",
+    body: JSON.stringify({
+      source_platform: sourcePlatform,
+      details_text: detailsText,
+      custom_source: customSource ?? null,
+    }),
   });
 }
