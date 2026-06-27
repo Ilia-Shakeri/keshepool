@@ -20,7 +20,7 @@ export default function AppHeader() {
             style={{ boxShadow: "0 0 14px rgba(230,57,70,0.25)" }}
           >
             <Image
-              src="/logo.png"
+              src="/logo/main-logo.png"
               alt="Keshepool"
               width={28}
               height={28}
@@ -28,17 +28,14 @@ export default function AppHeader() {
               priority
             />
           </div>
-          <span
-            className="text-[15px] font-bold tracking-wide select-none"
-            style={{
-              background: "linear-gradient(90deg, #F5F5F5 40%, rgba(245,245,245,0.55) 100%)",
-              WebkitBackgroundClip: "text",
-              WebkitTextFillColor: "transparent",
-              backgroundClip: "text",
-            }}
-          >
-            Keshepool
-          </span>
+          <Image
+            src="/logo/text-logo.png"
+            alt="Keshepool"
+            width={110}
+            height={22}
+            className="h-[22px] w-auto object-contain select-none"
+            priority
+          />
         </div>
       </div>
     </div>
