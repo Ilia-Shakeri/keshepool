@@ -140,10 +140,15 @@ export default function FinancePage() {
     setDepositLoading(true);
     try {
       const res = await createTetra98Payment(amount);
-      window.Telegram?.WebApp?.openLink(res.paymentUrl);
+      const webApp = window.Telegram?.WebApp;
+      if (res.paymentUrlBot && webApp) {
+        // t.me links must open via openTelegramLink to stay within Telegram
+        webApp.openTelegramLink(res.paymentUrlBot);
+      } else if (res.paymentUrlWeb) {
+        webApp?.openLink(res.paymentUrlWeb);
+      }
       setIsDepositOpen(false);
-      // Refresh after a short delay to capture any instant confirmation
-      setTimeout(refreshWallet, 3000);
+      setTimeout(refreshWallet, 4000);
     } catch (err) {
       setDepositError(err instanceof Error ? err.message : "اتصال به درگاه ناموفق بود.");
     } finally {

@@ -14,7 +14,7 @@ class Settings(BaseSettings):
     WEBHOOK_SECRET: str
     WEB_APP_URL: str
     BOT_USERNAME: str = Field(default="keshepoolbot")
-    TETRA98_API_URL: str = ""
+    TETRA98_API_URL: str = "https://tetra98.com"
     TETRA98_API_KEY: str = ""
     TETRA98_WEBHOOK_SECRET: str = ""
     CRYPTO_WEBHOOK_SECRET: str = ""

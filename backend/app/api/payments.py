@@ -30,6 +30,9 @@ router = APIRouter(prefix="/api/pay", tags=["payments"])
 
 PURCHASE_INTENT_TTL = 1800  # 30 minutes
 
+# Tetra98 always lives at this base URL
+TETRA98_BASE = "https://tetra98.com"
+
 
 def _purchase_intent_key(tx_id: int) -> str:
     return f"purchase_intent:tx:{tx_id}"
@@ -46,31 +49,23 @@ def _verify_hmac_signature(secret: str, body: bytes, received_sig: str) -> bool:
 async def _try_auto_purchase(db: AsyncSession, user: User, tx_id: int) -> None:
     """
     Execute a pending purchase intent after a confirmed deposit.
-    If the purchase fails for any reason, the wallet retains the deposited funds
-    and no external refund is issued.
+    If the purchase fails, the wallet retains the deposited funds —
+    no external refund is needed.
     """
     intent_raw = await redis_client.get(_purchase_intent_key(tx_id))
     if not intent_raw:
         return
-
     try:
         intent = json.loads(intent_raw)
         product_id = intent.get("product_id")
         variant_id = intent.get("variant_id")
         if not product_id or not variant_id:
             return
-
         await fulfill_wallet_order(db=db, user=user, product_id=product_id, variant_id=variant_id)
         await redis_client.delete("cache:products:all")
-        logger.info("Auto-purchase completed for user %s after deposit tx %d", user.telegram_id, tx_id)
+        logger.info("Auto-purchase done for user %s after deposit tx %d", user.telegram_id, tx_id)
     except HTTPException as exc:
-        # Purchase failed — funds stay in wallet, no refund needed
-        logger.warning(
-            "Auto-purchase failed for user %s (tx %d): %s",
-            user.telegram_id,
-            tx_id,
-            exc.detail,
-        )
+        logger.warning("Auto-purchase failed for user %s (tx %d): %s", user.telegram_id, tx_id, exc.detail)
     except Exception:
         logger.exception("Unexpected error in auto-purchase for user %s (tx %d)", user.telegram_id, tx_id)
     finally:
@@ -78,9 +73,22 @@ async def _try_auto_purchase(db: AsyncSession, user: User, tx_id: int) -> None:
 
 
 # ── Tetra98 (IRR) ─────────────────────────────────────────────────────────────
+#
+# API reference (from vendor dashboard):
+#   Create : POST https://tetra98.com/api/create_order
+#            body: { ApiKey, Hash_id, Amount, Description, Email, Mobile, CallbackURL }
+#            200 success: { status:"100", Authority, payment_url_web, payment_url_bot, tracking_id }
+#
+#   Callback (Tetra98 → us):
+#            POST <CallbackURL>
+#            body: { authority, hash_id, status:100 }
+#
+#   Verify  : POST https://tetra98.com/api/verify
+#             body: { ApiKey, authority }
+#             200 success: { status:"100" }
 
 class Tetra98PaymentRequest(BaseModel):
-    amount: int = Field(gt=9999, le=500000000)
+    amount: int = Field(gt=9999, le=500000000, description="Amount in Rials (IRR)")
     product_id: str | None = Field(default=None, max_length=120)
     variant_id: str | None = Field(default=None, max_length=120)
 
@@ -96,10 +104,10 @@ async def create_tetra98_payment(
         pipe.incr(rate_key)
         pipe.expire(rate_key, 60, nx=True)
         results = await pipe.execute()
-    if results[0] > 60:
+    if results[0] > 10:
         raise HTTPException(status_code=429, detail="Rate limit exceeded.")
 
-    if not settings.TETRA98_API_URL or not settings.TETRA98_API_KEY:
+    if not settings.TETRA98_API_KEY:
         raise HTTPException(status_code=503, detail="Payment gateway is not configured.")
 
     wallet_result = await db.execute(select(Wallet).where(Wallet.user_id == user.id))
@@ -107,6 +115,7 @@ async def create_tetra98_payment(
     if not wallet:
         raise HTTPException(status_code=404, detail="Wallet not found.")
 
+    # Create a pending transaction first so we have a DB-backed ID to use as Hash_id
     pending_tx = Transaction(
         wallet_id=wallet.id,
         amount=to_decimal(payload.amount),
@@ -115,109 +124,148 @@ async def create_tetra98_payment(
         type=TransactionType.DEPOSIT_IRR,
         status=TransactionStatus.PENDING,
         reference_id="pending",
-        description="Tetra98 wallet top-up pending",
+        description="Tetra98 IRR deposit — awaiting payment",
     )
     db.add(pending_tx)
     await db.commit()
     await db.refresh(pending_tx)
 
-    # Persist purchase intent so the webhook can auto-execute after deposit
+    # Store optional purchase intent so the callback can auto-execute it
     if payload.product_id and payload.variant_id:
         intent = json.dumps({"product_id": payload.product_id, "variant_id": payload.variant_id})
         await redis_client.setex(_purchase_intent_key(pending_tx.id), PURCHASE_INTENT_TTL, intent)
 
+    # Tetra98 create_order request — field names are case-sensitive as shown in their docs
     gateway_payload = {
-        "api_key": settings.TETRA98_API_KEY,
-        "amount": payload.amount,
-        "callback_url": settings.tetra98_callback_url,
-        "description": f"Keshepool wallet top-up for Telegram user {user.telegram_id}",
-        "order_id": str(pending_tx.id),
+        "ApiKey": settings.TETRA98_API_KEY,
+        "Hash_id": str(pending_tx.id),      # our transaction ID; returned as hash_id in callback
+        "Amount": payload.amount,
+        "Description": f"Keshepool deposit — user {user.telegram_id}",
+        "Email": "",
+        "Mobile": "",
+        "CallbackURL": settings.tetra98_callback_url,
     }
 
+    logger.info("Tetra98 create_order for tx %d, amount %d IRR", pending_tx.id, payload.amount)
+
     try:
-        async with httpx.AsyncClient(timeout=12.0) as client:
+        async with httpx.AsyncClient(timeout=15.0) as client:
             response = await client.post(
-                f"{settings.TETRA98_API_URL.rstrip('/')}/request", json=gateway_payload
+                f"{TETRA98_BASE}/api/create_order",
+                json=gateway_payload,
             )
             response_data = response.json()
     except Exception as exc:
         pending_tx.status = TransactionStatus.FAILED
-        pending_tx.reference_id = "failed_gateway_request"
+        pending_tx.reference_id = "gateway_request_failed"
         await db.commit()
+        logger.error("Tetra98 create_order HTTP error for tx %d: %s", pending_tx.id, exc)
         raise HTTPException(status_code=502, detail="Payment gateway request failed.") from exc
 
-    if response.status_code != 200 or response_data.get("status") != "success":
-        pending_tx.status = TransactionStatus.FAILED
-        pending_tx.reference_id = "failed_gateway_response"
-        await db.commit()
-        raise HTTPException(status_code=400, detail="Payment gateway rejected the request.")
+    logger.info("Tetra98 create_order response for tx %d: %s", pending_tx.id, response_data)
 
-    authority = response_data.get("authority")
-    if authority:
-        pending_tx.reference_id = f"pending:{authority}"
+    # Tetra98 returns status "100" (string) for success
+    if response.status_code != 200 or str(response_data.get("status", "")) != "100":
+        pending_tx.status = TransactionStatus.FAILED
+        pending_tx.reference_id = f"gateway_error:{response_data.get('status', 'unknown')}"
         await db.commit()
+        error_msg = response_data.get("message") or response_data.get("error") or "Gateway rejected the request."
+        raise HTTPException(status_code=400, detail=str(error_msg))
+
+    authority = response_data.get("Authority") or response_data.get("authority", "")
+    pending_tx.reference_id = f"authority:{authority}"
+    await db.commit()
 
     return {
         "status": "success",
-        "paymentUrl": response_data.get("payment_url"),
-        "currency": "IRR",
         "transactionId": pending_tx.id,
+        "authority": authority,
+        "paymentUrlWeb": response_data.get("payment_url_web", ""),
+        "paymentUrlBot": response_data.get("payment_url_bot", ""),
+        "trackingId": response_data.get("tracking_id", ""),
+        "currency": "IRR",
     }
 
 
 @router.post("/tetra98/callback")
 async def tetra98_payment_callback(request: Request, db: AsyncSession = Depends(get_db)):
+    """
+    Tetra98 POSTs to this URL after a payment attempt.
+    Payload: { authority, hash_id, status }
+    status == 100 means the user completed the payment flow; we then call /verify to confirm.
+    """
     raw_body = await request.body()
 
-    # Validate HMAC signature when a webhook secret is configured
-    if settings.TETRA98_WEBHOOK_SECRET:
-        received_sig = request.headers.get("X-Tetra98-Signature", "")
-        if not _verify_hmac_signature(settings.TETRA98_WEBHOOK_SECRET, raw_body, received_sig):
-            logger.warning("Tetra98 webhook signature validation failed.")
-            raise HTTPException(status_code=403, detail="Invalid webhook signature.")
-
+    # Parse JSON body; Tetra98 sends application/json
     try:
         data = json.loads(raw_body)
     except Exception:
+        # Fallback: some gateways send form-encoded data
         try:
             form_data = await request.form()
             data = dict(form_data)
         except Exception:
+            logger.warning("Tetra98 callback: unreadable body")
             raise HTTPException(status_code=400, detail="Unreadable callback payload.")
 
-    order_id = data.get("order_id")
-    transaction_id = data.get("trans_id")
-    status = data.get("status")
+    authority = data.get("authority") or data.get("Authority", "")
+    hash_id = str(data.get("hash_id") or data.get("Hash_id") or "")
+    callback_status = data.get("status")
 
-    if status != "success" or not order_id or not transaction_id:
-        return {"status": "failed", "message": "Payment was not successful."}
+    logger.info("Tetra98 callback received: authority=%s hash_id=%s status=%s", authority, hash_id, callback_status)
 
+    # status 100 (int or string) = user completed payment; anything else = cancelled/failed
+    if str(callback_status) != "100" or not authority or not hash_id:
+        logger.info("Tetra98 callback: non-success status=%s, skipping.", callback_status)
+        return {"status": "failed", "message": "Payment was not completed."}
+
+    # Resolve our transaction via the hash_id we originally sent as Hash_id
     try:
-        order_id_int = int(order_id)
-    except (TypeError, ValueError):
-        raise HTTPException(status_code=400, detail="Invalid order_id in callback payload.")
+        tx_id = int(hash_id)
+    except ValueError:
+        logger.warning("Tetra98 callback: invalid hash_id=%s", hash_id)
+        raise HTTPException(status_code=400, detail="Invalid hash_id in callback.")
 
-    tx_result = await db.execute(select(Transaction).where(Transaction.id == order_id_int))
+    tx_result = await db.execute(select(Transaction).where(Transaction.id == tx_id))
     pending_tx = tx_result.scalars().first()
 
-    if not pending_tx or pending_tx.status != TransactionStatus.PENDING:
-        raise HTTPException(status_code=400, detail="Invalid or already processed transaction.")
+    if not pending_tx:
+        logger.warning("Tetra98 callback: transaction %d not found", tx_id)
+        raise HTTPException(status_code=400, detail="Transaction not found.")
 
-    verify_payload = {"api_key": settings.TETRA98_API_KEY, "trans_id": transaction_id}
+    if pending_tx.status != TransactionStatus.PENDING:
+        # Already processed (idempotent response — Tetra98 may retry callbacks)
+        logger.info("Tetra98 callback: tx %d already in status %s", tx_id, pending_tx.status)
+        return {"status": "ok", "message": "Already processed."}
+
+    # Verify the payment with Tetra98 before crediting the wallet
+    verify_payload = {
+        "ApiKey": settings.TETRA98_API_KEY,
+        "authority": authority,
+    }
+
     try:
-        async with httpx.AsyncClient(timeout=12.0) as client:
+        async with httpx.AsyncClient(timeout=15.0) as client:
             verify_res = await client.post(
-                f"{settings.TETRA98_API_URL.rstrip('/')}/verify", json=verify_payload
+                f"{TETRA98_BASE}/api/verify",
+                json=verify_payload,
             )
             verify_data = verify_res.json()
     except Exception as exc:
+        logger.error("Tetra98 verify HTTP error for tx %d: %s", tx_id, exc)
         raise HTTPException(status_code=502, detail="Payment verification request failed.") from exc
 
-    if verify_data.get("status") != "verified":
+    logger.info("Tetra98 verify response for tx %d: %s", tx_id, verify_data)
+
+    # Verify also returns "100" for success
+    if str(verify_data.get("status", "")) != "100":
         pending_tx.status = TransactionStatus.FAILED
+        pending_tx.reference_id = f"verify_failed:{authority}"
         await db.commit()
+        logger.warning("Tetra98 verify failed for tx %d: %s", tx_id, verify_data)
         raise HTTPException(status_code=400, detail="Payment verification failed.")
 
+    # Acquire row-level locks in deterministic order to prevent deadlocks
     wallet_result = await db.execute(
         select(Wallet).where(Wallet.id == pending_tx.wallet_id).with_for_update()
     )
@@ -225,27 +273,22 @@ async def tetra98_payment_callback(request: Request, db: AsyncSession = Depends(
     if not wallet:
         raise HTTPException(status_code=404, detail="Wallet not found.")
 
-    # Re-acquire lock on the transaction to prevent duplicate processing
-    tx_locked_result = await db.execute(
-        select(Transaction).where(Transaction.id == order_id_int).with_for_update()
+    locked_tx_result = await db.execute(
+        select(Transaction).where(Transaction.id == tx_id).with_for_update()
     )
-    locked_tx = tx_locked_result.scalars().first()
+    locked_tx = locked_tx_result.scalars().first()
     if not locked_tx or locked_tx.status != TransactionStatus.PENDING:
-        raise HTTPException(status_code=400, detail="Transaction was processed concurrently.")
-
-    gateway_amount = Decimal(str(verify_data.get("amount", "0"))).quantize(Decimal("0.01"))
-    if gateway_amount != Decimal(locked_tx.amount).quantize(Decimal("0.01")):
-        locked_tx.status = TransactionStatus.FAILED
-        await db.commit()
-        raise HTTPException(status_code=400, detail="Payment amount mismatch.")
+        # Concurrent request already processed this
+        return {"status": "ok", "message": "Processed concurrently."}
 
     wallet.balance = to_decimal(wallet.balance) + to_decimal(locked_tx.amount)
     locked_tx.status = TransactionStatus.SUCCESS
-    locked_tx.reference_id = str(transaction_id)
-    locked_tx.description = "Tetra98 wallet top-up verified"
+    locked_tx.reference_id = authority
+    locked_tx.description = f"Tetra98 IRR deposit verified (authority: {authority[:12]}...)"
     await db.commit()
 
-    # Retrieve the user for auto-purchase (wallet.user_id links to user)
+    logger.info("Tetra98: tx %d credited %.2f IRR to wallet %d", tx_id, locked_tx.amount, wallet.id)
+
     from app.models import User as UserModel
     user_result = await db.execute(select(UserModel).where(UserModel.id == wallet.user_id))
     user = user_result.scalars().first()
@@ -265,7 +308,6 @@ class CryptoDepositRequest(BaseModel):
 
 @router.get("/crypto/deposit-address")
 async def get_crypto_deposit_address(user: User = Depends(current_user)):
-    """Return the platform's USDT deposit address for manual on-chain transfers."""
     if not settings.CRYPTO_DEPOSIT_ADDRESS_USDT:
         raise HTTPException(status_code=503, detail="Crypto deposits are not configured.")
     return {
@@ -281,10 +323,6 @@ async def initiate_crypto_deposit(
     user: User = Depends(current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """
-    Create a pending USDT deposit transaction.
-    The deposit is confirmed asynchronously via the /crypto/callback webhook.
-    """
     rate_key = f"rate_limit:pay:crypto:user:{user.telegram_id}"
     async with redis_client.pipeline(transaction=True) as pipe:
         pipe.incr(rate_key)
@@ -309,7 +347,7 @@ async def initiate_crypto_deposit(
         type=TransactionType.DEPOSIT_CRYPTO,
         status=TransactionStatus.PENDING,
         reference_id="awaiting_confirmation",
-        description=f"USDT deposit initiated — awaiting on-chain confirmation",
+        description="USDT deposit — awaiting on-chain confirmation",
     )
     db.add(pending_tx)
     await db.commit()
@@ -326,25 +364,15 @@ async def initiate_crypto_deposit(
         "network": "TRC20",
         "expectedAmount": str(payload.amount_usdt),
         "currency": "USDT",
-        "message": "Send the exact amount to the deposit address. Your balance will be credited after confirmation.",
+        "message": "Send the exact amount to the deposit address. Balance is credited after network confirmation.",
     }
 
 
-class CryptoWebhookPayload(BaseModel):
-    transaction_id: int
-    tx_hash: str
-    amount_usdt: str
-    status: str
-
-
 @router.post("/crypto/callback")
-async def crypto_payment_callback(
-    request: Request,
-    db: AsyncSession = Depends(get_db),
-):
+async def crypto_payment_callback(request: Request, db: AsyncSession = Depends(get_db)):
     """
-    Webhook endpoint called by the on-chain monitoring service upon USDT payment confirmation.
-    Protected by HMAC-SHA256 signature on the raw request body.
+    Webhook called by the on-chain monitoring service upon USDT payment confirmation.
+    Protected by HMAC-SHA256 on the raw request body.
     """
     raw_body = await request.body()
 
@@ -367,22 +395,24 @@ async def crypto_payment_callback(
     if webhook_status != "confirmed" or not tx_id or not tx_hash:
         return {"status": "ignored", "message": "Non-confirmed event skipped."}
 
-    # Idempotency guard — reject duplicate webhook deliveries
+    # Idempotency guard — safe against duplicate webhook deliveries
     idempotency_key = f"crypto_webhook_processed:{tx_hash}"
     was_set = await redis_client.set(idempotency_key, "1", nx=True, ex=86400)
     if not was_set:
         return {"status": "ok", "message": "Already processed."}
 
-    tx_result = await db.execute(select(Transaction).where(Transaction.id == int(tx_id)).with_for_update())
+    tx_result = await db.execute(
+        select(Transaction).where(Transaction.id == int(tx_id)).with_for_update()
+    )
     pending_tx = tx_result.scalars().first()
     if not pending_tx or pending_tx.status != TransactionStatus.PENDING:
         raise HTTPException(status_code=400, detail="Transaction not found or already processed.")
 
-    confirmed_amount = Decimal(str(amount_usdt)).quantize(Decimal("0.01"))
-    expected_amount = Decimal(pending_tx.amount).quantize(Decimal("0.01"))
+    confirmed_amount = Decimal(str(amount_usdt)).quantize(Decimal("0.000001"))
+    expected_amount = Decimal(pending_tx.amount).quantize(Decimal("0.000001"))
     if confirmed_amount < expected_amount:
         pending_tx.status = TransactionStatus.FAILED
-        pending_tx.description = f"Underpayment: received {confirmed_amount} USDT, expected {expected_amount} USDT"
+        pending_tx.description = f"Underpayment: received {confirmed_amount} USDT, expected {expected_amount}"
         await db.commit()
         raise HTTPException(status_code=400, detail="Confirmed amount is less than expected.")
 
@@ -396,7 +426,7 @@ async def crypto_payment_callback(
     wallet.balance = to_decimal(wallet.balance) + to_decimal(pending_tx.amount)
     pending_tx.status = TransactionStatus.SUCCESS
     pending_tx.reference_id = tx_hash
-    pending_tx.description = f"USDT deposit confirmed — tx hash: {tx_hash[:16]}..."
+    pending_tx.description = f"USDT deposit confirmed — {tx_hash[:16]}..."
     await db.commit()
 
     from app.models import User as UserModel

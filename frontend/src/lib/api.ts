@@ -156,13 +156,18 @@ export function createTetra98Payment(
   productId?: string | null,
   variantId?: string | null,
 ) {
-  return apiFetch<{ status: string; paymentUrl: string; currency: string; transactionId: number }>(
-    "/pay/tetra98",
-    {
-      method: "POST",
-      body: JSON.stringify({ amount, product_id: productId ?? null, variant_id: variantId ?? null }),
-    },
-  );
+  return apiFetch<{
+    status: string;
+    transactionId: number;
+    authority: string;
+    paymentUrlWeb: string;
+    paymentUrlBot: string;
+    trackingId: string;
+    currency: string;
+  }>("/pay/tetra98", {
+    method: "POST",
+    body: JSON.stringify({ amount, product_id: productId ?? null, variant_id: variantId ?? null }),
+  });
 }
 
 export function getCryptoDepositAddress() {
