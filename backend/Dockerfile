@@ -22,6 +22,7 @@ RUN adduser --disabled-password --gecos "" appuser
 COPY ./app ./app
 COPY ./alembic ./alembic
 COPY ./alembic.ini ./alembic.ini
+COPY ./scripts ./scripts
 COPY ./entrypoint.sh ./entrypoint.sh
 
 RUN chown -R appuser:appuser /app \

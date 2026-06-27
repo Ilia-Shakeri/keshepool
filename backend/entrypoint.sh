@@ -1,6 +1,9 @@
 #!/bin/sh
 set -e
 
+echo "[entrypoint] Checking migration baseline..."
+python3 /app/scripts/stamp_if_legacy.py
+
 echo "[entrypoint] Running database migrations..."
 alembic upgrade head
 
