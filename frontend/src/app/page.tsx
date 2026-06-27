@@ -62,23 +62,31 @@ export default function Home() {
         </button>
 
         {/* Center: brand logos (absolute so it doesn't disturb the flex layout) */}
-        <div className="absolute left-1/2 -translate-x-1/2 flex items-center gap-1.5 pointer-events-none">
+        {/* dir=ltr: keep icon-left / text-right independent of page RTL */}
+        <div className="absolute left-1/2 -translate-x-1/2 flex items-center gap-1.5 pointer-events-none" dir="ltr">
           <Image
-            src="/logo/logo keshepool.png"
-            alt="Keshepool icon"
-            width={32}
-            height={32}
-            className="rounded-lg object-contain"
-            unoptimized
-          />
-          <Image
-            src="/logo/keshepool-text.png"
-            alt="Keshepool"
-            width={90}
+            src="/logo/main-logo.png"
+            alt=""
+            width={28}
             height={28}
-            className="object-contain"
-            unoptimized
+            style={{ width: 28, height: 28, objectFit: "contain", borderRadius: 6 }}
+            priority
           />
+          {/*
+           * text-logo.png raw: 2752×1535. Text zone rows 619–919 (300px).
+           * Scale so text = 16px: factor = 16/300 = 0.0533
+           *   display w = 2752 × 0.0533 = 147px
+           *   display h = 1535 × 0.0533 =  82px
+           *   text top  =  619 × 0.0533 =  33px → marginTop = -33px
+           */}
+          <div style={{ width: 147, height: 16, overflow: "hidden", position: "relative" }}>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src="/logo/text-logo.png"
+              alt="Keshepool"
+              style={{ width: 147, height: 82, position: "absolute", top: -33, left: 0 }}
+            />
+          </div>
         </div>
 
         {/* Right: notification bell */}
