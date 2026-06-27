@@ -58,11 +58,11 @@ def get_persistent_menu(lang: str) -> ReplyKeyboardMarkup:
         keyboard=[
             [
                 KeyboardButton(text="🏠 " + get_text(lang, "home_btn")),
-                KeyboardButton(text="📦 " + get_text(lang, "inventory_title")),
+                KeyboardButton(text=get_text(lang, "inventory_title")),
             ],
             [
-                KeyboardButton(text="👥 " + get_text(lang, "users_title")),
-                KeyboardButton(text="📊 " + get_text(lang, "report_btn")),
+                KeyboardButton(text=get_text(lang, "users_title")),
+                KeyboardButton(text=get_text(lang, "report_btn")),
             ],
         ],
         resize_keyboard=True,
@@ -74,16 +74,16 @@ def get_main_menu_markup(lang: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(text="👥 " + get_text(lang, "users_title"), callback_data="manage_users_0"),
-                InlineKeyboardButton(text="📦 " + get_text(lang, "inventory_title"), callback_data="manage_inventory"),
+                InlineKeyboardButton(text=get_text(lang, "users_title"), callback_data="manage_users_0"),
+                InlineKeyboardButton(text=get_text(lang, "inventory_title"), callback_data="manage_inventory"),
             ],
             [
-                InlineKeyboardButton(text="💱 " + get_text(lang, "cashouts_title"), callback_data="manage_cashouts_0"),
-                InlineKeyboardButton(text="📊 " + get_text(lang, "stats_title"), callback_data="manage_stats"),
+                InlineKeyboardButton(text=get_text(lang, "cashouts_title"), callback_data="manage_cashouts_0"),
+                InlineKeyboardButton(text=get_text(lang, "stats_title"), callback_data="manage_stats"),
             ],
             [
-                InlineKeyboardButton(text="📢 " + get_text(lang, "broadcast_title"), callback_data="broadcast_msg"),
-                InlineKeyboardButton(text="🔍 " + get_text(lang, "search_user_title"), callback_data="search_user"),
+                InlineKeyboardButton(text=get_text(lang, "broadcast_title"), callback_data="broadcast_msg"),
+                InlineKeyboardButton(text=get_text(lang, "search_user_title"), callback_data="search_user"),
             ],
             [
                 InlineKeyboardButton(text=get_text(lang, "rates_btn"), callback_data="manage_rates"),
@@ -736,9 +736,10 @@ async def _update_cashout_status(
 # ── Exchange rate management ──────────────────────────────────────────────────
 
 def _rates_markup(lang: str) -> InlineKeyboardMarkup:
+    edit_label = "✏️ تغییر نرخ" if lang == "fa" else "✏️ Update Rate"
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="✏️ " + get_text(lang, "rates_btn"), callback_data="set_usdt_rate")],
+            [InlineKeyboardButton(text=edit_label, callback_data="set_usdt_rate")],
             [InlineKeyboardButton(text=get_text(lang, "back_to_menu"), callback_data="main_menu")],
         ]
     )

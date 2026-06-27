@@ -2,7 +2,6 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import Image from "next/image";
 import { Bell, Bot, Code, Flame, Layout, MessageCircle, MoreHorizontal, Music, PlaySquare, Shield, User, X } from "lucide-react";
 import ProductIcon from "@/components/ProductIcon";
 import { getNotifications, getProducts, markNotificationsRead, type UserNotification } from "@/lib/api";
@@ -60,34 +59,6 @@ export default function Home() {
             <p className="text-[10px] text-[#F5F5F5]/50 mt-0.5">بهترین سرویس‌ها با بهترین قیمت</p>
           </div>
         </button>
-
-        {/* Center: brand logos (absolute so it doesn't disturb the flex layout) */}
-        {/* dir=ltr: keep icon-left / text-right independent of page RTL */}
-        <div className="absolute left-1/2 -translate-x-1/2 flex items-center gap-1.5 pointer-events-none" dir="ltr">
-          <Image
-            src="/logo/main-logo.png"
-            alt=""
-            width={28}
-            height={28}
-            style={{ width: 28, height: 28, objectFit: "contain", borderRadius: 6 }}
-            priority
-          />
-          {/*
-           * text-logo.png raw: 2752×1535. Text zone rows 619–919 (300px).
-           * Scale so text = 16px: factor = 16/300 = 0.0533
-           *   display w = 2752 × 0.0533 = 147px
-           *   display h = 1535 × 0.0533 =  82px
-           *   text top  =  619 × 0.0533 =  33px → marginTop = -33px
-           */}
-          <div style={{ width: 147, height: 16, overflow: "hidden", position: "relative" }}>
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src="/logo/text-logo.png"
-              alt="Keshepool"
-              style={{ width: 147, height: 82, position: "absolute", top: -33, left: 0 }}
-            />
-          </div>
-        </div>
 
         {/* Right: notification bell */}
         <div className="relative">
