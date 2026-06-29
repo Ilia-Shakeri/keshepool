@@ -15,12 +15,15 @@
 .DS_Store
 
 # Python / Backend
-backend/__pycache__/
-backend/*.py[cod]
-backend/*$py.class
-backend/.pytest_cache/
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
 backend/venv/
 backend/env/
+*.db
+*.sqlite
+*.sqlite3
 
 # Node / Frontend
 frontend/node_modules/
@@ -50,3 +53,4 @@ graphify-out/
 
 #backups
 backups/*
+!backups/.gitkeep
