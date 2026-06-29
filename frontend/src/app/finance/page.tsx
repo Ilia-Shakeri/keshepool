@@ -668,7 +668,6 @@ export default function FinancePage() {
                 >
                   <div className="flex items-center justify-between mb-1">
                     <span className="text-[10px] text-[#F5F5F5]/50 font-medium">نرخ لحظه‌ای USDT</span>
-                    <DollarSign className="w-3.5 h-3.5 text-blue-400 opacity-70" />
                   </div>
                   <p className="text-xl font-bold text-blue-400 dir-ltr text-right">
                     {usdtRate ? `${formatPrice(usdtRate)} تومان` : "···"}
