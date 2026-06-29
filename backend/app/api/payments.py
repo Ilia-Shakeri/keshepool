@@ -2,7 +2,7 @@ import hashlib
 import hmac
 import json
 import logging
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -314,6 +314,13 @@ class CryptoDepositRequest(BaseModel):
     variant_id: str | None = Field(default=None, max_length=120)
 
 
+@router.get("/crypto/rate")
+async def get_crypto_rate(user: User = Depends(current_user)):
+    """Live USDT→Toman rate for the deposit UI to display the equivalent value."""
+    rate = await get_usdt_rate()
+    return {"tomanPerUsdt": int(rate), "base": "USDT", "quote": "TOMAN"}
+
+
 @router.get("/crypto/deposit-address")
 async def get_crypto_deposit_address(user: User = Depends(current_user)):
     if not settings.CRYPTO_DEPOSIT_ADDRESS_USDT:
@@ -403,6 +410,17 @@ async def crypto_payment_callback(request: Request, db: AsyncSession = Depends(g
     if webhook_status != "confirmed" or not tx_id or not tx_hash:
         return {"status": "ignored", "message": "Non-confirmed event skipped."}
 
+    # Validate identifiers before touching Redis/DB so malformed payloads fail cleanly
+    try:
+        tx_id_int = int(tx_id)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="Invalid transaction_id in payload.")
+
+    try:
+        confirmed_amount = Decimal(str(amount_usdt)).quantize(Decimal("0.000001"))
+    except (InvalidOperation, TypeError):
+        raise HTTPException(status_code=400, detail="Invalid amount_usdt in payload.")
+
     # Idempotency guard — safe against duplicate webhook deliveries
     idempotency_key = f"crypto_webhook_processed:{tx_hash}"
     was_set = await redis_client.set(idempotency_key, "1", nx=True, ex=86400)
@@ -410,13 +428,12 @@ async def crypto_payment_callback(request: Request, db: AsyncSession = Depends(g
         return {"status": "ok", "message": "Already processed."}
 
     tx_result = await db.execute(
-        select(Transaction).where(Transaction.id == int(tx_id)).with_for_update()
+        select(Transaction).where(Transaction.id == tx_id_int).with_for_update()
     )
     pending_tx = tx_result.scalars().first()
     if not pending_tx or pending_tx.status != TransactionStatus.PENDING:
         raise HTTPException(status_code=400, detail="Transaction not found or already processed.")
 
-    confirmed_amount = Decimal(str(amount_usdt)).quantize(Decimal("0.000001"))
     expected_amount = Decimal(pending_tx.amount).quantize(Decimal("0.000001"))
     if confirmed_amount < expected_amount:
         pending_tx.status = TransactionStatus.FAILED

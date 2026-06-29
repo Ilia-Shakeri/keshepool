@@ -170,6 +170,10 @@ export function createTetra98Payment(
   });
 }
 
+export function getUsdtRate() {
+  return apiFetch<{ tomanPerUsdt: number; base: string; quote: string }>("/pay/crypto/rate");
+}
+
 export function getCryptoDepositAddress() {
   return apiFetch<{ address: string; network: string; currency: string }>("/pay/crypto/deposit-address");
 }

@@ -21,6 +21,7 @@ import {
   createCashoutRequest,
   createTetra98Payment,
   getCashoutPlatforms,
+  getUsdtRate,
   getWalletBalance,
   getWalletTransactions,
   initiateCryptoDeposit,
@@ -84,6 +85,7 @@ export default function FinancePage() {
     txId: number;
   } | null>(null);
   const [copiedAddress, setCopiedAddress] = useState(false);
+  const [usdtRate, setUsdtRate] = useState<number | null>(null);
 
   // Cashout state
   const [platforms, setPlatforms] = useState<CashoutPlatform[]>([]);
@@ -127,6 +129,10 @@ export default function FinancePage() {
     setUsdtAmount("");
     setDepositMethod("irr");
     setIsDepositOpen(true);
+    // Pull the live USDT→Toman rate so the user sees the equivalent value upfront
+    getUsdtRate()
+      .then((data) => setUsdtRate(data.tomanPerUsdt))
+      .catch(() => setUsdtRate(null));
   };
 
   const handleIrrDeposit = async () => {
@@ -652,6 +658,17 @@ export default function FinancePage() {
                     color: "#F5F5F5",
                   }}
                 />
+                {/* Live equivalent value at the current market rate */}
+                <div className="flex items-center justify-between mt-2 px-1">
+                  <span className="text-[10px] text-[#F5F5F5]/40">
+                    {usdtRate ? `نرخ لحظه‌ای: ${formatPrice(usdtRate)} / USDT` : "در حال دریافت نرخ..."}
+                  </span>
+                  {usdtRate && Number(usdtAmount) > 0 && (
+                    <span className="text-[11px] font-bold text-blue-400 dir-ltr">
+                      ≈ {formatPrice(Math.round(Number(usdtAmount) * usdtRate))}
+                    </span>
+                  )}
+                </div>
               </div>
               <div
                 className="flex items-start gap-3 p-3.5 rounded-2xl"
