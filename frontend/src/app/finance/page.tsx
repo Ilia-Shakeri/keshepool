@@ -658,15 +658,32 @@ export default function FinancePage() {
                     color: "#F5F5F5",
                   }}
                 />
-                {/* Live equivalent value at the current market rate */}
-                <div className="flex items-center justify-between mt-2 px-1">
-                  <span className="text-[10px] text-[#F5F5F5]/40">
-                    {usdtRate ? `نرخ لحظه‌ای: ${formatPrice(usdtRate)} / USDT` : "در حال دریافت نرخ..."}
-                  </span>
+                {/* Live USDT rate — prominent separate block */}
+                <div
+                  className="mt-3 rounded-2xl p-3.5"
+                  style={{
+                    background: "rgba(59,130,246,0.08)",
+                    border: "1px solid rgba(59,130,246,0.2)",
+                  }}
+                >
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-[10px] text-[#F5F5F5]/50 font-medium">نرخ لحظه‌ای USDT</span>
+                    <DollarSign className="w-3.5 h-3.5 text-blue-400 opacity-70" />
+                  </div>
+                  <p className="text-xl font-bold text-blue-400 dir-ltr text-right">
+                    {usdtRate ? `${formatPrice(usdtRate)} تومان` : "···"}
+                  </p>
+                  <p className="text-[10px] text-[#F5F5F5]/40 mt-0.5">به ازای هر ۱ USDT</p>
                   {usdtRate && Number(usdtAmount) > 0 && (
-                    <span className="text-[11px] font-bold text-blue-400 dir-ltr">
-                      ≈ {formatPrice(Math.round(Number(usdtAmount) * usdtRate))}
-                    </span>
+                    <div
+                      className="mt-2.5 pt-2.5 flex items-center justify-between"
+                      style={{ borderTop: "1px solid rgba(59,130,246,0.15)" }}
+                    >
+                      <span className="text-[11px] text-[#F5F5F5]/50">معادل تومانی</span>
+                      <span className="text-base font-bold text-emerald-400 dir-ltr">
+                        ≈ {formatPrice(Math.round(Number(usdtAmount) * usdtRate))} تومان
+                      </span>
+                    </div>
                   )}
                 </div>
               </div>

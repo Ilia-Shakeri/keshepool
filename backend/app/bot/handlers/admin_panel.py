@@ -109,13 +109,18 @@ async def build_report_text() -> str:
         ) or 0
         total_revenue = await session.scalar(
             select(func.sum(Order.total_amount)).where(Order.status == OrderStatus.ACTIVE)
-        ) or 0
+        )
+        total_revenue = float(total_revenue) if total_revenue is not None else 0.0
         pending_tx = await session.scalar(
             select(func.count(Transaction.id)).where(Transaction.status == TransactionStatus.PENDING)
         ) or 0
-        pending_cashouts = await session.scalar(
-            select(func.count(CashoutRequest.id)).where(CashoutRequest.status == CashoutRequestStatus.PENDING)
-        ) or 0
+        try:
+            pending_cashouts = await session.scalar(
+                select(func.count(CashoutRequest.id)).where(CashoutRequest.status == CashoutRequestStatus.PENDING)
+            ) or 0
+        except Exception as exc:
+            logger.warning("cashout_requests query failed (migration pending?): %s", exc)
+            pending_cashouts = "N/A"
 
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     return (
@@ -124,7 +129,7 @@ async def build_report_text() -> str:
         f"👥 کل کاربران: <b>{total_users:,}</b>\n"
         f"🆕 ثبت‌نام امروز: <b>{new_today:,}</b>\n"
         f"📦 سفارشات فعال: <b>{total_orders:,}</b>\n"
-        f"💰 کل درآمد: <b>{float(total_revenue):,.0f}</b> تومان\n"
+        f"💰 کل درآمد: <b>{total_revenue:,.0f}</b> تومان\n"
         f"⏳ تراکنش‌های معلق: <b>{pending_tx}</b>\n"
         f"💱 درخواست نقد معلق: <b>{pending_cashouts}</b>"
     )
@@ -372,8 +377,8 @@ async def view_user_detail(callback: CallbackQuery):
     markup = InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(text="🔔 Send Notification", callback_data=f"notify_user_{user.id}"),
-                InlineKeyboardButton(text="📦 Orders", callback_data=f"user_orders_{user.id}"),
+                InlineKeyboardButton(text=get_text(lang, "notify_btn"), callback_data=f"notify_user_{user.id}"),
+                InlineKeyboardButton(text=get_text(lang, "orders_btn"), callback_data=f"user_orders_{user.id}"),
             ],
             [InlineKeyboardButton(text=get_text(lang, "back"), callback_data="manage_users_0")],
         ]
@@ -581,12 +586,15 @@ async def _send_cashouts_page(target, lang: str, page: int, send_new: bool = Fal
             )
             cashouts = result.scalars().all()
     except Exception as exc:
-        logger.error("DB error loading cashouts: %s", exc)
+        logger.error("DB error loading cashouts (table may need migration): %s", exc, exc_info=True)
         err = get_text(lang, "db_error")
         if send_new:
             await target.answer(err)
         else:
-            await target.message.answer(err)
+            try:
+                await target.message.edit_text(err)
+            except Exception:
+                await target.message.answer(err)
         return
 
     title_text = f"<b>{get_text(lang, 'cashouts_title')}</b>\nPending: {total_count}\n"
@@ -682,8 +690,8 @@ async def view_cashout_detail(callback: CallbackQuery):
     markup = InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(text="✅ Mark Completed", callback_data=f"cashout_done_{cashout_id}"),
-                InlineKeyboardButton(text="👁 Mark Reviewed", callback_data=f"cashout_review_{cashout_id}"),
+                InlineKeyboardButton(text=get_text(lang, "mark_done_btn"), callback_data=f"cashout_done_{cashout_id}"),
+                InlineKeyboardButton(text=get_text(lang, "mark_reviewed_btn"), callback_data=f"cashout_review_{cashout_id}"),
             ],
             [InlineKeyboardButton(text=get_text(lang, "back"), callback_data="manage_cashouts_0")],
         ]
@@ -723,14 +731,19 @@ async def _update_cashout_status(
         await callback.answer(get_text(lang, "db_error"), show_alert=True)
         return
 
+    _status_labels = {
+        CashoutRequestStatus.COMPLETED: {"fa": "تکمیل‌شده", "en": "completed"},
+        CashoutRequestStatus.REVIEWED: {"fa": "بررسی‌شده", "en": "reviewed"},
+    }
+    status_label = _status_labels.get(new_status, {}).get(lang, new_status.value)
     await callback.message.edit_text(
-        f"✅ Cashout #{cashout_id} marked as <b>{_h(new_status.value)}</b>.",
+        get_text(lang, "cashout_done_msg").format(id=cashout_id, status=_h(status_label)),
         reply_markup=InlineKeyboardMarkup(
             inline_keyboard=[[InlineKeyboardButton(text=get_text(lang, "back"), callback_data="manage_cashouts_0")]]
         ),
         parse_mode="HTML",
     )
-    await callback.answer(f"✅ Status updated to {new_status.value}", show_alert=False)
+    await callback.answer()
 
 
 # ── Exchange rate management ──────────────────────────────────────────────────

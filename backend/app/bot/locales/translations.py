@@ -56,6 +56,13 @@ UI_TEXT = {
         "subtitle_updated": "✅ Product subtitle updated.",
         "features_updated": "✅ Product features updated.",
         "stock_added": "✅ Added {count} inventory items.",
+        # User detail actions
+        "notify_btn": "🔔 Send Notification",
+        "orders_btn": "📦 Orders",
+        # Cashout actions
+        "mark_done_btn": "✅ Mark Completed",
+        "mark_reviewed_btn": "👁 Mark Reviewed",
+        "cashout_done_msg": "✅ Cashout #{id} marked as <b>{status}</b>.",
         # Cashouts
         "cashouts_title": "💱 Cashout Requests",
         "no_cashouts": "No pending cashout requests.",
@@ -131,6 +138,13 @@ UI_TEXT = {
         "subtitle_updated": "✅ توضیحات محصول بروزرسانی شد.",
         "features_updated": "✅ ویژگی‌های محصول بروزرسانی شد.",
         "stock_added": "✅ تعداد {count} آیتم موجودی اضافه شد.",
+        # User detail actions
+        "notify_btn": "🔔 ارسال اعلان",
+        "orders_btn": "📦 سفارشات",
+        # Cashout actions
+        "mark_done_btn": "✅ تکمیل شد",
+        "mark_reviewed_btn": "👁 بررسی شد",
+        "cashout_done_msg": "✅ درخواست #{id} به وضعیت <b>{status}</b> تغییر یافت.",
         # Cashouts
         "cashouts_title": "💱 درخواست‌های نقد",
         "no_cashouts": "هیچ درخواست معلقی وجود ندارد.",
