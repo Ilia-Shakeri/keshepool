@@ -3,11 +3,15 @@ services:
     image: postgres:15-alpine
     container_name: keshepool-db
     restart: unless-stopped
+    # Give Postgres time to checkpoint and flush WAL on shutdown — prevents corruption.
+    stop_grace_period: 1m
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB}
     volumes:
+      # Named volume — survives `down`, `up`, and `--build`. Mapping unchanged on purpose
+      # so existing data keeps its identity and is never re-initialised.
       - pgdata:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
@@ -26,13 +30,28 @@ services:
       POSTGRES_DB: ${POSTGRES_DB}
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      SCHEDULE: "@daily"
+      # Run every 6 hours for tight recovery point objective.
+      SCHEDULE: "@every 6h"
+      # Layered retention — short-term granularity plus long-term history.
       BACKUP_KEEP_DAYS: 7
+      BACKUP_KEEP_WEEKS: 4
+      BACKUP_KEEP_MONTHS: 6
+      # gzip level 6 — smaller dumps without heavy CPU cost.
+      POSTGRES_EXTRA_OPTS: "-Z6"
+      HEALTHCHECK_PORT: 8080
+      TZ: ${TZ:-UTC}
     depends_on:
       db:
         condition: service_healthy
     volumes:
+      # Bind to host so dumps survive even total stack teardown and are reachable for off-site sync.
       - ./backups:/backups
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://localhost:8080/ >/dev/null 2>&1 || exit 1"]
+      interval: 1m
+      timeout: 10s
+      retries: 3
+      start_period: 30s
     networks:
       - keshepool_internal_net
 
@@ -40,6 +59,8 @@ services:
     image: redis:7-alpine
     container_name: keshepool-redis
     restart: unless-stopped
+    # AOF persistence — webhook idempotency keys survive restarts, blocking double-credit.
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec"]
     volumes:
       - redisdata:/data
     healthcheck:
