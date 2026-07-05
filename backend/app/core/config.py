@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     CRYPTO_WEBHOOK_SECRET: str = ""
     CRYPTO_DEPOSIT_ADDRESS_USDT: str = ""
     ADMIN_TELEGRAM_IDS: str = ""
+    ADMIN_DIRECT_USER_IDS: str = "ADMIN_USER_1,ADMIN_USER_2"
     ADMIN_GROUP_CHAT_ID: str = ""
     ADMIN_API_KEY: str = Field(default="")
     ASSET_ROOT: str = "/app/static"
@@ -46,6 +47,14 @@ class Settings(BaseSettings):
     @cached_property
     def admin_ids(self) -> Set[str]:
         return {value.strip() for value in self.ADMIN_TELEGRAM_IDS.split(",") if value.strip()}
+
+    @cached_property
+    def admin_direct_ids(self) -> Set[str]:
+        return {
+            value.strip()
+            for value in self.ADMIN_DIRECT_USER_IDS.split(",")
+            if value.strip() and not value.strip().startswith("ADMIN_USER_")
+        }
 
     @property
     def tetra98_callback_url(self) -> str:

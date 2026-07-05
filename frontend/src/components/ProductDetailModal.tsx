@@ -12,6 +12,7 @@ interface ProductDetailModalProps {
   isOpen: boolean;
   onClose: () => void;
   product: Product | null;
+  initialVariantId?: string;
   onProceedToCheckout: (variant: ProductVariant) => void;
 }
 
@@ -30,12 +31,12 @@ const DEFAULT_FEATURES = [
   { icon: FEATURE_ICONS[3], label: "پشتیبانی ۲۴ ساعته" },
 ];
 
-export default function ProductDetailModal({ isOpen, onClose, product, onProceedToCheckout }: ProductDetailModalProps) {
+export default function ProductDetailModal({ isOpen, onClose, product, initialVariantId, onProceedToCheckout }: ProductDetailModalProps) {
   const [selectedVariantId, setSelectedVariantId] = useState("");
 
   useEffect(() => {
-    setSelectedVariantId("");
-  }, [product?.id]);
+    void Promise.resolve().then(() => setSelectedVariantId(initialVariantId || ""));
+  }, [product?.id, initialVariantId]);
 
   const activeVariant = useMemo(() => {
     if (!product || product.variants.length === 0) return null;

@@ -64,6 +64,21 @@ function txStatusBadge(status: string) {
 
 // ── main component ────────────────────────────────────────────────────────────
 
+function formatTransactionAmount(tx: WalletTransaction): string {
+  const sign = tx.amount >= 0 ? "+" : "";
+  const currency = (tx.currency || "IRR").toUpperCase();
+
+  if (currency === "USDT" || currency === "USD") {
+    return `${sign}$${Math.abs(tx.amount).toLocaleString("en-US", {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    })}`;
+  }
+
+  return `${sign}${formatPrice(tx.amount)} Toman`;
+}
+
+
 export default function FinancePage() {
   const [activeTab, setActiveTab] = useState<ActiveTab>("wallet");
 
@@ -355,8 +370,7 @@ export default function FinancePage() {
                           tx.amount >= 0 ? "text-emerald-400" : "text-[#F5F5F5]/70"
                         }`}
                       >
-                        {tx.amount >= 0 ? "+" : ""}
-                        {formatPrice(tx.amount)}
+                        {formatTransactionAmount(tx)}
                       </span>
                     </div>
                   ))
