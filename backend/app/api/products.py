@@ -26,7 +26,42 @@ class CheckoutRequest(BaseModel):
     product_id: str = Field(min_length=1, max_length=120)
     variant_id: str = Field(min_length=1, max_length=120)
 
-@router.get("/products")
+class ProductVariantResponse(BaseModel):
+    id: str
+    duration: str
+    priceLabel: str
+    rawPrice: float
+    stockCount: int
+
+class ProductResponse(BaseModel):
+    id: str
+    title: str
+    brand: str
+    subtitle: str
+    icon: str
+    assetUrl: str | None
+    gradient: str
+    category: str
+    features: List[str] | None
+    variants: List[ProductVariantResponse]
+
+def parse_product_features(raw_features: str | None) -> List[str] | None:
+    """Return product feature labels only when the stored JSON is valid."""
+    if not raw_features:
+        return None
+
+    try:
+        parsed = json.loads(raw_features)
+    except json.JSONDecodeError:
+        return None
+
+    if not isinstance(parsed, list):
+        return None
+
+    features = [str(feature).strip() for feature in parsed if str(feature).strip()]
+    return features or None
+
+@router.get("/products", response_model=List[ProductResponse])
 async def get_all_products(
     request: Request,
     user: User = Depends(current_user),
@@ -64,8 +99,9 @@ async def get_all_products(
     )
     products = result.scalars().all()
 
-    output = []
+    output: List[Dict[str, Any]] = []
     for product in products:
+        # Only active variants are exposed so the mini-app mirrors admin-bot availability.
         active_variants = [variant for variant in product.variants if variant.is_active]
         if not active_variants:
             continue
@@ -80,7 +116,7 @@ async def get_all_products(
                 "assetUrl": product.asset_url,
                 "gradient": product.gradient or "from-gray-700 to-black",
                 "category": product.category or "tools",
-                "features": json.loads(product.features) if product.features else None,
+                "features": parse_product_features(product.features),
                 "variants": [
                     {
                         "id": variant.id,
@@ -94,7 +130,7 @@ async def get_all_products(
             }
         )
         
-    await redis_client.setex(cache_key, 60, json.dumps(output))
+    await redis_client.setex(cache_key, 60, json.dumps(output, ensure_ascii=False))
     return output
 
 @router.post("/checkout")

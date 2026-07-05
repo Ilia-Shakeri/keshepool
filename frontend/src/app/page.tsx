@@ -13,6 +13,7 @@ export default function Home() {
   const [tgUser, setTgUser] = useState<{ id?: number; first_name?: string; last_name?: string; username?: string } | null>(null);
   const [products, setProducts] = useState<Product[]>([]);
   const [notifications, setNotifications] = useState<UserNotification[]>([]);
+  const [productError, setProductError] = useState<string | null>(null);
   const [isNotifOpen, setIsNotifOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const bellRef = useRef<HTMLButtonElement>(null);
@@ -20,17 +21,40 @@ export default function Home() {
   useEffect(() => {
     const webApp = window.Telegram?.WebApp;
     if (webApp) setTgUser(webApp.initDataUnsafe?.user || null);
-    Promise.all([getProducts(), getNotifications()])
+
+    // Load catalog data from the backend so the mini-app stays synced with admin-bot inventory.
+    Promise.allSettled([getProducts(), getNotifications()])
       .then(([productData, notifData]) => {
-        setProducts(productData);
-        setNotifications(notifData);
+        if (productData.status === "fulfilled") {
+          setProducts(productData.value);
+          setProductError(null);
+        } else {
+          setProducts([]);
+          setProductError("خطا در دریافت محصولات.");
+          console.error("Product data load failed:", productData.reason);
+        }
+
+        if (notifData.status === "fulfilled") {
+          setNotifications(notifData.value);
+        } else {
+          setNotifications([]);
+          console.error("Notification data load failed:", notifData.reason);
+        }
       })
-      .catch((error) => console.error("Home data load failed:", error))
       .finally(() => setIsLoading(false));
   }, []);
 
   const hotItems = useMemo(() => products.slice(0, 6), [products]);
   const unreadCount = notifications.filter((n) => !n.isRead).length;
+
+  function getStartingPrice(product: Product): string {
+    const startingVariant = product.variants.reduce<Product["variants"][number] | null>((lowest, variant) => {
+      if (!lowest) return variant;
+      return variant.rawPrice < lowest.rawPrice ? variant : lowest;
+    }, null);
+
+    return startingVariant?.priceLabel || "0";
+  }
 
   return (
     <div className="min-h-screen font-sans pb-28">
@@ -158,15 +182,24 @@ export default function Home() {
           </div>
 
           <div className="flex gap-3 overflow-x-auto pb-4 scrollbar-hide dir-rtl -mx-5 px-5">
-            {isLoading
-              ? Array.from({ length: 3 }).map((_, i) => (
+            {isLoading ? (
+              Array.from({ length: 3 }).map((_, i) => (
                   <div
                     key={i}
                     className="min-w-[210px] h-[148px] rounded-2xl animate-pulse flex-shrink-0"
                     style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.07)" }}
                   />
                 ))
-              : hotItems.map((item) => (
+            ) : productError ? (
+              <div className="min-w-full rounded-2xl p-5 text-center text-xs text-[#E63946] bg-white/[0.04] border border-white/[0.08]">
+                {productError}
+              </div>
+            ) : hotItems.length === 0 ? (
+              <div className="min-w-full rounded-2xl p-5 text-center text-xs text-[#F5F5F5]/40 bg-white/[0.04] border border-white/[0.08]">
+                محصول فعالی برای نمایش وجود ندارد.
+              </div>
+            ) : (
+              hotItems.map((item) => (
                   <div
                     key={item.id}
                     onClick={() => router.push(`/products?category=${item.category}`)}
@@ -199,12 +232,13 @@ export default function Home() {
                       <h4 className="text-sm font-bold text-[#F5F5F5] leading-tight">{item.title}</h4>
                       <p className="text-[10px] text-[#F5F5F5]/50 mt-1 line-clamp-1">{item.subtitle}</p>
                       <p className="text-xs font-bold text-emerald-400 mt-2.5">
-                        {toPersianDigits(item.variants[0]?.priceLabel || "0")}
+                        {toPersianDigits(getStartingPrice(item))}
                         <span className="text-[9px] font-normal text-[#F5F5F5]/40 mr-1">تومان</span>
                       </p>
                     </div>
                   </div>
-                ))}
+                ))
+            )}
           </div>
         </section>
 

@@ -69,15 +69,22 @@ function ProductsContent() {
   const [selectedVariant, setSelectedVariant] = useState<ProductVariant | null>(null);
   const [isCheckoutOpen, setIsCheckoutOpen] = useState(false);
   const [walletBalance, setWalletBalance] = useState(0);
+  const [productError, setProductError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
+    // Load products from the catalog API instead of rendering local product fixtures.
     Promise.all([getProducts(), getWalletBalance()])
       .then(([productData, balanceData]) => {
         setProducts(productData);
         setWalletBalance(balanceData.balance);
+        setProductError(null);
       })
-      .catch((error) => console.error("Product page data load failed:", error))
+      .catch((error) => {
+        setProducts([]);
+        setProductError("خطا در دریافت محصولات.");
+        console.error("Product page data load failed:", error);
+      })
       .finally(() => setIsLoading(false));
   }, []);
 
@@ -191,6 +198,11 @@ function ProductsContent() {
                   className="aspect-square rounded-3xl bg-white/[0.04] border border-white/[0.08] animate-pulse"
                 />
               ))
+            : productError ? (
+                <div className="col-span-2 rounded-3xl p-8 text-center text-sm text-[#E63946] bg-white/[0.04] border border-white/[0.08]">
+                  {productError}
+                </div>
+              )
             : filteredProducts.map((product) => {
                 const startingVariant = getStartingVariant(product);
 
@@ -242,7 +254,7 @@ function ProductsContent() {
               })}
         </div>
 
-        {!isLoading && filteredProducts.length === 0 && (
+        {!isLoading && !productError && filteredProducts.length === 0 && (
           <div className="text-center py-20">
             <p className="text-[#F5F5F5]/30 text-sm">محصولی یافت نشد.</p>
           </div>
