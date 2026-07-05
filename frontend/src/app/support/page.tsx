@@ -51,12 +51,12 @@ export default function SupportPage() {
           </button>
         </div>
 
-        {/* FAQ */}
-        <div>
+        {/* FAQ section uses explicit RTL rules for Persian text. */}
+        <div dir="rtl" className="text-right">
           <h3 className="text-sm font-bold text-[#F5F5F5] mb-3 flex items-center gap-2">
             <FileText className="w-4 h-4 text-[#E63946]" /> سوالات متداول
           </h3>
-          <div className="space-y-2">
+          <div className="space-y-2 text-right" dir="rtl">
             {FAQ.map((item, i) => (
               <div
                 key={i}
@@ -64,17 +64,18 @@ export default function SupportPage() {
                 style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)" }}
               >
                 <button
-                  className="w-full flex items-center justify-between px-4 py-3.5 text-right"
+                  className="w-full flex flex-row-reverse items-center justify-between gap-3 px-4 py-3.5 text-right"
                   onClick={() => setOpenFaq(openFaq === i ? null : i)}
+                  dir="rtl"
                 >
                   <ChevronDown
                     className="w-4 h-4 text-[#F5F5F5]/40 transition-transform flex-shrink-0"
                     style={{ transform: openFaq === i ? "rotate(180deg)" : "rotate(0deg)" }}
                   />
-                  <span className="text-sm font-medium text-[#F5F5F5]/85">{item.q}</span>
+                  <span className="text-sm font-medium text-[#F5F5F5]/85 text-right flex-1">{item.q}</span>
                 </button>
                 {openFaq === i && (
-                  <div className="px-4 pb-4 text-sm text-[#F5F5F5]/55 leading-relaxed border-t border-white/[0.06] pt-3">
+                  <div className="px-4 pb-4 text-sm text-[#F5F5F5]/55 leading-relaxed border-t border-white/[0.06] pt-3 text-right" dir="rtl">
                     {item.a}
                   </div>
                 )}

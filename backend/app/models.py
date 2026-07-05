@@ -18,6 +18,12 @@ from sqlalchemy.orm import declarative_base, relationship
 
 Base = declarative_base()
 
+
+def enum_values(enum_class: type[enum.Enum]) -> list[str]:
+    """Store enum values in PostgreSQL so Python enums match existing database labels."""
+    return [member.value for member in enum_class]
+
+
 def utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -196,7 +202,12 @@ class CashoutRequest(Base):
     source_platform = Column(String(100), nullable=False)
     custom_source = Column(String(200), nullable=True)
     details_text = Column(Text, nullable=False)
-    status = Column(Enum(CashoutRequestStatus), default=CashoutRequestStatus.PENDING, nullable=False, index=True)
+    status = Column(
+        Enum(CashoutRequestStatus, values_callable=enum_values),
+        default=CashoutRequestStatus.PENDING,
+        nullable=False,
+        index=True,
+    )
     created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
     updated_at = Column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
 

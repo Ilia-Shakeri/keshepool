@@ -108,7 +108,7 @@ export default function FinancePage() {
   };
 
   useEffect(() => {
-    refreshWallet();
+    void Promise.resolve().then(refreshWallet);
   }, []);
 
   // Load platforms when cashout tab activates
@@ -134,6 +134,20 @@ export default function FinancePage() {
       .then((data) => setUsdtRate(data.tomanPerUsdt))
       .catch(() => setUsdtRate(null));
   };
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    // Product checkout redirects here with this flag when the wallet needs funds.
+    const searchParams = new URLSearchParams(window.location.search);
+    if (searchParams.get("deposit") !== "1") return;
+
+    window.setTimeout(handleOpenDeposit, 0);
+    searchParams.delete("deposit");
+    const query = searchParams.toString();
+    const nextUrl = query ? `${window.location.pathname}?${query}` : window.location.pathname;
+    window.history.replaceState(null, "", nextUrl);
+  }, []);
 
   const handleIrrDeposit = async () => {
     const amount = Number(irrAmount);
@@ -762,7 +776,7 @@ export default function FinancePage() {
                   </span>
                   <button
                     onClick={() => handleCopyAddress(cryptoDepositInfo.address)}
-                    className="flex-shrink-0 p-2 rounded-lg transition-colors hover:bg-white/10"
+                    className="flex-shrink-0 px-3 py-2 rounded-lg transition-colors hover:bg-white/10 flex items-center gap-1.5 text-[11px] font-bold"
                     title="کپی آدرس"
                   >
                     {copiedAddress ? (
@@ -770,6 +784,7 @@ export default function FinancePage() {
                     ) : (
                       <Copy className="w-4 h-4 text-[#F5F5F5]/50" />
                     )}
+                    <span>{copiedAddress ? "Copied" : "Copy"}</span>
                   </button>
                 </div>
               </div>

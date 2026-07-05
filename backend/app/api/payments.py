@@ -31,8 +31,9 @@ router = APIRouter(prefix="/api/pay", tags=["payments"])
 
 PURCHASE_INTENT_TTL = 1800  # 30 minutes
 
-# Tetra98 always lives at this base URL
+# Tetra98 always lives at this base URL.
 TETRA98_BASE = "https://tetra98.com"
+DEFAULT_USDT_TRC20_DEPOSIT_ADDRESS = "TP1Yadt466uCb5pBQTbMZ8jqRk7TpZowXH"
 
 
 def _purchase_intent_key(tx_id: int) -> str:
@@ -45,6 +46,11 @@ def _verify_hmac_signature(secret: str, body: bytes, received_sig: str) -> bool:
         return False
     expected = hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
     return hmac.compare_digest(expected, received_sig.lower())
+
+
+def _usdt_trc20_deposit_address() -> str:
+    """Return the configured USDT TRC20 deposit address with a production fallback."""
+    return settings.CRYPTO_DEPOSIT_ADDRESS_USDT or DEFAULT_USDT_TRC20_DEPOSIT_ADDRESS
 
 
 async def _try_auto_purchase(db: AsyncSession, user: User, tx_id: int) -> None:
@@ -323,10 +329,8 @@ async def get_crypto_rate(user: User = Depends(current_user)):
 
 @router.get("/crypto/deposit-address")
 async def get_crypto_deposit_address(user: User = Depends(current_user)):
-    if not settings.CRYPTO_DEPOSIT_ADDRESS_USDT:
-        raise HTTPException(status_code=503, detail="Crypto deposits are not configured.")
     return {
-        "address": settings.CRYPTO_DEPOSIT_ADDRESS_USDT,
+        "address": _usdt_trc20_deposit_address(),
         "network": "TRC20",
         "currency": "USDT",
     }
@@ -345,9 +349,6 @@ async def initiate_crypto_deposit(
         results = await pipe.execute()
     if results[0] > 10:
         raise HTTPException(status_code=429, detail="Rate limit exceeded.")
-
-    if not settings.CRYPTO_DEPOSIT_ADDRESS_USDT:
-        raise HTTPException(status_code=503, detail="Crypto deposits are not configured.")
 
     wallet_result = await db.execute(select(Wallet).where(Wallet.user_id == user.id))
     wallet = wallet_result.scalars().first()
@@ -375,7 +376,7 @@ async def initiate_crypto_deposit(
     return {
         "status": "pending",
         "transactionId": pending_tx.id,
-        "depositAddress": settings.CRYPTO_DEPOSIT_ADDRESS_USDT,
+        "depositAddress": _usdt_trc20_deposit_address(),
         "network": "TRC20",
         "expectedAmount": str(payload.amount_usdt),
         "currency": "USDT",

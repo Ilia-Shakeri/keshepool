@@ -14,7 +14,7 @@ const CATEGORIES: { id: ProductCategory | "all"; label: string }[] = [
   { id: "all", label: "همه" },
   { id: "vpn", label: "تحریم‌شکن" },
   { id: "video", label: "استریم" },
-  { id: "ai", label: "AI" },
+  { id: "ai", label: "Smart Tools" },
   { id: "music", label: "موسیقی" },
   { id: "tools", label: "ابزار" },
   { id: "gaming", label: "گیمینگ" },

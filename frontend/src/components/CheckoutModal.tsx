@@ -50,6 +50,7 @@ export default function CheckoutModal({ isOpen, setIsOpen, product, variant, wal
   const [copied, setCopied] = useState(false);
 
   const canPay = walletBalance >= variant.rawPrice && (variant.stockCount ?? 0) > 0;
+  const hasEmptyWallet = walletBalance <= 0;
 
   const handleSubmit = async () => {
     if (!canPay || isSubmitting) return;
@@ -84,6 +85,11 @@ export default function CheckoutModal({ isOpen, setIsOpen, product, variant, wal
     setErrorMessage(null);
     setCopied(false);
     setIsOpen(false);
+  };
+
+  const handleChargeWallet = () => {
+    setIsOpen(false);
+    window.location.href = "/finance?deposit=1";
   };
 
   if (orderResult) {
@@ -179,8 +185,22 @@ export default function CheckoutModal({ isOpen, setIsOpen, product, variant, wal
           </div>
 
           {!canPay && (
-            <div className="text-xs text-[#E63946] rounded-xl p-3" style={{ background: "rgba(230,57,70,0.1)", border: "1px solid rgba(230,57,70,0.2)" }}>
-              موجودی کیف پول کافی نیست یا محصول ناموجود است.
+            <div className="space-y-3 text-xs rounded-xl p-3" style={{ background: "rgba(230,57,70,0.1)", border: "1px solid rgba(230,57,70,0.2)" }}>
+              <p className="text-[#E63946]">
+                {hasEmptyWallet
+                  ? "Wallet balance is zero. Charge your wallet first to complete this purchase."
+                  : "Wallet balance is not enough or the product is unavailable."}
+              </p>
+              {hasEmptyWallet && (
+                <Button
+                  onClick={handleChargeWallet}
+                  className="w-full py-4 rounded-xl text-xs font-bold transition-all active:scale-95 border-none gap-2"
+                  style={{ background: "rgba(230,57,70,0.18)", color: "#F5F5F5" }}
+                >
+                  <Wallet className="w-4 h-4" />
+                  Charge Wallet
+                </Button>
+              )}
             </div>
           )}
 

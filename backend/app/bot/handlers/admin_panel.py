@@ -97,7 +97,7 @@ def get_main_menu_markup(lang: str) -> InlineKeyboardMarkup:
 
 
 async def build_report_text() -> str:
-    """Build a comprehensive system statistics report."""
+    """Build a detailed operational report for the instant report workflow."""
     async with AsyncSessionLocal() as session:
         total_users = await session.scalar(select(func.count(User.id))) or 0
         today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
@@ -136,6 +136,35 @@ async def build_report_text() -> str:
 
 
 # ── Entry points ──────────────────────────────────────────────────────────────
+
+async def build_stats_text(lang: str) -> str:
+    """Build a compact dashboard for the system stats workflow."""
+    async with AsyncSessionLocal() as session:
+        total_users = await session.scalar(select(func.count(User.id))) or 0
+        total_orders = await session.scalar(select(func.count(Order.id))) or 0
+        active_orders = await session.scalar(
+            select(func.count(Order.id)).where(Order.status == OrderStatus.ACTIVE)
+        ) or 0
+        successful_transactions = await session.scalar(
+            select(func.count(Transaction.id)).where(Transaction.status == TransactionStatus.SUCCESS)
+        ) or 0
+        pending_transactions = await session.scalar(
+            select(func.count(Transaction.id)).where(Transaction.status == TransactionStatus.PENDING)
+        ) or 0
+        pending_cashouts = await session.scalar(
+            select(func.count(CashoutRequest.id)).where(CashoutRequest.status == CashoutRequestStatus.PENDING)
+        ) or 0
+
+    return (
+        f"<b>{get_text(lang, 'stats_title')}</b>\n\n"
+        f"Users: <b>{total_users:,}</b>\n"
+        f"Orders: <b>{total_orders:,}</b>\n"
+        f"Active orders: <b>{active_orders:,}</b>\n"
+        f"Successful transactions: <b>{successful_transactions:,}</b>\n"
+        f"Pending transactions: <b>{pending_transactions:,}</b>\n"
+        f"Pending cashouts: <b>{pending_cashouts:,}</b>"
+    )
+
 
 @admin_router.message(CommandStart())
 async def cmd_start(message: Message, state: FSMContext):
@@ -231,9 +260,9 @@ async def process_main_menu(callback: CallbackQuery, state: FSMContext):
 async def show_stats(callback: CallbackQuery):
     lang = await get_admin_lang(callback.from_user.id)
     try:
-        text = await build_report_text()
+        text = await build_stats_text(lang)
     except Exception as exc:
-        logger.error("Stats error: %s", exc)
+        logger.error("System stats workflow failed: %s", exc, exc_info=True)
         text = get_text(lang, "db_error")
     markup = InlineKeyboardMarkup(
         inline_keyboard=[[InlineKeyboardButton(text=get_text(lang, "back_to_menu"), callback_data="main_menu")]]
@@ -247,9 +276,9 @@ async def process_force_report(callback: CallbackQuery):
     lang = await get_admin_lang(callback.from_user.id)
     try:
         text = await build_report_text()
-        # Send full report directly to the admin who triggered it
+        # Send the full report directly to the admin who triggered it.
         await callback.message.answer(text=text, parse_mode="HTML")
-        # Also relay to group chat if configured and different chat
+        # Relay the instant report to the configured group when needed.
         from app.core.config import settings
         if settings.ADMIN_GROUP_CHAT_ID and str(callback.message.chat.id) != str(settings.ADMIN_GROUP_CHAT_ID):
             try:
