@@ -95,7 +95,7 @@ async def _try_auto_purchase(db: AsyncSession, user: User, tx_id: int) -> None:
 #             200 success: { status:"100" }
 
 class Tetra98PaymentRequest(BaseModel):
-    amount: int = Field(gt=9999, le=50000000, description="Amount in Toman (minimum 10,000)")
+    amount: int = Field(gt=9999, le=50000000, description="Amount in تومان (minimum 10,000)")
     product_id: str | None = Field(default=None, max_length=120)
     variant_id: str | None = Field(default=None, max_length=120)
 
@@ -123,7 +123,7 @@ async def create_tetra98_payment(
         raise HTTPException(status_code=404, detail="Wallet not found.")
 
     # Create a pending transaction first so we have a DB-backed ID to use as Hash_id.
-    # amount is stored in Toman to match the wallet balance unit.
+    # Amount is stored in the wallet balance unit.
     pending_tx = Transaction(
         wallet_id=wallet.id,
         amount=to_decimal(payload.amount),
@@ -143,7 +143,7 @@ async def create_tetra98_payment(
         intent = json.dumps({"product_id": payload.product_id, "variant_id": payload.variant_id})
         await redis_client.setex(_purchase_intent_key(pending_tx.id), PURCHASE_INTENT_TTL, intent)
 
-    # Tetra98 expects Amount in Rials; payload.amount is in Toman → multiply by 10.
+    # Tetra98 expects Amount in Rials; multiply the wallet unit by 10.
     gateway_payload = {
         "ApiKey": settings.TETRA98_API_KEY,
         "Hash_id": str(pending_tx.id),      # our transaction ID; returned as hash_id in callback
@@ -154,7 +154,7 @@ async def create_tetra98_payment(
         "CallbackURL": settings.tetra98_callback_url,
     }
 
-    logger.info("Tetra98 create_order for tx %d, amount %d Toman (%d IRR)", pending_tx.id, payload.amount, payload.amount * 10)
+    logger.info("Tetra98 create_order for tx %d, amount %d تومان (%d IRR)", pending_tx.id, payload.amount, payload.amount * 10)
 
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
@@ -298,10 +298,10 @@ async def tetra98_payment_callback(request: Request, db: AsyncSession = Depends(
     wallet.balance = to_decimal(wallet.balance) + to_decimal(locked_tx.amount)
     locked_tx.status = TransactionStatus.SUCCESS
     locked_tx.reference_id = authority
-    locked_tx.description = f"Tetra98 deposit verified — {locked_tx.amount} Toman (authority: {authority[:12]}...)"
+    locked_tx.description = f"Tetra98 deposit verified — {locked_tx.amount} تومان (authority: {authority[:12]}...)"
     await db.commit()
 
-    logger.info("Tetra98: tx %d credited %.2f Toman to wallet %d", tx_id, locked_tx.amount, wallet.id)
+    logger.info("Tetra98: tx %d credited %.2f تومان to wallet %d", tx_id, locked_tx.amount, wallet.id)
 
     from app.models import User as UserModel
     user_result = await db.execute(select(UserModel).where(UserModel.id == wallet.user_id))
@@ -322,9 +322,9 @@ class CryptoDepositRequest(BaseModel):
 
 @router.get("/crypto/rate")
 async def get_crypto_rate(user: User = Depends(current_user)):
-    """Live USDT→Toman rate for the deposit UI to display the equivalent value."""
+    """Live USDT rate for the deposit UI to display the equivalent value."""
     rate = await get_usdt_rate()
-    return {"tomanPerUsdt": int(rate), "base": "USDT", "quote": "TOMAN"}
+    return {"tomanPerUsdt": int(rate), "base": "USDT", "quote": "تومان"}
 
 
 @router.get("/crypto/deposit-address")
@@ -449,8 +449,8 @@ async def crypto_payment_callback(request: Request, db: AsyncSession = Depends(g
     if not wallet:
         raise HTTPException(status_code=404, detail="Wallet not found.")
 
-    # Convert USDT to Toman using the live exchange rate before crediting the wallet.
-    # Transaction.amount is stored in USDT; wallet.balance is always in Toman.
+    # Convert USDT using the live exchange rate before crediting the wallet.
+    # Transaction.amount is stored in USDT; wallet.balance uses the local wallet unit.
     rate = await get_usdt_rate()
     toman_credit = to_decimal(pending_tx.amount) * rate
     wallet.balance = to_decimal(wallet.balance) + toman_credit

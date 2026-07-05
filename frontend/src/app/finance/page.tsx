@@ -44,7 +44,7 @@ function txIcon(type: string) {
 
 function txLabel(type: string): string {
   const map: Record<string, string> = {
-    deposit_irr: "واریز ریالی",
+    deposit_irr: "واریز تومانی",
     deposit_crypto: "واریز رمزارز",
     purchase: "خرید",
     refund: "استرداد",
@@ -75,7 +75,7 @@ function formatTransactionAmount(tx: WalletTransaction): string {
     })}`;
   }
 
-  return `${sign}${formatPrice(tx.amount)} Toman`;
+  return `${sign}${formatPrice(tx.amount)} تومان`;
 }
 
 
@@ -144,7 +144,7 @@ export default function FinancePage() {
     setUsdtAmount("");
     setDepositMethod("irr");
     setIsDepositOpen(true);
-    // Pull the live USDT→Toman rate so the user sees the equivalent value upfront
+    // Pull the live USDT rate so the user sees the equivalent value upfront
     getUsdtRate()
       .then((data) => setUsdtRate(data.tomanPerUsdt))
       .catch(() => setUsdtRate(null));
@@ -585,7 +585,7 @@ export default function FinancePage() {
           >
             {(
               [
-                { key: "irr", label: "ریالی (Tetra98)", icon: <CreditCard className="w-3.5 h-3.5" /> },
+                { key: "irr", label: "تومانی (Tetra98)", icon: <CreditCard className="w-3.5 h-3.5" /> },
                 { key: "usdt", label: "رمزارز (USDT)", icon: <Bitcoin className="w-3.5 h-3.5" /> },
               ] as { key: DepositMethod; label: string; icon: React.ReactNode }[]
             ).map(({ key, label, icon }) => (

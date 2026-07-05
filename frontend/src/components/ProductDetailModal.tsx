@@ -1,7 +1,6 @@
 "use client";
 
-import { useEffect, useMemo } from "react";
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { ChevronRight, CheckCircle2, Clock, Headphones, Shield, Zap } from "lucide-react";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import ProductIcon from "@/components/ProductIcon";
@@ -12,11 +11,14 @@ interface ProductDetailModalProps {
   isOpen: boolean;
   onClose: () => void;
   product: Product | null;
-  initialVariantId?: string;
   onProceedToCheckout: (variant: ProductVariant) => void;
 }
 
-// Default feature icons assigned by index position
+type SelectableVariant = ProductVariant & {
+  optionType?: string;
+  optionFeatures?: string[] | null;
+};
+
 const FEATURE_ICONS = [
   <Shield key="0" className="w-4 h-4 text-emerald-400" />,
   <Zap key="1" className="w-4 h-4 text-yellow-400" />,
@@ -31,23 +33,53 @@ const DEFAULT_FEATURES = [
   { icon: FEATURE_ICONS[3], label: "پشتیبانی ۲۴ ساعته" },
 ];
 
-export default function ProductDetailModal({ isOpen, onClose, product, initialVariantId, onProceedToCheckout }: ProductDetailModalProps) {
-  const [selectedVariantId, setSelectedVariantId] = useState("");
+function displayTypeLabel(type: string): string {
+  const normalized = type.trim().toLowerCase();
+  if (normalized === "individual" || normalized === "personal" || normalized === "single") return "انفرادی";
+  if (normalized === "family") return "خانوادگی";
+  return type || "استاندارد";
+}
+
+export default function ProductDetailModal({ isOpen, onClose, product, onProceedToCheckout }: ProductDetailModalProps) {
+  const [selectedType, setSelectedType] = useState("");
+  const [selectedDuration, setSelectedDuration] = useState("");
 
   useEffect(() => {
-    void Promise.resolve().then(() => setSelectedVariantId(initialVariantId || ""));
-  }, [product?.id, initialVariantId]);
+    setSelectedType("");
+    setSelectedDuration("");
+  }, [product?.id, isOpen]);
+
+  const selectableVariants = useMemo<SelectableVariant[]>(() => product?.variants || [], [product]);
+
+  const typeOptions = useMemo(() => {
+    return Array.from(new Set(selectableVariants.map((variant) => variant.optionType || "استاندارد")));
+  }, [selectableVariants]);
+
+  const durationOptions = useMemo(() => {
+    if (!selectedType) return [];
+    return Array.from(
+      new Set(
+        selectableVariants
+          .filter((variant) => (variant.optionType || "استاندارد") === selectedType)
+          .map((variant) => variant.duration),
+      ),
+    );
+  }, [selectableVariants, selectedType]);
 
   const activeVariant = useMemo(() => {
-    if (!product || product.variants.length === 0) return null;
-    return product.variants.find((v) => v.id === selectedVariantId) || product.variants[0];
-  }, [product, selectedVariantId]);
+    if (!selectedType || !selectedDuration) return null;
+    return (
+      selectableVariants.find(
+        (variant) => (variant.optionType || "استاندارد") === selectedType && variant.duration === selectedDuration,
+      ) || null
+    );
+  }, [selectableVariants, selectedType, selectedDuration]);
 
   if (!product) return null;
 
-  const outOfStock = !activeVariant || (activeVariant.stockCount ?? 0) <= 0;
+  const selectionComplete = Boolean(selectedType && selectedDuration && activeVariant);
+  const outOfStock = selectionComplete && activeVariant ? (activeVariant.stockCount ?? 0) <= 0 : false;
 
-  // Use product-specific features from DB if set, otherwise fall back to defaults
   const features =
     product.features && product.features.length > 0
       ? product.features.map((label, i) => ({
@@ -128,60 +160,75 @@ export default function ProductDetailModal({ isOpen, onClose, product, initialVa
 
           {/* Plan selector */}
           <div className="px-5">
-            <h3 className="text-sm font-bold text-[#F5F5F5] mb-3">انتخاب پلن</h3>
-            <div className="space-y-2.5">
-              {product.variants.map((variant) => {
-                const isSelected = (selectedVariantId || product.variants[0].id) === variant.id;
-                const variantOutOfStock = (variant.stockCount ?? 0) <= 0;
-
+            <h3 className="text-sm font-bold text-[#F5F5F5] mb-3">انتخاب نوع</h3>
+            <div className="grid grid-cols-2 gap-2 mb-5">
+              {typeOptions.map((type) => {
+                const isSelected = selectedType === type;
                 return (
                   <button
-                    key={variant.id}
-                    onClick={() => setSelectedVariantId(variant.id)}
-                    className="w-full flex items-center justify-between p-4 rounded-2xl transition-all duration-200"
+                    key={type}
+                    onClick={() => {
+                      setSelectedType(type);
+                      setSelectedDuration("");
+                    }}
+                    className="py-3 px-3 rounded-2xl text-xs font-bold transition-all"
                     style={
                       isSelected
-                        ? {
-                            background: "rgba(230,57,70,0.08)",
-                            border: "1.5px solid rgba(230,57,70,0.6)",
-                            boxShadow: "0 0 20px rgba(230,57,70,0.08)",
-                          }
-                        : {
-                            background: "rgba(255,255,255,0.04)",
-                            border: "1px solid rgba(255,255,255,0.08)",
-                          }
+                        ? { background: "rgba(230,57,70,0.1)", border: "1.5px solid rgba(230,57,70,0.65)", color: "#F5F5F5" }
+                        : { background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", color: "rgba(245,245,245,0.62)" }
                     }
                   >
-                    <div className="flex items-center gap-3">
-                      <div
-                        className="w-5 h-5 rounded-full border-2 flex items-center justify-center flex-shrink-0 transition-all"
-                        style={
-                          isSelected
-                            ? { borderColor: "#E63946", background: "#E63946" }
-                            : { borderColor: "rgba(255,255,255,0.2)" }
-                        }
-                      >
-                        {isSelected && <div className="w-2 h-2 bg-white rounded-full" />}
-                      </div>
-                      <div className="text-right">
-                        <p className="text-sm font-bold text-[#F5F5F5]">{variant.duration}</p>
-                        <p
-                          className="text-[10px] mt-0.5"
-                          style={{ color: variantOutOfStock ? "#E63946" : "#10b981" }}
-                        >
-                          {variantOutOfStock ? "ناموجود" : `موجودی: ${toPersianDigits(variant.stockCount || 0)}`}
-                        </p>
-                      </div>
-                    </div>
-
-                    <div className="text-left">
-                      <p className="text-base font-bold text-[#F5F5F5]">{toPersianDigits(variant.priceLabel)}</p>
-                      <p className="text-[10px] text-[#F5F5F5]/40">تومان</p>
-                    </div>
+                    {displayTypeLabel(type)}
                   </button>
                 );
               })}
             </div>
+
+            {selectedType && (
+              <>
+                <h3 className="text-sm font-bold text-[#F5F5F5] mb-3">انتخاب مدت</h3>
+                <div className="grid grid-cols-2 gap-2">
+                  {durationOptions.map((duration) => {
+                    const isSelected = selectedDuration === duration;
+                    return (
+                      <button
+                        key={duration}
+                        onClick={() => setSelectedDuration(duration)}
+                        className="py-3 px-3 rounded-2xl text-xs font-bold transition-all"
+                        style={
+                          isSelected
+                            ? { background: "rgba(230,57,70,0.1)", border: "1.5px solid rgba(230,57,70,0.65)", color: "#F5F5F5" }
+                            : { background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", color: "rgba(245,245,245,0.62)" }
+                        }
+                      >
+                        {duration}
+                      </button>
+                    );
+                  })}
+                </div>
+              </>
+            )}
+
+            {selectionComplete && activeVariant && (
+              <div
+                className="mt-5 flex items-center justify-between rounded-2xl p-4"
+                style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)" }}
+              >
+                <div>
+                  <p className="text-[10px] text-[#F5F5F5]/45 mb-1">قیمت نهایی</p>
+                  <p className="text-lg font-bold text-[#F5F5F5]">
+                    {toPersianDigits(activeVariant.priceLabel)} <span className="text-[10px] text-[#F5F5F5]/40">تومان</span>
+                  </p>
+                </div>
+                <p className="text-[10px] font-bold" style={{ color: outOfStock ? "#E63946" : "#10b981" }}>
+                  {outOfStock ? "ناموجود" : `موجودی: ${toPersianDigits(activeVariant.stockCount || 0)}`}
+                </p>
+              </div>
+            )}
+
+            {!selectionComplete && (
+              <p className="mt-5 text-[11px] text-[#F5F5F5]/45 text-center">برای نمایش قیمت، نوع و مدت را انتخاب کنید.</p>
+            )}
           </div>
         </div>
 
@@ -194,11 +241,11 @@ export default function ProductDetailModal({ isOpen, onClose, product, initialVa
           }}
         >
           <button
-            disabled={outOfStock}
+            disabled={!selectionComplete || outOfStock}
             onClick={() => activeVariant && onProceedToCheckout(activeVariant)}
             className="w-full py-4 rounded-2xl text-sm font-bold transition-all active:scale-95"
             style={
-              outOfStock
+              !selectionComplete || outOfStock
                 ? { background: "rgba(255,255,255,0.06)", color: "rgba(245,245,245,0.3)", cursor: "not-allowed" }
                 : {
                     background: "linear-gradient(135deg, #E63946 0%, #c0303c 100%)",
@@ -207,9 +254,7 @@ export default function ProductDetailModal({ isOpen, onClose, product, initialVa
                   }
             }
           >
-            {outOfStock
-              ? "ناموجود"
-              : `خرید — ${toPersianDigits(activeVariant?.priceLabel || "0")} تومان`}
+            {!selectionComplete ? "انتخاب نوع و مدت" : outOfStock ? "ناموجود" : `خرید — ${toPersianDigits(activeVariant?.priceLabel || "0")} تومان`}
           </button>
         </div>
       </DialogContent>

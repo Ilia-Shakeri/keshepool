@@ -395,7 +395,7 @@ async def view_user_detail(callback: CallbackQuery):
         f"👤 <b>{_h(user.first_name)} {_h(user.last_name or '')}</b>\n"
         f"🆔 Telegram ID: <code>{_h(user.telegram_id)}</code>\n"
         f"📛 Username: @{_h(user.username or 'N/A')}\n"
-        f"💰 Balance: <b>{balance:,.0f}</b> Toman\n"
+        f"💰 Balance: <b>{balance:,.0f}</b> تومان\n"
         f"📦 Orders: <b>{order_count}</b>\n"
         f"⭐ Premium: {'✅' if user.is_premium else '—'}\n"
         f"🔑 Role: <code>{_h(user.role)}</code>\n"
@@ -544,7 +544,7 @@ async def process_search(message: Message, state: FSMContext):
         text = (
             f"👤 <b>{_h(user.first_name)} {_h(user.last_name or '')}</b>\n"
             f"🆔 <code>{_h(user.telegram_id)}</code> | @{_h(user.username or 'N/A')}\n"
-            f"💰 Balance: <b>{balance:,.0f}</b> Toman | Role: <code>{_h(user.role)}</code>"
+            f"💰 Balance: <b>{balance:,.0f}</b> تومان | Role: <code>{_h(user.role)}</code>"
         )
         markup = InlineKeyboardMarkup(
             inline_keyboard=[[

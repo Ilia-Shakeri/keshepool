@@ -13,6 +13,7 @@ import { toPersianDigits } from "@/lib/utils";
 type CardVariant = ProductVariant & {
   sourceProductId: string;
   optionLabel: string;
+  optionType: string;
   optionFeatures?: string[] | null;
 };
 
@@ -24,7 +25,7 @@ const CATEGORIES: { id: ProductCategory | "all"; label: string }[] = [
   { id: "all", label: "همه" },
   { id: "vpn", label: "تحریم‌شکن" },
   { id: "video", label: "استریم" },
-  { id: "ai", label: "Smart Tools" },
+  { id: "ai", label: "ابزارهای هوشمند" },
   { id: "music", label: "موسیقی" },
   { id: "tools", label: "ابزار" },
   { id: "gaming", label: "گیمینگ" },
@@ -43,8 +44,16 @@ function getVariantOptionLabel(product: Product, variant: ProductVariant): strin
   return [productOption, variant.duration].filter(Boolean).join(" - ");
 }
 
-function getCardVariantKey(variant: CardVariant): string {
-  return `${variant.sourceProductId}:${variant.id}`;
+function getProductOptionType(product: Product): string {
+  const parentName = getParentProductName(product);
+  return product.brand.replace(parentName, "").trim() || "استاندارد";
+}
+
+function getStartingVariant(product: ProductCardModel): CardVariant | null {
+  return product.variants.reduce<CardVariant | null>((lowest, variant) => {
+    if (!lowest) return variant;
+    return variant.rawPrice < lowest.rawPrice ? variant : lowest;
+  }, null);
 }
 
 function ProductsContent() {
@@ -54,11 +63,10 @@ function ProductsContent() {
   const [products, setProducts] = useState<Product[]>([]);
   const [activeCategory, setActiveCategory] = useState<ProductCategory | "all">(initialCategory);
   const [query, setQuery] = useState("");
-  const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
+  const [selectedProduct, setSelectedProduct] = useState<ProductCardModel | null>(null);
+  const [checkoutProduct, setCheckoutProduct] = useState<Product | null>(null);
   const [isDetailModalOpen, setIsDetailModalOpen] = useState(false);
-  const [detailVariantId, setDetailVariantId] = useState("");
   const [selectedVariant, setSelectedVariant] = useState<ProductVariant | null>(null);
-  const [selectedCardVariants, setSelectedCardVariants] = useState<Record<string, string>>({});
   const [isCheckoutOpen, setIsCheckoutOpen] = useState(false);
   const [walletBalance, setWalletBalance] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
@@ -84,6 +92,7 @@ function ProductsContent() {
         ...variant,
         sourceProductId: product.id,
         optionLabel: getVariantOptionLabel(product, variant),
+        optionType: getProductOptionType(product),
         optionFeatures: product.features,
       }));
 
@@ -121,18 +130,18 @@ function ProductsContent() {
   }, [groupedProducts, activeCategory, query]);
 
   const handleProductSelect = (product: ProductCardModel) => {
-    const selectedVariantKey = selectedCardVariants[product.id] || (product.variants[0] ? getCardVariantKey(product.variants[0]) : "");
-    const selectedCardVariant = product.variants.find((variant) => getCardVariantKey(variant) === selectedVariantKey) || product.variants[0];
-    const sourceProduct = selectedCardVariant ? productById.get(selectedCardVariant.sourceProductId) : null;
-
-    if (!sourceProduct) return;
-
-    setDetailVariantId(selectedCardVariant.id);
-    setSelectedProduct(sourceProduct);
+    setSelectedVariant(null);
+    setCheckoutProduct(null);
+    setSelectedProduct(product);
     setIsDetailModalOpen(true);
   };
 
   const handleProceedToCheckout = (variant: ProductVariant) => {
+    const sourceProductId = (variant as CardVariant).sourceProductId;
+    const sourceProduct = sourceProductId ? productById.get(sourceProductId) : null;
+    if (!sourceProduct) return;
+
+    setCheckoutProduct(sourceProduct);
     setSelectedVariant(variant);
     setIsDetailModalOpen(false);
     setTimeout(() => setIsCheckoutOpen(true), 150);
@@ -183,9 +192,7 @@ function ProductsContent() {
                 />
               ))
             : filteredProducts.map((product) => {
-                const activeVariantId = selectedCardVariants[product.id] || (product.variants[0] ? getCardVariantKey(product.variants[0]) : "");
-                const activeVariant = product.variants.find((variant) => getCardVariantKey(variant) === activeVariantId) || product.variants[0];
-                const visibleFeatures = activeVariant?.optionFeatures?.slice(0, 2) || [];
+                const startingVariant = getStartingVariant(product);
 
                 return (
                 <div
@@ -219,38 +226,11 @@ function ProductsContent() {
 
                     <div className="flex flex-col gap-2 w-full">
                       <h3 className="text-lg font-black text-[#F5F5F5] leading-tight truncate">{product.brand}</h3>
-                      {product.variants.length > 1 && (
-                        <select
-                          value={activeVariantId}
-                          onClick={(event) => event.stopPropagation()}
-                          onChange={(event) => {
-                            setSelectedCardVariants((current) => ({
-                              ...current,
-                              [product.id]: event.target.value,
-                            }));
-                          }}
-                          className="relative z-20 w-full rounded-xl bg-white/[0.08] border border-white/[0.12] px-2.5 py-1.5 text-[10px] font-bold text-[#F5F5F5] focus:outline-none"
-                        >
-                          {product.variants.map((variant) => (
-                            <option key={getCardVariantKey(variant)} value={getCardVariantKey(variant)} className="bg-[#171719]">
-                              {variant.optionLabel}
-                            </option>
-                          ))}
-                        </select>
-                      )}
-                      {visibleFeatures.length > 0 && (
-                        <div className="min-h-8 space-y-0.5">
-                          {visibleFeatures.map((feature) => (
-                            <p key={feature} className="text-[9px] text-[#F5F5F5]/45 leading-tight truncate">
-                              {feature}
-                            </p>
-                          ))}
-                        </div>
-                      )}
                     </div>
 
                     <div className="w-full pt-1 border-t border-white/[0.08]">
-                      <span className="text-xs font-bold text-emerald-400">{toPersianDigits(activeVariant?.priceLabel || "0")}</span>
+                      <span className="text-[10px] text-[#F5F5F5]/40 ml-1">از</span>
+                      <span className="text-xs font-bold text-emerald-400">{toPersianDigits(startingVariant?.priceLabel || "0")}</span>
                       <span className="text-[9px] text-[#F5F5F5]/40 mr-1">تومان</span>
                     </div>
                   </div>
@@ -273,15 +253,14 @@ function ProductsContent() {
         isOpen={isDetailModalOpen}
         onClose={() => setIsDetailModalOpen(false)}
         product={selectedProduct}
-        initialVariantId={detailVariantId}
         onProceedToCheckout={handleProceedToCheckout}
       />
 
-      {selectedProduct && selectedVariant && (
+      {checkoutProduct && selectedVariant && (
         <CheckoutModal
           isOpen={isCheckoutOpen}
           setIsOpen={setIsCheckoutOpen}
-          product={selectedProduct}
+          product={checkoutProduct}
           variant={selectedVariant}
           walletBalance={walletBalance}
           onSuccess={() => getWalletBalance().then((d) => setWalletBalance(d.balance)).catch(() => {})}

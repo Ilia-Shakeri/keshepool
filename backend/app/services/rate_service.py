@@ -14,17 +14,17 @@ USDT_RATE_KEY = "config:usdt_to_irr_rate"
 USDT_LIVE_RATE_KEY = "cache:usdt_live_rate"
 LIVE_RATE_TTL = 90  # seconds
 
-# Iranian exchanges quote USDT against Toman/Rial. Nobitex is primary, Wallex is fallback.
+# Iranian exchanges quote USDT against local currency/Rial. Nobitex is primary, Wallex is fallback.
 NOBITEX_URL = "https://api.nobitex.ir/v2/orderbook/USDTIRT"
 WALLEX_URL = "https://api.wallex.ir/v1/markets"
 
 
 async def _fetch_live_rate() -> Decimal | None:
-    """Fetch the current USDT→Toman rate from a live market source.
+    """Fetch the current USDT rate from a live market source.
 
-    Returns Toman per 1 USDT, or None if every provider is unreachable.
+    Returns local currency per 1 USDT, or None if every provider is unreachable.
     """
-    # Nobitex — quotes in Rial, so divide by 10 to reach Toman.
+    # Nobitex quotes in Rial, so divide by 10 to reach the wallet unit.
     try:
         async with httpx.AsyncClient(timeout=8.0) as client:
             res = await client.get(NOBITEX_URL)
@@ -40,7 +40,7 @@ async def _fetch_live_rate() -> Decimal | None:
     except Exception as exc:
         logger.warning("Nobitex rate fetch failed: %s", exc)
 
-    # Wallex — quotes USDT/TMN directly in Toman.
+    # Wallex quotes USDT/TMN directly in the wallet unit.
     try:
         async with httpx.AsyncClient(timeout=8.0) as client:
             res = await client.get(WALLEX_URL)
@@ -59,7 +59,7 @@ async def _fetch_live_rate() -> Decimal | None:
 
 
 async def get_usdt_rate() -> Decimal:
-    """Return the active USDT→Toman rate (Toman per 1 USDT).
+    """Return the active USDT rate in the wallet unit.
 
     Resolution order:
       1. Admin manual override in Redis — full operator control.
@@ -95,5 +95,5 @@ async def get_usdt_rate() -> Decimal:
 
 
 async def set_usdt_rate(rate: int) -> None:
-    """Persist an admin manual override for the USDT→Toman rate."""
+    """Persist an admin manual override for the USDT wallet-unit rate."""
     await redis_client.set(USDT_RATE_KEY, str(rate))
