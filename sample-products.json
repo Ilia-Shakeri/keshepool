@@ -1,0 +1,65 @@
+{
+  "products": [
+    {
+      "id": "music_premium_individual",
+      "title": "Music Premium Individual",
+      "brand": "Music Premium Individual",
+      "subtitle": "Single-user premium music plan",
+      "icon": "Music",
+      "assetUrl": null,
+      "gradient": "from-green-500 to-black",
+      "category": "music",
+      "features": [
+        "Instant delivery",
+        "Renewable account",
+        "Support included"
+      ],
+      "variants": [
+        {
+          "id": "music_premium_individual_1m",
+          "duration": "1 month",
+          "rawPrice": 250000,
+          "priceLabel": "250,000",
+          "credentials": [
+            "music-user-001:music-pass-001"
+          ]
+        },
+        {
+          "id": "music_premium_individual_3m",
+          "duration": "3 months",
+          "rawPrice": 690000,
+          "priceLabel": "690,000",
+          "credentials": [
+            "music-user-002:music-pass-002"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "secure_vpn_personal",
+      "title": "Secure VPN Personal",
+      "brand": "Secure VPN Individual",
+      "subtitle": "Private VPN configuration for one user",
+      "icon": "Shield",
+      "assetUrl": null,
+      "gradient": "from-blue-500 to-slate-950",
+      "category": "vpn",
+      "features": [
+        "Fast activation",
+        "Dedicated configuration",
+        "Support included"
+      ],
+      "variants": [
+        {
+          "id": "secure_vpn_personal_1m",
+          "duration": "1 month",
+          "rawPrice": 180000,
+          "priceLabel": "180,000",
+          "credentials": [
+            "vless://example-personal-config"
+          ]
+        }
+      ]
+    }
+  ]
+}

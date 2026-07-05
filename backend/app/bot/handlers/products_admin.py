@@ -8,7 +8,7 @@ import mimetypes
 import re
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Any, Dict, List, Tuple
 
 from aiogram import F, Router
 from aiogram.filters import Command
@@ -68,10 +68,28 @@ def _cancel_markup(lang: str) -> InlineKeyboardMarkup:
     )
 
 
-# ── Brand-grouped navigation ──────────────────────────────────────────────────
+# ── Product management navigation ─────────────────────────────────────────────
+
+async def show_product_management_menu(target, lang: str, state: FSMContext, send_new: bool = False) -> None:
+    """Show the three primary product management actions."""
+    await state.clear()
+    markup = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=get_text(lang, "add_single_product"), callback_data="add_single_product")],
+            [InlineKeyboardButton(text=get_text(lang, "add_bulk_product"), callback_data="bulk_import_products")],
+            [InlineKeyboardButton(text=get_text(lang, "view_products"), callback_data="view_products")],
+        ]
+    )
+    text = get_text(lang, "product_mgmt_title")
+
+    if send_new:
+        await target.answer(text=text, reply_markup=markup, parse_mode="HTML")
+    else:
+        await target.message.edit_text(text=text, reply_markup=markup, parse_mode="HTML")
+
 
 async def show_brands(target, lang: str, state: FSMContext, send_new: bool = False) -> None:
-    """Show unique product brands as grouped buttons. Entry point for product management."""
+    """Show unique product brands as grouped buttons for product editing."""
     try:
         async with AsyncSessionLocal() as session:
             result = await session.execute(
@@ -89,9 +107,7 @@ async def show_brands(target, lang: str, state: FSMContext, send_new: bool = Fal
             await target.message.answer(err)
         return
 
-    keyboard: list[list[InlineKeyboardButton]] = [
-        [InlineKeyboardButton(text=get_text(lang, "bulk_import"), callback_data="bulk_import_products")]
-    ]
+    keyboard: list[list[InlineKeyboardButton]] = []
 
     for brand, cnt in brands_data:
         keyboard.append([
@@ -101,9 +117,14 @@ async def show_brands(target, lang: str, state: FSMContext, send_new: bool = Fal
             )
         ])
 
-    keyboard.append([InlineKeyboardButton(text=get_text(lang, "back_to_menu"), callback_data="main_menu")])
+    if not keyboard:
+        keyboard.append([InlineKeyboardButton(text=get_text(lang, "add_single_product"), callback_data="add_single_product")])
+
+    keyboard.append([InlineKeyboardButton(text=get_text(lang, "back"), callback_data="manage_inventory")])
     markup = InlineKeyboardMarkup(inline_keyboard=keyboard)
-    text = get_text(lang, "product_mgmt_title")
+    text = get_text(lang, "products_list_title")
+    if not brands_data:
+        text += "\n\n" + get_text(lang, "product_list_empty")
 
     if send_new:
         await target.answer(text=text, reply_markup=markup, parse_mode="HTML")
@@ -116,8 +137,166 @@ async def show_brands(target, lang: str, state: FSMContext, send_new: bool = Fal
 @products_router.callback_query(F.data == "manage_inventory")
 async def trigger_product_management(callback: CallbackQuery, state: FSMContext):
     lang = await _lang(callback.from_user.id)
+    await show_product_management_menu(callback, lang, state)
+    await callback.answer()
+
+
+@products_router.callback_query(F.data == "view_products")
+async def trigger_product_list(callback: CallbackQuery, state: FSMContext):
+    lang = await _lang(callback.from_user.id)
     await show_brands(callback, lang, state)
     await callback.answer()
+
+
+@products_router.callback_query(F.data == "add_single_product")
+async def prompt_single_product(callback: CallbackQuery, state: FSMContext):
+    lang = await _lang(callback.from_user.id)
+    await callback.message.answer(get_text(lang, "single_product_help"), reply_markup=_cancel_markup(lang), parse_mode="HTML")
+    await state.set_state(ProductAdminStates.awaiting_single_product_json)
+    await callback.answer()
+
+
+def _coerce_product_payload(raw: Any) -> Dict[str, Any]:
+    """Validate and normalize one product payload from admin input."""
+    if not isinstance(raw, dict):
+        raise ValueError("Product payload must be a JSON object.")
+
+    product_id = _validate_id(str(raw.get("id", "")), "id")
+    title = str(raw.get("title", "")).strip()
+    brand = str(raw.get("brand", "")).strip()
+    category = str(raw.get("category", "tools")).strip() or "tools"
+    variants = raw.get("variants")
+
+    if not title or not brand:
+        raise ValueError("title and brand are required.")
+    if category not in ALLOWED_CATEGORIES:
+        raise ValueError(f"category must be one of: {', '.join(sorted(ALLOWED_CATEGORIES))}")
+    if not isinstance(variants, list) or not variants:
+        raise ValueError("variants must be a non-empty array.")
+
+    features = raw.get("features")
+    if features is not None:
+        if not isinstance(features, list):
+            raise ValueError("features must be an array.")
+        features = [str(feature).strip() for feature in features if str(feature).strip()][:MAX_FEATURES]
+
+    normalized_variants = []
+    for index, variant_raw in enumerate(variants, start=1):
+        if not isinstance(variant_raw, dict):
+            raise ValueError(f"variant {index} must be an object.")
+
+        variant_id = _validate_id(str(variant_raw.get("id", "")), "variant_id")
+        duration = str(variant_raw.get("duration", "")).strip()
+        raw_price = Decimal(str(variant_raw.get("rawPrice", variant_raw.get("raw_price", ""))))
+        if not duration or raw_price <= 0:
+            raise ValueError(f"variant {index} requires duration and positive rawPrice.")
+
+        credentials = variant_raw.get("credentials", [])
+        if credentials is None:
+            credentials = []
+        if not isinstance(credentials, list):
+            raise ValueError(f"variant {index} credentials must be an array.")
+
+        normalized_variants.append(
+            {
+                "id": variant_id,
+                "duration": duration,
+                "raw_price": raw_price,
+                "price_label": str(variant_raw.get("priceLabel") or _price_label(raw_price)),
+                "credentials": [str(item).strip() for item in credentials if str(item).strip()],
+            }
+        )
+
+    return {
+        "id": product_id,
+        "title": title,
+        "brand": brand,
+        "subtitle": str(raw.get("subtitle", "")).strip(),
+        "icon": str(raw.get("icon", "Box") or "Box").strip(),
+        "asset_url": raw.get("assetUrl"),
+        "gradient": str(raw.get("gradient", "from-gray-700 to-black") or "from-gray-700 to-black").strip(),
+        "category": category,
+        "features": features,
+        "variants": normalized_variants,
+    }
+
+
+async def _upsert_product_payload(session, payload: Dict[str, Any]) -> int:
+    """Create or update one product, its variants, and optional inventory rows."""
+    product = await session.get(Product, payload["id"])
+    if not product:
+        product = Product(id=payload["id"])
+        session.add(product)
+
+    product.title = payload["title"]
+    product.brand = payload["brand"]
+    product.subtitle = payload["subtitle"]
+    product.icon = payload["icon"]
+    product.asset_url = payload["asset_url"]
+    product.gradient = payload["gradient"]
+    product.category = payload["category"]
+    product.features = json.dumps(payload["features"], ensure_ascii=False) if payload["features"] else None
+    product.is_active = True
+
+    inserted_credentials = 0
+    for variant_payload in payload["variants"]:
+        variant = await session.get(ProductVariant, variant_payload["id"])
+        if not variant:
+            variant = ProductVariant(id=variant_payload["id"], product_id=payload["id"])
+            session.add(variant)
+
+        variant.product_id = payload["id"]
+        variant.duration = variant_payload["duration"]
+        variant.raw_price = variant_payload["raw_price"]
+        variant.price_label = variant_payload["price_label"]
+        variant.is_active = True
+
+        for credential in variant_payload["credentials"]:
+            exists = await session.execute(
+                select(InventoryItem).where(
+                    InventoryItem.product_id == payload["id"],
+                    InventoryItem.variant_id == variant_payload["id"],
+                    InventoryItem.credentials == credential,
+                )
+            )
+            if exists.scalars().first():
+                continue
+
+            session.add(
+                InventoryItem(
+                    product_id=payload["id"],
+                    variant_id=variant_payload["id"],
+                    credentials=credential,
+                    status=ItemStatus.AVAILABLE,
+                )
+            )
+            inserted_credentials += 1
+
+    return inserted_credentials
+
+
+@products_router.message(ProductAdminStates.awaiting_single_product_json)
+async def process_single_product_json(message: Message, state: FSMContext):
+    lang = await _lang(message.from_user.id)
+    try:
+        payload = _coerce_product_payload(json.loads(message.text or ""))
+    except (json.JSONDecodeError, InvalidOperation, ValueError) as exc:
+        logger.warning("Single product payload rejected: %s", exc)
+        await message.answer(get_text(lang, "single_product_invalid"))
+        return
+
+    try:
+        async with AsyncSessionLocal() as session:
+            await _upsert_product_payload(session, payload)
+            await session.commit()
+    except Exception as exc:
+        logger.error("Single product upsert failed: %s", exc, exc_info=True)
+        await message.answer(get_text(lang, "db_error"))
+        return
+
+    await redis_client.delete("cache:products:all")
+    await state.clear()
+    await message.answer(get_text(lang, "single_product_success"))
 
 
 @products_router.callback_query(F.data.startswith("sel_brand_"))
@@ -147,7 +326,7 @@ async def handle_brand_selection(callback: CallbackQuery, state: FSMContext):
                 break
 
     if not target_brand:
-        await callback.answer("Brand not found.", show_alert=True)
+        await callback.answer(get_text(lang, "brand_not_found"), show_alert=True)
         return
 
     brand_products = [p for p in all_products if p.brand == target_brand]
@@ -219,6 +398,9 @@ async def select_product_action(callback: CallbackQuery, state: FSMContext):
             [
                 InlineKeyboardButton(text=toggle_label, callback_data="action_toggle_active"),
             ],
+            [
+                InlineKeyboardButton(text=get_text(lang, "delete_product"), callback_data="action_delete_product"),
+            ],
             [InlineKeyboardButton(text=get_text(lang, "back"), callback_data="manage_inventory")],
         ]
     )
@@ -271,6 +453,49 @@ async def toggle_product_active(callback: CallbackQuery, state: FSMContext):
     except Exception:
         # Message may no longer be editable; silently ignore
         pass
+
+
+@products_router.callback_query(F.data == "action_delete_product")
+async def prompt_delete_product(callback: CallbackQuery, state: FSMContext):
+    lang = await _lang(callback.from_user.id)
+    markup = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=get_text(lang, "confirm_delete_yes"), callback_data="confirm_delete_product")],
+            [InlineKeyboardButton(text=get_text(lang, "back"), callback_data="manage_inventory")],
+        ]
+    )
+    await callback.message.answer(get_text(lang, "confirm_delete_product"), reply_markup=markup)
+    await callback.answer()
+
+
+@products_router.callback_query(F.data == "confirm_delete_product")
+async def soft_delete_product(callback: CallbackQuery, state: FSMContext):
+    lang = await _lang(callback.from_user.id)
+    data = await state.get_data()
+    product_id = data.get("target_product_id")
+
+    try:
+        async with AsyncSessionLocal() as session:
+            product = await session.get(Product, product_id)
+            if not product:
+                await callback.answer(get_text(lang, "not_found"), show_alert=True)
+                return
+            product.is_active = False
+            variants_result = await session.execute(
+                select(ProductVariant).where(ProductVariant.product_id == product_id).with_for_update()
+            )
+            for variant in variants_result.scalars().all():
+                variant.is_active = False
+            await session.commit()
+    except Exception as exc:
+        logger.error("Product delete failed: %s", exc, exc_info=True)
+        await callback.answer(get_text(lang, "db_error"), show_alert=True)
+        return
+
+    await redis_client.delete("cache:products:all")
+    await state.clear()
+    await callback.message.edit_text(get_text(lang, "product_deleted"))
+    await callback.answer()
 
 
 # ── Edit title ────────────────────────────────────────────────────────────────
@@ -368,7 +593,8 @@ async def prompt_new_features(callback: CallbackQuery, state: FSMContext):
             product = await session.get(Product, product_id)
             if product and product.features:
                 fl = json.loads(product.features)
-                current_preview = "\n\nCurrent:\n" + "\n".join(f"  • {f}" for f in fl)
+                current_label = "Current" if lang == "en" else "فعلی"
+                current_preview = f"\n\n{current_label}:\n" + "\n".join(f"  • {f}" for f in fl)
     except Exception:
         pass
 
@@ -708,17 +934,50 @@ async def process_bulk_import_file(message: Message, state: FSMContext):
     lang = await _lang(message.from_user.id)
     document = message.document
 
-    if not document.file_name.lower().endswith(".txt"):
+    file_name = document.file_name.lower()
+    if not file_name.endswith((".json", ".csv", ".txt")):
         await message.answer(get_text(lang, "txt_required"))
         return
 
     if document.file_size and document.file_size > 512_000:
-        await message.answer("❌ File too large. Max 512 KB for bulk import.")
+        await message.answer(get_text(lang, "bulk_file_too_large"))
         return
 
     buffer = io.BytesIO()
     await message.bot.download(document, destination=buffer)
     content = buffer.getvalue().decode("utf-8-sig", errors="replace")
+
+    if file_name.endswith(".json"):
+        try:
+            raw_payload = json.loads(content)
+            raw_products = raw_payload.get("products") if isinstance(raw_payload, dict) else raw_payload
+            if not isinstance(raw_products, list):
+                raise ValueError("JSON root must be an array or an object with products array.")
+            product_payloads = [_coerce_product_payload(item) for item in raw_products]
+        except (json.JSONDecodeError, InvalidOperation, ValueError) as exc:
+            await message.answer(get_text(lang, "bulk_import_errors") + f"\n{_h(exc)}", parse_mode="HTML")
+            return
+
+        inserted_credentials = 0
+        try:
+            async with AsyncSessionLocal() as session:
+                for payload in product_payloads:
+                    inserted_credentials += await _upsert_product_payload(session, payload)
+                await session.commit()
+        except Exception as exc:
+            logger.error("JSON bulk import failed: %s", exc, exc_info=True)
+            await message.answer(get_text(lang, "db_error"))
+            return
+
+        await redis_client.delete("cache:products:all")
+        await state.clear()
+        await message.answer(
+            get_text(lang, "bulk_import_success")
+            .replace("{products}", str(len(product_payloads)))
+            .replace("{credentials}", str(inserted_credentials))
+        )
+        return
+
     rows, errors = parse_product_import(content)
 
     if errors:

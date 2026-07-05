@@ -203,10 +203,10 @@ async def shortcut_home(message: Message, state: FSMContext):
 
 @admin_router.message(F.text.func(lambda t: t and t.startswith("📦")))
 async def shortcut_inventory(message: Message, state: FSMContext):
-    from app.bot.handlers.products_admin import show_brands
+    from app.bot.handlers.products_admin import show_product_management_menu
     lang = await get_admin_lang(message.from_user.id)
     await state.clear()
-    await show_brands(message, lang, state, send_new=True)
+    await show_product_management_menu(message, lang, state, send_new=True)
 
 
 @admin_router.message(F.text.func(lambda t: t and t.startswith("👥")))
@@ -437,7 +437,7 @@ async def view_user_orders(callback: CallbackQuery):
         return
 
     if not orders:
-        text = "📦 No orders found for this user."
+        text = get_text(lang, "no_orders_for_user")
     else:
         lines = [f"📦 <b>Last {len(orders)} orders:</b>\n"]
         for o in orders:
@@ -476,13 +476,13 @@ async def process_user_notification(message: Message, state: FSMContext):
     body = "\n".join(lines[1:]).strip() if len(lines) > 1 else title
 
     if not title:
-        await message.answer("❌ Empty message.")
+        await message.answer(get_text(lang, "empty_message"))
         return
 
     data = await state.get_data()
     target_id = data.get("notify_target_user_id")
     if not target_id:
-        await message.answer("❌ Target user lost. Start over.")
+        await message.answer(get_text(lang, "target_user_lost"))
         await state.clear()
         return
 
@@ -548,7 +548,7 @@ async def process_search(message: Message, state: FSMContext):
         )
         markup = InlineKeyboardMarkup(
             inline_keyboard=[[
-                InlineKeyboardButton(text="👁 View Detail", callback_data=f"user_detail_{user.id}")
+                InlineKeyboardButton(text=get_text(lang, "view_detail"), callback_data=f"user_detail_{user.id}")
             ]]
         )
         await message.answer(text=text, reply_markup=markup, parse_mode="HTML")
@@ -572,7 +572,7 @@ async def process_broadcast(message: Message, state: FSMContext):
     body = "\n".join(lines[1:]).strip() if len(lines) > 1 else title
 
     if not title:
-        await message.answer("❌ Empty message.")
+        await message.answer(get_text(lang, "empty_message"))
         return
 
     await state.clear()
@@ -702,22 +702,33 @@ async def view_cashout_detail(callback: CallbackQuery):
 
     uname = _h(c.user.username if c.user else "?")
     fname = _h(c.user.first_name if c.user else "")
+    lname = _h(c.user.last_name if c.user else "")
+    telegram_id = _h(c.user.telegram_id if c.user else "?")
+    app_user_id = _h(c.user.id if c.user else "?")
     platform = _h(c.source_platform)
     custom = _h(c.custom_source or "")
     details = _h(c.details_text or "")
+    status = _h(c.status.value if c.status else "?")
     date = c.created_at.strftime("%Y-%m-%d %H:%M") if c.created_at else "?"
 
     text = (
         f"💱 <b>Cashout Request #{cashout_id}</b>\n\n"
-        f"👤 User: @{uname} {fname}\n"
+        f"👤 <b>User Information</b>\n"
+        f"Internal ID: <code>{app_user_id}</code>\n"
+        f"Telegram ID: <code>{telegram_id}</code>\n"
+        f"Username: @{uname}\n"
+        f"Name: {fname} {lname}\n\n"
+        f"📌 <b>Request Information</b>\n"
         f"🌐 Platform: {platform}"
         + (f" ({custom})" if custom else "")
-        + f"\n📅 Date: {date}\n\n"
-        f"📝 Details:\n{details}"
+        + f"\n📅 Date: {date}\n"
+        f"📍 Status: {status}\n\n"
+        f"📝 <b>Request Message</b>\n{details}"
     )
 
     markup = InlineKeyboardMarkup(
         inline_keyboard=[
+            [InlineKeyboardButton(text=get_text(lang, "cashout_private_btn"), callback_data=f"cashout_dm_{cashout_id}")],
             [
                 InlineKeyboardButton(text=get_text(lang, "mark_done_btn"), callback_data=f"cashout_done_{cashout_id}"),
                 InlineKeyboardButton(text=get_text(lang, "mark_reviewed_btn"), callback_data=f"cashout_review_{cashout_id}"),
@@ -727,6 +738,57 @@ async def view_cashout_detail(callback: CallbackQuery):
     )
     await callback.message.edit_text(text=text, reply_markup=markup, parse_mode="HTML")
     await callback.answer()
+
+
+@admin_router.callback_query(F.data.startswith("cashout_dm_"))
+async def prompt_cashout_private_message(callback: CallbackQuery, state: FSMContext):
+    lang = await get_admin_lang(callback.from_user.id)
+    cashout_id = int(callback.data.removeprefix("cashout_dm_"))
+
+    try:
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(
+                select(CashoutRequest)
+                .options(selectinload(CashoutRequest.user))
+                .where(CashoutRequest.id == cashout_id)
+            )
+            cashout = result.scalars().first()
+    except Exception as exc:
+        logger.error("DB error before cashout private message: %s", exc)
+        await callback.answer(get_text(lang, "db_error"), show_alert=True)
+        return
+
+    if not cashout or not cashout.user:
+        await callback.answer(get_text(lang, "not_found"), show_alert=True)
+        return
+
+    await state.update_data(cashout_dm_user_telegram_id=cashout.user.telegram_id, cashout_dm_id=cashout_id)
+    await callback.message.answer(get_text(lang, "cashout_private_prompt"))
+    await state.set_state(AdminPanelStates.awaiting_cashout_private_message)
+    await callback.answer()
+
+
+@admin_router.message(AdminPanelStates.awaiting_cashout_private_message)
+async def process_cashout_private_message(message: Message, state: FSMContext):
+    lang = await get_admin_lang(message.from_user.id)
+    data = await state.get_data()
+    user_telegram_id = data.get("cashout_dm_user_telegram_id")
+    text = (message.text or "").strip()
+
+    if not user_telegram_id or not text:
+        await message.answer(get_text(lang, "invalid_format"))
+        return
+
+    try:
+        await message.bot.send_message(chat_id=user_telegram_id, text=text)
+    except Exception as exc:
+        logger.warning("Cashout private message delivery failed: %s", exc)
+        await message.answer(get_text(lang, "cashout_private_failed"))
+        await state.clear()
+        return
+
+    await state.clear()
+    await message.answer(get_text(lang, "cashout_private_sent"))
 
 
 @admin_router.callback_query(F.data.startswith("cashout_done_"))
