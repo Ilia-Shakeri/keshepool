@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Check, ChevronLeft, Copy, Headphones } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import ProductIcon from "@/components/ProductIcon";
+import ProductIcon from "@/features/products/components/ProductIcon";
 import { getOrders, type UserOrder } from "@/lib/api";
 import { toPersianDigits } from "@/lib/utils";
 

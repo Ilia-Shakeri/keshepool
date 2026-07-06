@@ -3,11 +3,11 @@
 import { Suspense, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { Search, SlidersHorizontal } from "lucide-react";
-import ProductDetailModal from "@/components/ProductDetailModal";
-import CheckoutModal from "@/components/CheckoutModal";
-import ProductIcon from "@/components/ProductIcon";
+import ProductDetailModal from "@/features/products/components/ProductDetailModal";
+import CheckoutModal from "@/features/products/components/CheckoutModal";
+import ProductIcon from "@/features/products/components/ProductIcon";
 import { getProducts, getWalletBalance } from "@/lib/api";
-import type { Product, ProductCategory, ProductVariant } from "@/lib/products";
+import type { Product, ProductCategory, ProductVariant } from "@/features/products/types";
 import { toPersianDigits } from "@/lib/utils";
 
 type CardVariant = ProductVariant & {

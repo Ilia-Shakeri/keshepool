@@ -3,8 +3,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { ChevronRight, CheckCircle2, Clock, Headphones, Shield, Zap } from "lucide-react";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
-import ProductIcon from "@/components/ProductIcon";
-import type { Product, ProductVariant } from "@/lib/products";
+import ProductIcon from "@/features/products/components/ProductIcon";
+import type { Product, ProductVariant } from "@/features/products/types";
 import { toPersianDigits } from "@/lib/utils";
 
 interface ProductDetailModalProps {
@@ -45,8 +45,10 @@ export default function ProductDetailModal({ isOpen, onClose, product, onProceed
   const [selectedDuration, setSelectedDuration] = useState("");
 
   useEffect(() => {
-    setSelectedType("");
-    setSelectedDuration("");
+    queueMicrotask(() => {
+      setSelectedType("");
+      setSelectedDuration("");
+    });
   }, [product?.id, isOpen]);
 
   const selectableVariants = useMemo<SelectableVariant[]>(() => product?.variants || [], [product]);
