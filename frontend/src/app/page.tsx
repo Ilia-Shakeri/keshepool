@@ -3,14 +3,17 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Bell, Bot, Code, Flame, Layout, MessageCircle, MoreHorizontal, Music, PlaySquare, Shield, User, X } from "lucide-react";
-import ProductIcon from "@/components/ProductIcon";
+import ProductIcon from "@/features/products/components/ProductIcon";
 import { getNotifications, getProducts, markNotificationsRead, type UserNotification } from "@/lib/api";
-import type { Product } from "@/lib/products";
+import type { Product } from "@/features/products/types";
 import { toPersianDigits } from "@/lib/utils";
 
 export default function Home() {
   const router = useRouter();
-  const [tgUser, setTgUser] = useState<{ id?: number; first_name?: string; last_name?: string; username?: string } | null>(null);
+  const [tgUser] = useState<{ id?: number; first_name?: string; last_name?: string; username?: string } | null>(() => {
+    if (typeof window === "undefined") return null;
+    return window.Telegram?.WebApp?.initDataUnsafe?.user || null;
+  });
   const [products, setProducts] = useState<Product[]>([]);
   const [notifications, setNotifications] = useState<UserNotification[]>([]);
   const [productError, setProductError] = useState<string | null>(null);
@@ -19,9 +22,6 @@ export default function Home() {
   const bellRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
-    const webApp = window.Telegram?.WebApp;
-    if (webApp) setTgUser(webApp.initDataUnsafe?.user || null);
-
     // Load catalog data from the backend so the mini-app stays synced with admin-bot inventory.
     Promise.allSettled([getProducts(), getNotifications()])
       .then(([productData, notifData]) => {

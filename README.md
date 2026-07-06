@@ -1,46 +1,47 @@
-# Keshepool 💸
+# Keshepool
 
-A modern Telegram Mini App (TWA) designed for purchasing premium accounts, VPN configurations (V2Ray), and managing financial services (crypto/currency exchange).
+A modern Telegram Mini App (TWA) designed for purchasing premium accounts, VPN configurations (V2Ray), and managing financial services such as crypto and currency exchange.
 
-## 🌟 Features
+## Features
 
-* **Seamless Telegram Integration**: Fully functional within Telegram using the TWA SDK.
-* **Extensive Product Catalog**: Premium accounts (Spotify, Netflix, PS Plus, etc.), custom VPN configs, and social media upgrades (Telegram Premium, Discord Nitro).
-* **Financial Services**: Crypto and foreign currency payment processing via Tetra98 API.
-* **Gamification**: Interactive daily spin wheel for user discounts and retention.
-* **Modern UI/UX**: Built with Next.js, Tailwind CSS, and Shadcn UI using a sleek, dark/emerald theme.
+- Seamless Telegram integration through the TWA SDK.
+- Product catalog for premium accounts, VPN configs, and digital services.
+- Wallet, orders, notifications, deposits, and cashout flows.
+- Admin bot workflows for product and inventory management.
+- Dockerized frontend, backend, PostgreSQL, and Redis services.
 
-## 🛠 Tech Stack
+## Tech Stack
 
-* **Frontend**: Next.js 14, React 18, Tailwind CSS, Lucide Icons.
-* **Backend**: Python 3.11, FastAPI, Aiogram 3.x, SQLAlchemy, Asyncpg.
-* **Database & Cache**: PostgreSQL 15, Redis 7.
-* **Infrastructure**: Docker, Docker Compose.
+- **Frontend**: Next.js 16, React 19, TypeScript, Tailwind CSS 4, Shadcn UI, Lucide Icons.
+- **Backend**: Python 3.11, FastAPI, Aiogram 3.x, SQLAlchemy, Asyncpg.
+- **Database & Cache**: PostgreSQL 15, Redis 7.
+- **Infrastructure**: Docker, Docker Compose.
 
-## 📂 Project Structure
+## Project Structure
 
 ```text
 keshepool/
-├── backend/           # FastAPI & Aiogram Bot
-│   ├── app/           # Application source code
-│   ├── Dockerfile
-│   └── requirements.txt
-├── frontend/          # Next.js Telegram Mini App
-│   ├── src/           # Components, UI, and Pages
-│   ├── Dockerfile
-│   └── package.json
-├── docker-compose.yml # Container orchestration
-└── .env.example       # Environment variables template
++-- backend/              # FastAPI API, Aiogram bot, services, Alembic migrations
+|   +-- alembic/          # Database migrations
+|   +-- app/
+|   |   +-- api/          # HTTP route modules
+|   |   +-- bot/          # Telegram bot handlers, states, locales
+|   |   +-- core/         # Config, database, Redis, security
+|   |   +-- services/     # Business service functions
+|   +-- requirements.txt
++-- frontend/             # Next.js Telegram Mini App
+|   +-- public/           # Static fonts and logo assets
+|   +-- src/
+|       +-- app/          # Next.js App Router routes
+|       +-- components/   # Shared layout and UI components
+|       +-- features/     # Feature-specific frontend modules
+|       +-- lib/          # API client and shared helpers
+|       +-- types/        # Global TypeScript declarations
++-- docker-compose.yml    # Container orchestration
++-- .env.example          # Environment variables template
 ```
 
-## 🚀 Getting Started
-
-### 1. Prerequisites
-
-* [Docker](https://docs.docker.com/get-docker/) and Docker Compose installed on your host.
-* A Telegram Bot Token from [@BotFather](https://t.me/BotFather).
-
-### 2. Environment Setup
+## Getting Started
 
 Create a `.env` file in the root directory based on `.env.example`:
 
@@ -48,39 +49,19 @@ Create a `.env` file in the root directory based on `.env.example`:
 cp .env.example .env
 ```
 
-Update the `.env` file with your specific credentials:
-
-```env
-# Backend Configuration
-BOT_TOKEN=your_telegram_bot_token
-WEBHOOK_URL=https://your-domain.com
-WEB_APP_URL=https://your-domain.com
-
-# Database Configuration (Docker Internal)
-POSTGRES_USER=keshepool_user
-POSTGRES_PASSWORD=keshepool_password
-POSTGRES_DB=keshepool_db
-
-# Tetra98 Third-Party Reseller API
-TETRA98_API_URL=https://tetra98.com
-TETRA98_API_KEY=your_api_key_here
-```
-
-### 3. Run the Application
-
-Deploy the entire stack (PostgreSQL, Redis, Backend, Frontend) using Docker Compose:
+Run the full stack with Docker Compose:
 
 ```bash
 docker-compose up -d --build
 ```
 
-### 4. Verify Deployment
+Verify the deployment:
 
-* **Frontend**: Accessible at `http://localhost:3000` (or via your reverse proxy/domain).
-* **Backend API Health**: Accessible at `http://localhost:8000/health`.
+- Frontend: `http://localhost:3000`
+- Backend health: `http://localhost:8000/health`
 
-## 🔒 Security Notes
+## Security Notes
 
-* Ensure your `WEBHOOK_URL` is secured with an SSL certificate (HTTPS), as this is strictly required by Telegram for Webhooks.
-* Keep your `.env` file out of version control.
-* Information entered in the "Personal Account" checkout flow is sensitive; ensure proper encryption in your database layer before moving to production.
+- Telegram webhooks require HTTPS in deployed environments.
+- Keep `.env` out of version control.
+- Treat checkout account details and wallet/payment data as sensitive production data.

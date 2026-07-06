@@ -1,8 +1,8 @@
 import type { Metadata } from "next";
 import Script from "next/script";
-import AppHeader from "@/components/AppHeader";
-import BottomNav from "@/components/BottomNav";
-import TelegramBootstrap from "@/components/TelegramBootstrap";
+import AppHeader from "@/components/layout/AppHeader";
+import BottomNav from "@/components/layout/BottomNav";
+import TelegramBootstrap from "@/components/layout/TelegramBootstrap";
 import "./globals.css";
 
 export const metadata: Metadata = {
