@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { ChevronLeft, FileText, MessageSquare, User, Users } from "lucide-react";
+import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { getProfile, type BootstrapProfile } from "@/lib/api";
 import { formatPrice, toPersianDigits } from "@/lib/utils";
@@ -26,7 +27,7 @@ export default function ProfilePage() {
         {/* Avatar + name */}
         <div className="flex flex-col items-center gap-3 mb-8">
           <div
-            className="w-20 h-20 rounded-full flex items-center justify-center overflow-hidden"
+            className="w-20 h-20 relative rounded-full flex items-center justify-center overflow-hidden"
             style={{
               background: "linear-gradient(135deg, rgba(255,255,255,0.1) 0%, rgba(255,255,255,0.04) 100%)",
               border: "2px solid rgba(255,255,255,0.12)",
@@ -34,7 +35,7 @@ export default function ProfilePage() {
             }}
           >
             {profile?.user.photoUrl ? (
-              <img src={profile.user.photoUrl} alt="" className="w-full h-full object-cover" />
+              <Image src={profile.user.photoUrl} alt="" fill sizes="80px" className="object-cover" unoptimized />
             ) : (
               <User className="w-9 h-9 text-[#F5F5F5]/50" />
             )}

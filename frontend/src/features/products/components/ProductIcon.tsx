@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import { IconMap, CATEGORY_ICON_MAP } from "@/lib/icons";
 import type { ProductCategory } from "@/features/products/types";
 
@@ -22,8 +23,8 @@ export default function ProductIcon({
 }: ProductIconProps) {
   if (assetUrl) {
     return (
-      <div className={`${sizeClassName} rounded-2xl bg-[#33383F] overflow-hidden flex items-center justify-center shadow-lg`}>
-        <img src={assetUrl} alt="" className="w-full h-full object-cover" loading="lazy" />
+      <div className={`${sizeClassName} relative rounded-2xl bg-[#33383F] overflow-hidden flex items-center justify-center shadow-lg`}>
+        <Image src={assetUrl} alt="" fill sizes="48px" className="object-cover" loading="lazy" unoptimized />
       </div>
     );
   }
