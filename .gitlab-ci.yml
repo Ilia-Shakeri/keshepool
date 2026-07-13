@@ -1,31 +1,130 @@
 stages:
-  - build
+  - validate
+  - test
+  - publish
   - deploy
 
 variables:
   DOCKER_DRIVER: overlay2
+  DOCKER_BUILDKIT: "1"
+  DOCKER_HOST: tcp://docker:2375
   DOCKER_TLS_CERTDIR: ""
+  POSTGRES_DB: keshepool_test
+  POSTGRES_USER: keshepool_test
+  POSTGRES_PASSWORD: keshepool_test_password
 
-build_backend:
-  stage: build
-  image: docker:24.0.5
-  services:
-    - docker:24.0.5-dind
+compose_validation:
+  stage: validate
+  image: docker:27-cli
+  variables:
+    BACKEND_IMAGE: registry.invalid/keshepool/backend:test
+    FRONTEND_IMAGE: registry.invalid/keshepool/frontend:test
+    WEB_APP_URL: https://example.test
   script:
-    - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin $CI_REGISTRY
-    - docker build -t $CI_REGISTRY_IMAGE/keshepool-backend:latest ./backend
-    - docker push $CI_REGISTRY_IMAGE/keshepool-backend:latest
-  only:
-    - main
+    - docker compose --env-file .env.example config --quiet
+    - sh -n deploy.sh
+    - sh -n smoke.sh
+    - sh -n backend/tests/validate_legacy_migration.sh
 
-build_frontend:
-  stage: build
-  image: docker:24.0.5
+backend_tests:
+  stage: test
+  image: python:3.11-slim
   services:
-    - docker:24.0.5-dind
+    - name: postgres:15-alpine
+      alias: db
+    - name: redis:7-alpine
+      alias: redis
+  variables:
+    DATABASE_URL: postgresql+asyncpg://keshepool_test:keshepool_test_password@db:5432/keshepool_test
+    TEST_DATABASE_URL: postgresql+asyncpg://keshepool_test:keshepool_test_password@db:5432/keshepool_test
+    REDIS_URL: redis://redis:6379/0
+    BOT_TOKEN: 123456:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+    ADMIN_BOT_TOKEN: 123457:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB
+    WEBHOOK_URL: https://example.test
+    WEBHOOK_SECRET: test_webhook_secret
+    WEB_APP_URL: https://example.test
+    ADMIN_API_KEY: test_admin_api_key
+    ADMIN_TELEGRAM_IDS: "123456"
+    ENVIRONMENT: test
+    ASSET_ROOT: /tmp/keshepool-static
+    KESHEPOOL_RUN_POSTGRES_TESTS: "1"
+  before_script:
+    - apt-get update
+    - apt-get install -y --no-install-recommends gcc libmagic1 libpq-dev postgresql-client
+    - pip install --no-cache-dir -r backend/requirements-dev.txt
+    - mkdir -p "$ASSET_ROOT"
   script:
-    - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin $CI_REGISTRY
-    - docker build -t $CI_REGISTRY_IMAGE/keshepool-frontend:latest ./frontend
-    - docker push $CI_REGISTRY_IMAGE/keshepool-frontend:latest
-  only:
-    - main
+    - cd backend
+    - python -m compileall app tests
+    - alembic upgrade head
+    - alembic current
+    - sh tests/validate_legacy_migration.sh
+    - pytest -q
+
+frontend_checks:
+  stage: test
+  image: node:22-alpine
+  variables:
+    BACKEND_INTERNAL_URL: http://backend:8000
+    NEXT_PUBLIC_API_URL: /api
+    DEPLOYMENT_VERSION: $CI_COMMIT_SHA
+  before_script:
+    - cd frontend
+    - npm ci --legacy-peer-deps
+  script:
+    - npm run test
+    - npm run typecheck
+    - ./node_modules/.bin/eslint .
+    - npm run build
+
+publish_images:
+  stage: publish
+  image: docker:27-cli
+  services:
+    - name: docker:27-dind
+      alias: docker
+  needs:
+    - compose_validation
+    - backend_tests
+    - frontend_checks
+  before_script:
+    - printf '%s' "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
+  script:
+    - docker build --pull -t "$CI_REGISTRY_IMAGE/backend:$CI_COMMIT_SHA" ./backend
+    - docker build --pull --build-arg BACKEND_INTERNAL_URL=http://backend:8000 --build-arg NEXT_PUBLIC_API_URL=/api --build-arg DEPLOYMENT_VERSION="$CI_COMMIT_SHA" -t "$CI_REGISTRY_IMAGE/frontend:$CI_COMMIT_SHA" ./frontend
+    - docker push "$CI_REGISTRY_IMAGE/backend:$CI_COMMIT_SHA"
+    - docker push "$CI_REGISTRY_IMAGE/frontend:$CI_COMMIT_SHA"
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+
+deploy_production:
+  stage: deploy
+  image: alpine:3.20
+  needs:
+    - publish_images
+  resource_group: production
+  environment:
+    name: production
+    url: $PRODUCTION_URL
+  before_script:
+    - test -n "$DEPLOY_HOST"
+    - test -n "$DEPLOY_USER"
+    - test -n "$DEPLOY_PATH"
+    - test -n "$DEPLOY_SSH_PRIVATE_KEY"
+    - test -n "$DEPLOY_KNOWN_HOSTS"
+    - apk add --no-cache openssh-client
+    - eval "$(ssh-agent -s)"
+    - if [ -f "$DEPLOY_SSH_PRIVATE_KEY" ]; then ssh-add "$DEPLOY_SSH_PRIVATE_KEY"; else printf '%s\n' "$DEPLOY_SSH_PRIVATE_KEY" | tr -d '\r' | ssh-add -; fi
+    - mkdir -p ~/.ssh
+    - chmod 700 ~/.ssh
+    - if [ -f "$DEPLOY_KNOWN_HOSTS" ]; then cp "$DEPLOY_KNOWN_HOSTS" ~/.ssh/known_hosts; else printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts; fi
+    - chmod 600 ~/.ssh/known_hosts
+  script:
+    - ssh "$DEPLOY_USER@$DEPLOY_HOST" "mkdir -p '$DEPLOY_PATH'"
+    - scp docker-compose.yml deploy.sh smoke.sh "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_PATH/"
+    - printf '%s' "$CI_REGISTRY_PASSWORD" | ssh "$DEPLOY_USER@$DEPLOY_HOST" "docker login -u '$CI_REGISTRY_USER' --password-stdin '$CI_REGISTRY'"
+    - ssh "$DEPLOY_USER@$DEPLOY_HOST" "cd '$DEPLOY_PATH' && REGISTRY_IMAGE='$CI_REGISTRY_IMAGE' IMAGE_TAG='$CI_COMMIT_SHA' sh ./deploy.sh"
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+      when: manual
+  allow_failure: false

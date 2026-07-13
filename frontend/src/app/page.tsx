@@ -1,19 +1,17 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Bell, Bot, Code, Flame, Layout, MessageCircle, MoreHorizontal, Music, PlaySquare, Shield, User, X } from "lucide-react";
-import ProductIcon from "@/features/products/components/ProductIcon";
+import { Bell, Bot, Code, Flame, Layout, MessageCircle, MoreHorizontal, Music, PlaySquare, Shield, X } from "lucide-react";
+import ProductIcon from "@/components/ProductIcon";
+import UserAvatar from "@/components/UserAvatar";
 import { getNotifications, getProducts, markNotificationsRead, type UserNotification } from "@/lib/api";
-import type { Product } from "@/features/products/types";
+import type { Product } from "@/lib/products";
 import { toPersianDigits } from "@/lib/utils";
 
 export default function Home() {
   const router = useRouter();
-  const [tgUser] = useState<{ id?: number; first_name?: string; last_name?: string; username?: string } | null>(() => {
-    if (typeof window === "undefined") return null;
-    return window.Telegram?.WebApp?.initDataUnsafe?.user || null;
-  });
+  const [tgUser, setTgUser] = useState<{ id?: number; first_name?: string; last_name?: string; username?: string } | null>(null);
   const [products, setProducts] = useState<Product[]>([]);
   const [notifications, setNotifications] = useState<UserNotification[]>([]);
   const [productError, setProductError] = useState<string | null>(null);
@@ -21,9 +19,13 @@ export default function Home() {
   const [isLoading, setIsLoading] = useState(true);
   const bellRef = useRef<HTMLButtonElement>(null);
 
-  useEffect(() => {
-    // Load catalog data from the backend so the mini-app stays synced with admin-bot inventory.
-    Promise.allSettled([getProducts(), getNotifications()])
+  const loadHomeData = useCallback(() => {
+    setIsLoading(true);
+    setProductError(null);
+    const webApp = window.Telegram?.WebApp;
+    if (webApp) setTgUser(webApp.initDataUnsafe?.user || null);
+
+    return Promise.allSettled([getProducts(), getNotifications()])
       .then(([productData, notifData]) => {
         if (productData.status === "fulfilled") {
           setProducts(productData.value);
@@ -44,6 +46,19 @@ export default function Home() {
       .finally(() => setIsLoading(false));
   }, []);
 
+  useEffect(() => {
+    void Promise.resolve().then(loadHomeData);
+  }, [loadHomeData]);
+
+  useEffect(() => {
+    if (!isNotifOpen) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setIsNotifOpen(false);
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [isNotifOpen]);
+
   const hotItems = useMemo(() => products.slice(0, 6), [products]);
   const unreadCount = notifications.filter((n) => !n.isRead).length;
 
@@ -57,35 +72,35 @@ export default function Home() {
   }
 
   return (
-    <div className="min-h-screen font-sans pb-28">
+    <div className="min-h-[100dvh] pb-28 font-sans">
       {/* Background gradient orbs */}
       <div className="fixed inset-0 pointer-events-none overflow-hidden z-0" aria-hidden="true">
         <div className="absolute -top-24 -right-24 w-72 h-72 bg-[#E63946]/[0.06] rounded-full blur-3xl" />
         <div className="absolute top-1/2 -left-32 w-80 h-80 bg-blue-600/[0.04] rounded-full blur-3xl" />
       </div>
 
-      <header className="relative z-10 flex justify-between items-center px-5 py-4">
+      <header className="relative z-10 flex items-center justify-between gap-3 px-5 py-4">
         {/* Left: user profile */}
         <button
           onClick={() => router.push("/profile")}
-          className="flex items-center gap-3 active:scale-95 transition-transform"
+          className="flex min-w-0 flex-1 items-center gap-3 transition-transform active:scale-95"
         >
-          <div
-            className="w-10 h-10 rounded-full flex items-center justify-center overflow-hidden border border-white/10"
-            style={{ background: "linear-gradient(135deg, rgba(255,255,255,0.1) 0%, rgba(255,255,255,0.04) 100%)" }}
-          >
-            <User className="w-5 h-5 text-[#F5F5F5]/60" />
-          </div>
-          <div className="flex flex-col items-start">
-            <h1 className="text-sm font-bold text-[#F5F5F5] leading-tight">
+          <UserAvatar
+            firstName={tgUser?.first_name}
+            username={tgUser?.username}
+            telegramId={tgUser?.id}
+            className="size-10 text-base"
+          />
+          <div className="flex min-w-0 flex-col items-start">
+            <h1 className="max-w-full truncate text-sm font-bold leading-tight text-[#F5F5F5]">
               سلام، {tgUser?.first_name || "کاربر عزیز"} 👋
             </h1>
-            <p className="text-[10px] text-[#F5F5F5]/50 mt-0.5">بهترین سرویس‌ها با بهترین قیمت</p>
+            <p className="mt-0.5 max-w-full truncate text-[10px] text-[#F5F5F5]/50">بهترین سرویس‌ها با بهترین قیمت</p>
           </div>
         </button>
 
         {/* Right: notification bell */}
-        <div className="relative">
+        <div className="relative shrink-0">
           <button
             ref={bellRef}
             onClick={() => {
@@ -94,7 +109,7 @@ export default function Home() {
               if (opening && unreadCount > 0) {
                 markNotificationsRead().then(() =>
                   setNotifications((prev) => prev.map((n) => ({ ...n, isRead: true })))
-                ).catch(() => {});
+                ).catch((error) => console.error("Notification update failed:", error));
               }
             }}
             className="relative p-2.5 rounded-full border border-white/10 active:scale-95 transition-all"
@@ -120,9 +135,8 @@ export default function Home() {
           />
           {/* Panel — fixed so it always floats above everything including BottomNav */}
           <div
-            className="fixed right-5 z-[9999] w-72 rounded-2xl overflow-hidden"
+            className="app-floating-end fixed z-[9999] w-[min(18rem,calc(100vw-2.5rem))] overflow-hidden rounded-2xl"
             style={{
-              top: "72px",
               background: "#111318",
               border: "1px solid rgba(255,255,255,0.12)",
               boxShadow: "0 24px 64px rgba(0,0,0,0.7), 0 4px 16px rgba(0,0,0,0.4)",
@@ -165,7 +179,7 @@ export default function Home() {
         </>
       )}
 
-      <main className="relative z-10 px-5 space-y-8 mt-2">
+      <main className="relative z-10 mx-auto mt-2 max-w-4xl space-y-8 px-5">
         {/* Featured products horizontal scroll */}
         <section>
           <div className="flex justify-between items-center mb-4">
@@ -191,8 +205,15 @@ export default function Home() {
                   />
                 ))
             ) : productError ? (
-              <div className="min-w-full rounded-2xl p-5 text-center text-xs text-[#E63946] bg-white/[0.04] border border-white/[0.08]">
-                {productError}
+              <div className="min-w-full rounded-2xl border border-white/[0.08] bg-white/[0.04] p-5 text-center text-xs text-[#E63946]">
+                <p>{productError}</p>
+                <button
+                  type="button"
+                  onClick={() => void loadHomeData()}
+                  className="mt-3 rounded-xl bg-[#E63946]/15 px-4 py-2 font-bold text-[#E63946]"
+                >
+                  تلاش دوباره
+                </button>
               </div>
             ) : hotItems.length === 0 ? (
               <div className="min-w-full rounded-2xl p-5 text-center text-xs text-[#F5F5F5]/40 bg-white/[0.04] border border-white/[0.08]">
@@ -223,9 +244,11 @@ export default function Home() {
                       />
                       <span
                         className="text-[9px] px-2 py-0.5 rounded-full font-bold"
-                        style={{ background: "rgba(16,185,129,0.12)", color: "#10b981", border: "1px solid rgba(16,185,129,0.2)" }}
+                        style={item.variants.some((variant) => (variant.stockCount ?? 0) > 0)
+                          ? { background: "rgba(16,185,129,0.12)", color: "#10b981", border: "1px solid rgba(16,185,129,0.2)" }
+                          : { background: "rgba(230,57,70,0.12)", color: "#E63946", border: "1px solid rgba(230,57,70,0.2)" }}
                       >
-                        موجود
+                        {item.variants.some((variant) => (variant.stockCount ?? 0) > 0) ? "موجود" : "ناموجود"}
                       </span>
                     </div>
                     <div>
@@ -245,7 +268,7 @@ export default function Home() {
         {/* Category grid */}
         <section className="pb-4">
           <h3 className="text-sm font-bold text-[#F5F5F5] mb-4">دسته‌بندی‌ها</h3>
-          <div className="grid grid-cols-4 gap-3">
+          <div className="grid grid-cols-4 gap-3 sm:grid-cols-8">
             {[
               { icon: <Shield className="w-5 h-5" />, label: "تحریم‌شکن", category: "vpn" },
               { icon: <Music className="w-5 h-5" />, label: "موسیقی", category: "music" },

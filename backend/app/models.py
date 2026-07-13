@@ -9,10 +9,12 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    JSON,
     Numeric,
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.orm import declarative_base, relationship
 
@@ -22,6 +24,16 @@ Base = declarative_base()
 def enum_values(enum_class: type[enum.Enum]) -> list[str]:
     """Store enum values in PostgreSQL so Python enums match existing database labels."""
     return [member.value for member in enum_class]
+
+
+def postgres_enum(enum_class: type[enum.Enum], name: str) -> Enum:
+    """Build a stable PostgreSQL enum that stores each member's public value."""
+    return Enum(
+        enum_class,
+        values_callable=enum_values,
+        name=name,
+        validate_strings=True,
+    )
 
 
 def utcnow() -> datetime:
@@ -98,10 +110,14 @@ class Transaction(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     wallet_id = Column(Integer, ForeignKey("wallets.id"), nullable=False)
-    amount = Column(Numeric(precision=18, scale=2), nullable=False)
+    amount = Column(Numeric(precision=24, scale=8), nullable=False)
     currency = Column(String(10), default="IRR", nullable=False)
-    type = Column(Enum(TransactionType), nullable=False)
-    status = Column(Enum(TransactionStatus), default=TransactionStatus.PENDING, nullable=False)
+    type = Column(postgres_enum(TransactionType, "transactiontype"), nullable=False)
+    status = Column(
+        postgres_enum(TransactionStatus, "transactionstatus"),
+        default=TransactionStatus.PENDING,
+        nullable=False,
+    )
     gateway = Column(String(50), nullable=True)
     reference_id = Column(String, nullable=True, index=True)
     description = Column(String, nullable=True)
@@ -151,7 +167,12 @@ class InventoryItem(Base):
     product_id = Column(String, ForeignKey("products.id"), index=True, nullable=False)
     variant_id = Column(String, ForeignKey("product_variants.id"), index=True, nullable=False)
     credentials = Column(Text, nullable=False)
-    status = Column(Enum(ItemStatus), default=ItemStatus.AVAILABLE, index=True, nullable=False)
+    status = Column(
+        postgres_enum(ItemStatus, "itemstatus"),
+        default=ItemStatus.AVAILABLE,
+        index=True,
+        nullable=False,
+    )
     assigned_to_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     expires_at = Column(DateTime(timezone=True), nullable=True)
     assigned_at = Column(DateTime(timezone=True), nullable=True)
@@ -161,7 +182,16 @@ class InventoryItem(Base):
 
 class Order(Base):
     __tablename__ = "orders"
-    __table_args__ = (UniqueConstraint("inventory_item_id", name="uq_order_inventory_item_id"),)
+    __table_args__ = (
+        UniqueConstraint("inventory_item_id", name="uq_order_inventory_item_id"),
+        Index(
+            "uq_orders_user_idempotency_key",
+            "user_id",
+            "idempotency_key",
+            unique=True,
+            postgresql_where=text("idempotency_key IS NOT NULL"),
+        ),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
     public_id = Column(String, unique=True, index=True, nullable=False)
@@ -170,7 +200,13 @@ class Order(Base):
     variant_id = Column(String, ForeignKey("product_variants.id"), nullable=False)
     inventory_item_id = Column(Integer, ForeignKey("inventory_items.id"), nullable=False)
     total_amount = Column(Numeric(precision=18, scale=2), nullable=False)
-    status = Column(Enum(OrderStatus), default=OrderStatus.ACTIVE, index=True, nullable=False)
+    idempotency_key = Column(String(64), nullable=True)
+    status = Column(
+        postgres_enum(OrderStatus, "orderstatus"),
+        default=OrderStatus.ACTIVE,
+        index=True,
+        nullable=False,
+    )
     created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
     expires_at = Column(DateTime(timezone=True), nullable=True)
 
@@ -203,7 +239,7 @@ class CashoutRequest(Base):
     custom_source = Column(String(200), nullable=True)
     details_text = Column(Text, nullable=False)
     status = Column(
-        Enum(CashoutRequestStatus, values_callable=enum_values),
+        postgres_enum(CashoutRequestStatus, "cashoutrequeststatus"),
         default=CashoutRequestStatus.PENDING,
         nullable=False,
         index=True,
@@ -212,3 +248,24 @@ class CashoutRequest(Base):
     updated_at = Column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
 
     user = relationship("User", back_populates="cashout_requests")
+
+
+class AdminAuditLog(Base):
+    __tablename__ = "admin_audit_logs"
+    __table_args__ = (
+        Index("ix_admin_audit_actor_created", "actor_telegram_id", "created_at"),
+        Index("ix_admin_audit_action_created", "action", "created_at"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    actor_telegram_id = Column(String, nullable=False)
+    action = Column(String(100), nullable=False)
+    target_type = Column(String(50), nullable=False)
+    target_id = Column(String(180), nullable=True)
+    details = Column(
+        JSON,
+        default=dict,
+        server_default=text("'{}'::json"),
+        nullable=False,
+    )
+    created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)

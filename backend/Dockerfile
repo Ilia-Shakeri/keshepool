@@ -25,7 +25,8 @@ COPY ./alembic.ini ./alembic.ini
 COPY ./scripts ./scripts
 COPY ./entrypoint.sh ./entrypoint.sh
 
-RUN chown -R appuser:appuser /app \
+RUN mkdir -p /app/static \
+    && chown -R appuser:appuser /app \
     && chmod +x /app/entrypoint.sh
 
 USER appuser

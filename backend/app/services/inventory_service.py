@@ -1,9 +1,8 @@
 import secrets
 from decimal import Decimal
-from typing import Optional
 
 from fastapi import HTTPException
-from sqlalchemy import select
+from sqlalchemy import or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -28,13 +27,54 @@ def _money(value) -> Decimal:
     return Decimal(str(value)).quantize(Decimal("0.01"))
 
 
+async def _existing_idempotent_order(
+    db: AsyncSession,
+    user_id: int,
+    idempotency_key: str | None,
+    product_id: str,
+    variant_id: str,
+) -> Order | None:
+    if not idempotency_key:
+        return None
+
+    result = await db.execute(
+        select(Order).where(
+            Order.user_id == user_id,
+            Order.idempotency_key == idempotency_key,
+        )
+    )
+    order = result.scalars().first()
+    if order and (order.product_id != product_id or order.variant_id != variant_id):
+        raise HTTPException(
+            status_code=409,
+            detail="This idempotency key was already used for another product.",
+        )
+    return order
+
+
+async def _new_public_id(db: AsyncSession) -> str:
+    for _ in range(5):
+        public_id = f"KP-{secrets.token_hex(16).upper()}"
+        result = await db.execute(select(Order.id).where(Order.public_id == public_id))
+        if result.scalar_one_or_none() is None:
+            return public_id
+    raise HTTPException(status_code=503, detail="Could not allocate a unique order ID.")
+
+
 async def fulfill_wallet_order(
     db: AsyncSession,
     user: User,
     product_id: str,
     variant_id: str,
+    idempotency_key: str | None = None,
 ) -> Order:
     try:
+        existing_order = await _existing_idempotent_order(
+            db, user.id, idempotency_key, product_id, variant_id
+        )
+        if existing_order:
+            return existing_order
+
         # Validate the requested product variant
         variant_result = await db.execute(
             select(ProductVariant)
@@ -59,17 +99,43 @@ async def fulfill_wallet_order(
         if not wallet:
             raise HTTPException(status_code=404, detail="Wallet not found.")
 
+        # Requests from one user serialize on the wallet row. Recheck after the
+        # lock so a retry returns the order committed by the first request.
+        existing_order = await _existing_idempotent_order(
+            db, user.id, idempotency_key, product_id, variant_id
+        )
+        if existing_order:
+            await db.commit()
+            return existing_order
+
         price = _money(variant.raw_price)
         if wallet.balance < price:
             raise HTTPException(status_code=400, detail="Insufficient wallet balance.")
 
-        # Acquire lock on the specific InventoryItem
+        now = utcnow()
+        await db.execute(
+            update(InventoryItem)
+            .where(
+                InventoryItem.product_id == product_id,
+                InventoryItem.variant_id == variant_id,
+                InventoryItem.status == ItemStatus.AVAILABLE,
+                InventoryItem.expires_at.is_not(None),
+                InventoryItem.expires_at <= now,
+            )
+            .values(status=ItemStatus.EXPIRED)
+        )
+
+        # Acquire lock on one live item only.
         item_result = await db.execute(
             select(InventoryItem)
             .where(
                 InventoryItem.product_id == product_id,
                 InventoryItem.variant_id == variant_id,
                 InventoryItem.status == ItemStatus.AVAILABLE,
+                or_(
+                    InventoryItem.expires_at.is_(None),
+                    InventoryItem.expires_at > now,
+                ),
             )
             .with_for_update(skip_locked=True)
             .limit(1)
@@ -84,7 +150,7 @@ async def fulfill_wallet_order(
         item.assigned_to_user_id = user.id
         item.assigned_at = utcnow()
 
-        public_id = f"KP-{secrets.token_hex(4).upper()}"
+        public_id = await _new_public_id(db)
         order = Order(
             public_id=public_id,
             user_id=user.id,
@@ -92,6 +158,7 @@ async def fulfill_wallet_order(
             variant_id=variant_id,
             inventory_item_id=item.id,
             total_amount=price,
+            idempotency_key=idempotency_key,
             status=OrderStatus.ACTIVE,
         )
         db.add(order)

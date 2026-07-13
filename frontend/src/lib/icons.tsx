@@ -1,16 +1,13 @@
 import { Shield, Music, MonitorPlay, MessageCircle, Sparkles, Gamepad2, Twitter, Bot, PenTool, Briefcase, BookOpen, LineChart, Video, Box, Wrench } from "lucide-react";
 import React from "react";
-import type { ProductCategory } from "@/features/products/types";
+import type { ProductCategory } from "@/lib/products";
 
 type IconRenderer = (sizeClass?: string) => React.ReactNode;
 
-const makeIcon = (Component: React.ElementType): IconRenderer => {
-  function IconRendererComponent(sizeClass = "w-5 h-5") {
+const makeIcon = (Component: React.ElementType): IconRenderer =>
+  function IconRenderer(sizeClass = "w-5 h-5") {
     return <Component className={`${sizeClass} text-white`} />;
-  }
-
-  return IconRendererComponent;
-};
+  };
 
 export const IconMap: Record<string, IconRenderer> = {
   Shield: makeIcon(Shield),

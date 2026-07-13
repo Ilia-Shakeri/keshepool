@@ -1,3 +1,9 @@
+x-default-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
 services:
   db:
     image: postgres:15-alpine
@@ -20,6 +26,7 @@ services:
       retries: 5
     networks:
       - keshepool_internal_net
+    logging: *default-logging
 
   db-backup:
     image: prodrigestivill/postgres-backup-local:15
@@ -54,6 +61,7 @@ services:
       start_period: 30s
     networks:
       - keshepool_internal_net
+    logging: *default-logging
 
   redis:
     image: redis:7-alpine
@@ -70,13 +78,14 @@ services:
       retries: 5
     networks:
       - keshepool_internal_net
+    logging: *default-logging
 
   backend:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
+    image: ${BACKEND_IMAGE:-keshepool-backend:local}
     container_name: keshepool-backend
     restart: unless-stopped
+    init: true
+    stop_grace_period: 30s
     environment:
       - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
       - REDIS_URL=redis://redis:6379/0
@@ -90,11 +99,20 @@ services:
       - TETRA98_WEBHOOK_SECRET=${TETRA98_WEBHOOK_SECRET:-}
       - CRYPTO_WEBHOOK_SECRET=${CRYPTO_WEBHOOK_SECRET:-}
       - CRYPTO_DEPOSIT_ADDRESS_USDT=${CRYPTO_DEPOSIT_ADDRESS_USDT:-}
+      - USDT_TO_IRR_RATE=${USDT_TO_IRR_RATE:?Set an operator-reviewed emergency USDT rate in .env}
       - ADMIN_TELEGRAM_IDS=${ADMIN_TELEGRAM_IDS}
       - ADMIN_GROUP_CHAT_ID=${ADMIN_GROUP_CHAT_ID:-}
+      - BOT_USERNAME=${BOT_USERNAME:-keshepoolbot}
       - ASSET_ROOT=/app/static
       - PUBLIC_ASSET_BASE_URL=/static
+      - SUPPORT_TELEGRAM_USERNAME=${SUPPORT_TELEGRAM_USERNAME:-}
       - ALLOW_INSECURE_DEV_AUTH=${ALLOW_INSECURE_DEV_AUTH:-false}
+      - TELEGRAM_AUTH_MAX_AGE_SECONDS=${TELEGRAM_AUTH_MAX_AGE_SECONDS:-86400}
+      - TELEGRAM_AUTH_FUTURE_SKEW_SECONDS=${TELEGRAM_AUTH_FUTURE_SKEW_SECONDS:-60}
+      - USER_LAST_SEEN_WRITE_INTERVAL_SECONDS=${USER_LAST_SEEN_WRITE_INTERVAL_SECONDS:-300}
+      - CACHE_NAMESPACE=${CACHE_NAMESPACE:-keshepool}
+      - REDIS_CONNECT_TIMEOUT_SECONDS=${REDIS_CONNECT_TIMEOUT_SECONDS:-2}
+      - REDIS_SOCKET_TIMEOUT_SECONDS=${REDIS_SOCKET_TIMEOUT_SECONDS:-2}
       - ADMIN_API_KEY=${ADMIN_API_KEY}
       - ENVIRONMENT=${ENVIRONMENT:-production}
     volumes:
@@ -103,24 +121,40 @@ services:
       db:
         condition: service_healthy
       redis:
-        condition: service_healthy
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
     networks:
       - keshepool_internal_net
-      - caddy_gateway_net
+    logging: *default-logging
 
   frontend:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
+    image: ${FRONTEND_IMAGE:-keshepool-frontend:local}
     container_name: keshepool-frontend
     restart: unless-stopped
+    init: true
+    stop_grace_period: 30s
     environment:
       - NODE_ENV=production
-      - NEXT_PUBLIC_API_URL=${WEBHOOK_URL}/api
-      - NEXT_PUBLIC_BOT_USERNAME=${NEXT_PUBLIC_BOT_USERNAME:-keshepoolbot}
+      - BACKEND_INTERNAL_URL=http://backend:8000
+      - PUBLIC_BASE_URL=${WEB_APP_URL}
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/health/ready').then((response) => { if (!response.ok) process.exit(1); }).catch(() => process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
     networks:
       - keshepool_internal_net
       - caddy_gateway_net
+    logging: *default-logging
 
 volumes:
   pgdata:

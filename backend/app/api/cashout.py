@@ -1,16 +1,16 @@
 import logging
-from typing import Any, Dict
+from typing import Dict
 
 from aiogram import Bot
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.users import current_user
 from app.core.config import settings
 from app.core.database import get_db
-from app.core.redis import redis_client
 from app.models import CashoutRequest, CashoutRequestStatus, User
+from app.services.cache_service import check_rate_limit
 
 logger = logging.getLogger(__name__)
 
@@ -62,13 +62,22 @@ class CashoutRequestCreate(BaseModel):
             raise ValueError(f"Unsupported platform.")
         return normalised
 
-    @field_validator("custom_source")
+    @field_validator("details_text")
     @classmethod
-    def require_custom_source_when_other(cls, value: str | None, info: Any) -> str | None:
-        platform = (info.data or {}).get("source_platform", "")
-        if platform == "other" and not (value and value.strip()):
+    def validate_details(cls, value: str) -> str:
+        clean_value = value.strip()
+        if len(clean_value) < 10:
+            raise ValueError("details_text must contain at least 10 non-space characters.")
+        return clean_value
+
+    @model_validator(mode="after")
+    def require_custom_source_when_other(self):
+        if self.source_platform == "other" and not (
+            self.custom_source and self.custom_source.strip()
+        ):
             raise ValueError("custom_source is required when source_platform is 'other'.")
-        return value.strip() if value else value
+        self.custom_source = self.custom_source.strip() if self.custom_source else None
+        return self
 
 
 async def _notify_admins(
@@ -86,7 +95,7 @@ async def _notify_admins(
     telegram_mention = f"@{user.username}" if user.username else f"ID:{user.telegram_id}"
 
     message = (
-        "💵 *New Foreign Income Cashout Request*\n\n"
+        "💵 New Foreign Income Cashout Request\n\n"
         f"👤 User: {telegram_mention}\n"
         f"🔢 Request ID: #{request_id}\n"
         f"🏦 Platform: {display_platform}\n\n"
@@ -98,7 +107,6 @@ async def _notify_admins(
         await bot.send_message(
             chat_id=settings.ADMIN_GROUP_CHAT_ID,
             text=message,
-            parse_mode="Markdown",
         )
     finally:
         await bot.session.close()
@@ -111,12 +119,13 @@ async def create_cashout_request(
     db: AsyncSession = Depends(get_db),
 ):
     # Rate limit: 5 cashout submissions per user per hour
-    rate_key = f"rate_limit:cashout:user:{user.telegram_id}"
-    async with redis_client.pipeline(transaction=True) as pipe:
-        pipe.incr(rate_key)
-        pipe.expire(rate_key, 3600, nx=True)
-        results = await pipe.execute()
-    if results[0] > 5:
+    rate_limit = await check_rate_limit(
+        "cashout",
+        user.telegram_id,
+        limit=5,
+        window_seconds=3600,
+    )
+    if not rate_limit.allowed:
         raise HTTPException(status_code=429, detail="Too many requests. Please try again later.")
 
     cashout = CashoutRequest(

@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import Script from "next/script";
 import AppHeader from "@/components/layout/AppHeader";
 import BottomNav from "@/components/layout/BottomNav";
@@ -10,6 +10,15 @@ export const metadata: Metadata = {
   description: "Buy premium accounts, secure VPN configs, and foreign payment services.",
 };
 
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  viewportFit: "cover",
+  interactiveWidget: "resizes-content",
+  themeColor: "#0A0A0B",
+  colorScheme: "dark",
+};
+
 export default function RootLayout({
   children,
 }: Readonly<{
@@ -17,12 +26,12 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="fa" dir="rtl" suppressHydrationWarning>
-      <body className="font-sans antialiased bg-[#0F0F10] text-[#F5F5F5]" suppressHydrationWarning>
+      <body className="bg-[#0F0F10] font-sans text-[#F5F5F5] antialiased" suppressHydrationWarning>
         <Script src="https://telegram.org/js/telegram-web-app.js" strategy="beforeInteractive" />
         <TelegramBootstrap />
-        <div className="min-h-screen overflow-x-hidden relative max-w-md mx-auto bg-[#0F0F10] shadow-2xl border-x border-[#33383F]/50">
+        <div className="app-shell relative overflow-x-clip bg-[#0F0F10] shadow-2xl lg:border-x lg:border-[#33383F]/50">
           <AppHeader />
-          <main className="pt-[52px]">
+          <main className="app-main">
             {children}
           </main>
           <BottomNav />

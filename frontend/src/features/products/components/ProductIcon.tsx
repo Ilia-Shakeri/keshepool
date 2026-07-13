@@ -2,7 +2,7 @@
 
 import Image from "next/image";
 import { IconMap, CATEGORY_ICON_MAP } from "@/lib/icons";
-import type { ProductCategory } from "@/features/products/types";
+import type { ProductCategory } from "@/lib/products";
 
 interface ProductIconProps {
   icon?: string;
@@ -24,7 +24,7 @@ export default function ProductIcon({
   if (assetUrl) {
     return (
       <div className={`${sizeClassName} relative rounded-2xl bg-[#33383F] overflow-hidden flex items-center justify-center shadow-lg`}>
-        <Image src={assetUrl} alt="" fill sizes="48px" className="object-cover" loading="lazy" unoptimized />
+        <Image src={assetUrl} alt="" fill unoptimized sizes="96px" className="object-cover" />
       </div>
     );
   }

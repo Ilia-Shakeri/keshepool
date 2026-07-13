@@ -1,16 +1,16 @@
-import json
 from typing import Any, Dict, List
 
-from fastapi import APIRouter, Depends, Request, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.database import get_db
-from app.core.redis import redis_client
 from app.core.security import validate_telegram_data
-from app.models import InventoryItem, ItemStatus, Order, Product, User
+from app.models import Order, User
+from app.services.cache_service import check_rate_limit, invalidate_catalog_cache
+from app.services.catalog_service import get_public_catalog, parse_product_features
 from app.services.inventory_service import fulfill_wallet_order
 from app.services.user_service import ensure_user_from_telegram_init
 
@@ -25,6 +25,13 @@ async def current_user(
 class CheckoutRequest(BaseModel):
     product_id: str = Field(min_length=1, max_length=120)
     variant_id: str = Field(min_length=1, max_length=120)
+    idempotency_key: str | None = Field(
+        default=None,
+        alias="idempotencyKey",
+        min_length=8,
+        max_length=64,
+        pattern=r"^[A-Za-z0-9._:-]+$",
+    )
 
 class ProductVariantResponse(BaseModel):
     id: str
@@ -45,120 +52,63 @@ class ProductResponse(BaseModel):
     features: List[str] | None
     variants: List[ProductVariantResponse]
 
-def parse_product_features(raw_features: str | None) -> List[str] | None:
-    """Return product feature labels only when the stored JSON is valid."""
-    if not raw_features:
-        return None
-
-    try:
-        parsed = json.loads(raw_features)
-    except json.JSONDecodeError:
-        return None
-
-    if not isinstance(parsed, list):
-        return None
-
-    features = [str(feature).strip() for feature in parsed if str(feature).strip()]
-    return features or None
-
 @router.get("/products", response_model=List[ProductResponse])
 async def get_all_products(
     request: Request,
     user: User = Depends(current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    rate_key = f"rate_limit:products:user:{user.telegram_id}"
-    
-    async with redis_client.pipeline(transaction=True) as pipe:
-        pipe.incr(rate_key)
-        pipe.expire(rate_key, 60, nx=True)
-        results = await pipe.execute()
-        
-    requests = results[0]
-    if requests > 60:
+    rate_limit = await check_rate_limit(
+        "catalog",
+        f"user:{user.telegram_id}",
+        limit=60,
+        window_seconds=60,
+    )
+    if not rate_limit.allowed:
         raise HTTPException(status_code=429, detail="Rate limit exceeded.")
-
-    cache_key = "cache:products:all"
-    cached_products = await redis_client.get(cache_key)
-    
-    if cached_products:
-        return json.loads(cached_products)
-
-    stock_result = await db.execute(
-        select(InventoryItem.variant_id, func.count(InventoryItem.id))
-        .where(InventoryItem.status == ItemStatus.AVAILABLE)
-        .group_by(InventoryItem.variant_id)
-    )
-    stock_by_variant = {variant_id: count for variant_id, count in stock_result.all()}
-
-    result = await db.execute(
-        select(Product)
-        .options(selectinload(Product.variants))
-        .where(Product.is_active.is_(True))
-        .order_by(Product.created_at.desc())
-    )
-    products = result.scalars().all()
-
-    output: List[Dict[str, Any]] = []
-    for product in products:
-        # Only active variants are exposed so the mini-app mirrors admin-bot availability.
-        active_variants = [variant for variant in product.variants if variant.is_active]
-        if not active_variants:
-            continue
-
-        output.append(
-            {
-                "id": product.id,
-                "title": product.title,
-                "brand": product.brand,
-                "subtitle": product.subtitle or "",
-                "icon": product.icon or "Box",
-                "assetUrl": product.asset_url,
-                "gradient": product.gradient or "from-gray-700 to-black",
-                "category": product.category or "tools",
-                "features": parse_product_features(product.features),
-                "variants": [
-                    {
-                        "id": variant.id,
-                        "duration": variant.duration,
-                        "priceLabel": variant.price_label,
-                        "rawPrice": float(variant.raw_price),
-                        "stockCount": int(stock_by_variant.get(variant.id, 0)),
-                    }
-                    for variant in active_variants
-                ],
-            }
-        )
-        
-    await redis_client.setex(cache_key, 60, json.dumps(output, ensure_ascii=False))
-    return output
+    return await get_public_catalog(db)
 
 @router.post("/checkout")
 async def checkout_with_wallet(
     payload: CheckoutRequest,
+    idempotency_header: str | None = Header(
+        default=None,
+        alias="X-Idempotency-Key",
+        min_length=8,
+        max_length=64,
+        pattern=r"^[A-Za-z0-9._:-]+$",
+    ),
     user: User = Depends(current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    # Enforce strict rate limits on order fulfillment initialization
-    rate_key = f"rate_limit:checkout:user:{user.telegram_id}"
-    
-    async with redis_client.pipeline(transaction=True) as pipe:
-        pipe.incr(rate_key)
-        pipe.expire(rate_key, 60, nx=True)
-        results = await pipe.execute()
-        
-    requests = results[0]
-    if requests > 60:
+    rate_limit = await check_rate_limit(
+        "checkout",
+        f"user:{user.telegram_id}",
+        limit=20,
+        window_seconds=60,
+    )
+    if not rate_limit.allowed:
         raise HTTPException(status_code=429, detail="Rate limit exceeded.")
+
+    if (
+        idempotency_header
+        and payload.idempotency_key
+        and idempotency_header != payload.idempotency_key
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="Idempotency key header and body do not match.",
+        )
 
     order = await fulfill_wallet_order(
         db=db,
         user=user,
         product_id=payload.product_id,
         variant_id=payload.variant_id,
+        idempotency_key=idempotency_header or payload.idempotency_key,
     )
 
-    await redis_client.delete("cache:products:all")
+    await invalidate_catalog_cache()
 
     order_result = await db.execute(
         select(Order)

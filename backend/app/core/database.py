@@ -20,8 +20,8 @@ AsyncSessionLocal = sessionmaker(engine, class_=AsyncSession, expire_on_commit=F
 
 
 async def init_db() -> None:
-    # Schema is fully managed by Alembic migrations (entrypoint.sh runs `alembic upgrade head`
-    # before this application starts). No create_all here to prevent silent schema drift.
+    # Schema is fully managed by the deployment migration step. No create_all here,
+    # because application startup must never hide schema drift.
     logger.info("Database connection pool ready.")
 
 

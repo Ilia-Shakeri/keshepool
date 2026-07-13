@@ -17,7 +17,7 @@ export default function BottomNav() {
 
   return (
     <div
-      className="fixed bottom-0 left-0 w-full z-40"
+      className="app-bottom-nav fixed z-40"
       style={{
         background: "rgba(10, 10, 11, 0.90)",
         backdropFilter: "blur(24px)",
@@ -25,7 +25,7 @@ export default function BottomNav() {
         borderTop: "1px solid rgba(255,255,255,0.07)",
       }}
     >
-      <nav className="flex justify-between items-end max-w-md mx-auto px-4 pt-3 pb-3">
+      <nav className="flex items-end justify-between px-2 pb-[calc(0.5rem+var(--safe-area-bottom))] pt-2 sm:px-6">
         {NAV_ITEMS.map(({ name, path, icon: Icon }) => {
           const isActive = path === "/" ? pathname === "/" : pathname.startsWith(path);
 
@@ -33,7 +33,7 @@ export default function BottomNav() {
             <Link
               key={path}
               href={path}
-              className="flex flex-col items-center gap-1 min-w-[52px]"
+              className="flex min-w-[52px] flex-col items-center gap-1 rounded-xl"
             >
               <div className="relative flex items-center justify-center w-11 h-8">
                 {isActive && (

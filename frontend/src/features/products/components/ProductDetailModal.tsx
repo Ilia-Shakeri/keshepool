@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { ChevronRight, CheckCircle2, Clock, Headphones, Shield, Zap } from "lucide-react";
-import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
-import ProductIcon from "@/features/products/components/ProductIcon";
-import type { Product, ProductVariant } from "@/features/products/types";
+import { useMemo, useState } from "react";
+import { ChevronRight, CheckCircle2 } from "lucide-react";
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
+import ProductIcon from "@/components/ProductIcon";
+import { useTelegramBackButton } from "@/hooks/useTelegramBackButton";
+import type { Product, ProductVariant } from "@/lib/products";
 import { toPersianDigits } from "@/lib/utils";
 
 interface ProductDetailModalProps {
@@ -19,20 +20,6 @@ type SelectableVariant = ProductVariant & {
   optionFeatures?: string[] | null;
 };
 
-const FEATURE_ICONS = [
-  <Shield key="0" className="w-4 h-4 text-emerald-400" />,
-  <Zap key="1" className="w-4 h-4 text-yellow-400" />,
-  <Clock key="2" className="w-4 h-4 text-blue-400" />,
-  <Headphones key="3" className="w-4 h-4 text-purple-400" />,
-];
-
-const DEFAULT_FEATURES = [
-  { icon: FEATURE_ICONS[0], label: "تحویل امن" },
-  { icon: FEATURE_ICONS[1], label: "تحویل فوری" },
-  { icon: FEATURE_ICONS[2], label: "گارانتی ۷ روزه" },
-  { icon: FEATURE_ICONS[3], label: "پشتیبانی ۲۴ ساعته" },
-];
-
 function displayTypeLabel(type: string): string {
   const normalized = type.trim().toLowerCase();
   if (normalized === "individual" || normalized === "personal" || normalized === "single") return "انفرادی";
@@ -43,13 +30,7 @@ function displayTypeLabel(type: string): string {
 export default function ProductDetailModal({ isOpen, onClose, product, onProceedToCheckout }: ProductDetailModalProps) {
   const [selectedType, setSelectedType] = useState("");
   const [selectedDuration, setSelectedDuration] = useState("");
-
-  useEffect(() => {
-    queueMicrotask(() => {
-      setSelectedType("");
-      setSelectedDuration("");
-    });
-  }, [product?.id, isOpen]);
+  useTelegramBackButton(onClose, isOpen);
 
   const selectableVariants = useMemo<SelectableVariant[]>(() => product?.variants || [], [product]);
 
@@ -57,43 +38,44 @@ export default function ProductDetailModal({ isOpen, onClose, product, onProceed
     return Array.from(new Set(selectableVariants.map((variant) => variant.optionType || "استاندارد")));
   }, [selectableVariants]);
 
+  const effectiveType = selectedType || (typeOptions.length === 1 ? typeOptions[0] : "");
+
   const durationOptions = useMemo(() => {
-    if (!selectedType) return [];
+    if (!effectiveType) return [];
     return Array.from(
       new Set(
         selectableVariants
-          .filter((variant) => (variant.optionType || "استاندارد") === selectedType)
+          .filter((variant) => (variant.optionType || "استاندارد") === effectiveType)
           .map((variant) => variant.duration),
       ),
     );
-  }, [selectableVariants, selectedType]);
+  }, [selectableVariants, effectiveType]);
+
+  const effectiveDuration = selectedDuration || (durationOptions.length === 1 ? durationOptions[0] : "");
 
   const activeVariant = useMemo(() => {
-    if (!selectedType || !selectedDuration) return null;
+    if (!effectiveType || !effectiveDuration) return null;
     return (
       selectableVariants.find(
-        (variant) => (variant.optionType || "استاندارد") === selectedType && variant.duration === selectedDuration,
+        (variant) => (variant.optionType || "استاندارد") === effectiveType && variant.duration === effectiveDuration,
       ) || null
     );
-  }, [selectableVariants, selectedType, selectedDuration]);
+  }, [selectableVariants, effectiveType, effectiveDuration]);
 
   if (!product) return null;
 
-  const selectionComplete = Boolean(selectedType && selectedDuration && activeVariant);
+  const selectionComplete = Boolean(effectiveType && effectiveDuration && activeVariant);
   const outOfStock = selectionComplete && activeVariant ? (activeVariant.stockCount ?? 0) <= 0 : false;
 
-  const features =
-    product.features && product.features.length > 0
-      ? product.features.map((label, i) => ({
-          icon: FEATURE_ICONS[i] ?? <CheckCircle2 key={i} className="w-4 h-4 text-emerald-400" />,
-          label,
-        }))
-      : DEFAULT_FEATURES;
+  const featureLabels = activeVariant?.optionFeatures?.length
+    ? activeVariant.optionFeatures
+    : product.features || [];
 
   return (
     <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="bg-[#0A0A0B] border-none text-[#F5F5F5] w-full h-[100dvh] max-w-md mx-auto p-0 font-sans dir-rtl rounded-none flex flex-col">
+      <DialogContent className="dialog-safe-area flex h-[100dvh] w-full max-w-md flex-col rounded-none border-none bg-[#0A0A0B] p-0 font-sans text-[#F5F5F5] sm:h-auto sm:max-h-[min(90dvh,46rem)] sm:rounded-3xl">
         <DialogTitle className="sr-only">{product.title}</DialogTitle>
+        <DialogDescription className="sr-only">انتخاب نوع، مدت و موجودی محصول</DialogDescription>
 
         {/* Sticky back button */}
         <header
@@ -106,11 +88,13 @@ export default function ProductDetailModal({ isOpen, onClose, product, onProceed
           }}
         >
           <button
+            type="button"
             onClick={onClose}
             className="p-2 rounded-full transition-colors hover:bg-white/10 active:scale-95"
             style={{ background: "rgba(255,255,255,0.07)", border: "1px solid rgba(255,255,255,0.1)" }}
           >
             <ChevronRight className="w-4 h-4 text-[#F5F5F5]/80" />
+            <span className="sr-only">بستن جزئیات محصول</span>
           </button>
         </header>
 
@@ -128,44 +112,29 @@ export default function ProductDetailModal({ isOpen, onClose, product, onProceed
             <h1 className="text-2xl font-bold text-[#F5F5F5] mt-4 mb-1">{product.brand}</h1>
             <p className="text-sm text-[#F5F5F5]/50 leading-relaxed max-w-xs">{product.subtitle}</p>
 
-            <div className="flex gap-2 mt-4">
-              <span
-                className="text-[10px] px-3 py-1 rounded-full font-semibold"
-                style={{ background: "rgba(16,185,129,0.12)", color: "#10b981", border: "1px solid rgba(16,185,129,0.2)" }}
-              >
-                گارانتی ۷ روزه
-              </span>
-              <span
-                className="text-[10px] px-3 py-1 rounded-full font-semibold"
-                style={{ background: "rgba(230,57,70,0.12)", color: "#E63946", border: "1px solid rgba(230,57,70,0.2)" }}
-              >
-                تحویل فوری
-              </span>
-            </div>
           </div>
 
-          {/* Feature chips */}
-          <div className="px-5 mb-6">
+          {featureLabels.length > 0 && <div className="px-5 mb-6">
             <div className="grid grid-cols-2 gap-2">
-              {features.map((f) => (
+              {featureLabels.map((label, index) => (
                 <div
-                  key={f.label}
+                  key={`${label}-${index}`}
                   className="flex items-center gap-2.5 px-3 py-2.5 rounded-xl"
                   style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.07)" }}
                 >
-                  {f.icon}
-                  <span className="text-xs text-[#F5F5F5]/70 font-medium">{f.label}</span>
+                  <CheckCircle2 className="size-4 text-emerald-400" />
+                  <span className="text-xs text-[#F5F5F5]/70 font-medium">{label}</span>
                 </div>
               ))}
             </div>
-          </div>
+          </div>}
 
           {/* Plan selector */}
           <div className="px-5">
             <h3 className="text-sm font-bold text-[#F5F5F5] mb-3">انتخاب نوع</h3>
             <div className="grid grid-cols-2 gap-2 mb-5">
               {typeOptions.map((type) => {
-                const isSelected = selectedType === type;
+                const isSelected = effectiveType === type;
                 return (
                   <button
                     key={type}
@@ -186,12 +155,12 @@ export default function ProductDetailModal({ isOpen, onClose, product, onProceed
               })}
             </div>
 
-            {selectedType && (
+            {effectiveType && (
               <>
                 <h3 className="text-sm font-bold text-[#F5F5F5] mb-3">انتخاب مدت</h3>
                 <div className="grid grid-cols-2 gap-2">
                   {durationOptions.map((duration) => {
-                    const isSelected = selectedDuration === duration;
+                    const isSelected = effectiveDuration === duration;
                     return (
                       <button
                         key={duration}
@@ -236,7 +205,7 @@ export default function ProductDetailModal({ isOpen, onClose, product, onProceed
 
         {/* Sticky bottom buy button - flex sibling, no positioning */}
         <div
-          className="p-5 flex-shrink-0"
+          className="flex-shrink-0 px-5 pb-[max(1.25rem,var(--safe-area-bottom))] pt-5"
           style={{
             background: "rgba(10,10,11,0.95)",
             borderTop: "1px solid rgba(255,255,255,0.07)",

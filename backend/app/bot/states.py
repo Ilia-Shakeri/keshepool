@@ -8,6 +8,17 @@ class ProductAdminStates(StatesGroup):
     selecting_action = State()
     # Text-input states for product editing
     awaiting_single_product_json = State()
+    guided_title = State()
+    guided_brand = State()
+    guided_category = State()
+    guided_subtitle = State()
+    guided_features = State()
+    guided_logo = State()
+    guided_variant_duration = State()
+    guided_variant_price = State()
+    guided_variant_active = State()
+    guided_variant_stock = State()
+    guided_preview = State()
     awaiting_new_price = State()
     awaiting_new_name = State()
     awaiting_new_subtitle = State()
@@ -23,6 +34,7 @@ class ProductAdminStates(StatesGroup):
 
 class AdminPanelStates(StatesGroup):
     awaiting_broadcast_message = State()
+    awaiting_broadcast_confirmation = State()
     awaiting_search_query = State()
     awaiting_notification_text = State()
     awaiting_cashout_private_message = State()

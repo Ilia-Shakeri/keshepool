@@ -1,22 +1,30 @@
-import asyncio
+import json
 import logging
+import re
 import sys
+import tempfile
+import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Literal
 
 from aiogram import Bot, Dispatcher, types
-from fastapi import FastAPI, HTTPException, Request, Header
+from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import ValidationError
 from pythonjsonlogger import jsonlogger
+from sqlalchemy import text
 
 from app.api import admin, cashout, payments, products, users
 from app.bot.handlers.admin_panel import admin_router
 from app.bot.handlers.products_admin import products_router
 from app.bot.services.scheduler import start_scheduler
 from app.core.config import settings
-from app.core.database import init_db
+from app.core.database import AsyncSessionLocal, engine, init_db
 from app.core.redis import redis_client
+from app.services.cache_service import redis_health
 
 # Configure structured JSON logging
 logger = logging.getLogger()
@@ -50,46 +58,62 @@ admin_dp.include_router(products_router)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Initialize static asset directories and database schema
-    Path(settings.ASSET_ROOT).mkdir(parents=True, exist_ok=True)
-    await init_db()
-    
-    # Initialize background task scheduler
-    scheduler = start_scheduler(admin_bot)
-    
-    full_webhook_url = settings.WEBHOOK_URL.rstrip('/')
-    module_logger.info("Setting Telegram webhooks and bot configurations...")
-    
-    await bot.set_webhook(
-        url=f"{full_webhook_url}{WEBHOOK_PATH}/main", 
-        drop_pending_updates=True,
-        secret_token=settings.WEBHOOK_SECRET
-    )
-    
-    await admin_bot.set_webhook(
-        url=f"{full_webhook_url}{WEBHOOK_PATH}/admin", 
-        drop_pending_updates=True,
-        secret_token=settings.WEBHOOK_SECRET
-    )
-    
-    # Configure admin bot UX elements directly on startup
-    await admin_bot.set_my_commands([
-        types.BotCommand(command="start", description="Open Admin Panel")
-    ])
-    await admin_bot.set_chat_menu_button(menu_button=types.MenuButtonCommands())
-    
+    scheduler = None
     try:
+        await init_db()
+        scheduler = start_scheduler(admin_bot)
+
+        full_webhook_url = settings.WEBHOOK_URL.rstrip('/')
+        module_logger.info("Setting Telegram webhooks and bot configurations...")
+        await bot.set_webhook(
+            url=f"{full_webhook_url}{WEBHOOK_PATH}/main",
+            drop_pending_updates=False,
+            secret_token=settings.WEBHOOK_SECRET,
+        )
+        await admin_bot.set_webhook(
+            url=f"{full_webhook_url}{WEBHOOK_PATH}/admin",
+            drop_pending_updates=False,
+            secret_token=settings.WEBHOOK_SECRET,
+        )
+        await admin_bot.set_my_commands([
+            types.BotCommand(command="start", description="Open Admin Panel")
+        ])
+        await admin_bot.set_chat_menu_button(menu_button=types.MenuButtonCommands())
         yield
     finally:
-        # Graceful shutdown of services and connections
-        scheduler.shutdown()
-        await redis_client.aclose()
-        await bot.delete_webhook()
-        await admin_bot.delete_webhook()
-        await bot.session.close()
-        await admin_bot.session.close()
+        if scheduler is not None:
+            try:
+                scheduler.shutdown()
+            except Exception:
+                module_logger.exception("Scheduler shutdown failed.")
+
+        shutdown_steps = (
+            ("main bot session", bot.session.close),
+            ("admin bot session", admin_bot.session.close),
+            ("Redis client", redis_client.aclose),
+            ("database engine", engine.dispose),
+        )
+        for component, close_operation in shutdown_steps:
+            try:
+                await close_operation()
+            except Exception:
+                module_logger.exception("Shutdown failed for %s.", component)
 
 app = FastAPI(title="Keshepool API", lifespan=lifespan)
+
+
+@app.middleware("http")
+async def add_correlation_id(request: Request, call_next):
+    supplied_id = request.headers.get("X-Request-ID", "")
+    request_id = (
+        supplied_id
+        if re.fullmatch(r"[A-Za-z0-9._:-]{8,64}", supplied_id)
+        else uuid.uuid4().hex
+    )
+    request.state.request_id = request_id
+    response = await call_next(request)
+    response.headers["X-Request-ID"] = request_id
+    return response
 
 # Restrict CORS to the configured frontend origin only
 app.add_middleware(
@@ -97,7 +121,12 @@ app.add_middleware(
     allow_origins=[settings.WEB_APP_URL],
     allow_credentials=True,
     allow_methods=["GET", "POST", "PATCH"],
-    allow_headers=["Content-Type", "X-Telegram-Init-Data", "X-Admin-Token"],
+    allow_headers=[
+        "Content-Type",
+        "X-Telegram-Init-Data",
+        "X-Admin-Token",
+        "X-Idempotency-Key",
+    ],
 )
 
 # Mount API routers and static files
@@ -107,15 +136,33 @@ app.include_router(payments.router)
 app.include_router(cashout.router)
 app.include_router(admin.router)
 
-app.mount("/static", StaticFiles(directory=settings.ASSET_ROOT), name="static")
+def _prepare_asset_root() -> Path:
+    asset_root = Path(settings.ASSET_ROOT)
+    asset_root.mkdir(parents=True, exist_ok=True)
+    try:
+        with tempfile.NamedTemporaryFile(dir=asset_root, prefix=".write-check-"):
+            pass
+    except OSError as exc:
+        raise RuntimeError(f"Static asset directory is not writable: {asset_root}") from exc
+    return asset_root
+
+
+app.mount("/static", StaticFiles(directory=_prepare_asset_root()), name="static")
 
 @app.get("/api/config")
 async def get_public_config():
-    return {"botUsername": settings.BOT_USERNAME}
+    support_username = settings.SUPPORT_TELEGRAM_USERNAME.strip().lstrip("@")
+    if not re.fullmatch(r"[A-Za-z0-9_]{5,32}", support_username):
+        support_username = ""
+    return {
+        "botUsername": settings.BOT_USERNAME,
+        "supportUsername": support_username or None,
+        "supportUrl": f"https://t.me/{support_username}" if support_username else None,
+    }
 
 @app.post(f"{WEBHOOK_PATH}/{{bot_type}}")
 async def bot_webhook(
-    bot_type: str,
+    bot_type: Literal["main", "admin"],
     request: Request, 
     x_telegram_bot_api_secret_token: str = Header(None, alias="X-Telegram-Bot-Api-Secret-Token")
 ):
@@ -127,18 +174,57 @@ async def bot_webhook(
     try:
         update_data = await request.json()
         telegram_update = types.Update(**update_data)
-        
+    except (json.JSONDecodeError, ValidationError, TypeError, ValueError):
+        module_logger.warning(
+            "Malformed webhook update ignored.",
+            extra={"request_id": request.state.request_id, "bot_type": bot_type},
+        )
+        return {"status": "ignored"}
+
+    try:
         if bot_type == "admin":
             await admin_dp.feed_update(bot=admin_bot, update=telegram_update)
         else:
             await dp.feed_update(bot=bot, update=telegram_update)
-            
-        return {"status": "ok"}
     except Exception as exc:
-        # Log the exception but return 200 OK to prevent Telegram from retrying the poison-pill payload indefinitely
-        module_logger.exception("Webhook payload processing failed.")
-        return {"status": "ok"}
+        module_logger.exception(
+            "Webhook handler failed and may be retried.",
+            extra={"request_id": request.state.request_id, "bot_type": bot_type},
+        )
+        raise HTTPException(status_code=503, detail="Webhook handling failed.") from exc
+    return {"status": "ok"}
 
 @app.get("/health")
+@app.get("/health/live")
 async def health_check():
-    return {"status": "healthy"}
+    return {"status": "alive"}
+
+
+@app.get("/health/ready")
+async def readiness_check():
+    database_ok = False
+    database_detail = "unavailable"
+    try:
+        async with AsyncSessionLocal() as session:
+            await session.execute(text("SELECT 1"))
+        database_ok = True
+        database_detail = "ok"
+    except Exception as exc:
+        database_detail = type(exc).__name__
+        module_logger.error("Database readiness check failed: %s", database_detail)
+
+    redis_ok, redis_detail = await redis_health()
+    payload = {
+        "status": "ready" if database_ok and redis_ok else "degraded" if database_ok else "not_ready",
+        "ready": database_ok,
+        "checks": {
+            "database": {"ok": database_ok, "detail": database_detail},
+            "redis": {
+                "ok": redis_ok,
+                "detail": redis_detail,
+                "required": False,
+                "fallback": "database" if not redis_ok else None,
+            },
+        },
+    }
+    return JSONResponse(status_code=200 if database_ok else 503, content=payload)

@@ -1,0 +1,26 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "CommonJS",
+    "moduleResolution": "Node",
+    "noEmit": false,
+    "incremental": false,
+    "isolatedModules": false,
+    "outDir": ".test-dist",
+    "rewriteRelativeImportExtensions": true,
+    "types": ["node"]
+  },
+  "include": [
+    "src/lib/api.ts",
+    "src/lib/clipboard.ts",
+    "src/lib/order-status.ts",
+    "src/lib/product-filters.ts",
+    "src/lib/product-load.ts",
+    "src/lib/telegram-back.ts",
+    "src/lib/transaction-format.ts",
+    "src/lib/utils.ts",
+    "src/types/telegram.d.ts",
+    "src/lib/*.test.ts"
+  ]
+}

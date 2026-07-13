@@ -1,14 +1,25 @@
+import secrets
+from decimal import Decimal
 from typing import List, Optional
+
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
-from sqlalchemy import select, func
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.config import settings
 from app.core.database import get_db
-from app.core.redis import redis_client
-from app.models import InventoryItem, ItemStatus, Product, ProductVariant, Order, OrderStatus, Wallet
+from app.models import InventoryItem, ItemStatus, Order, OrderStatus, Product, utcnow
+from app.services.cache_service import invalidate_catalog_cache
+from app.services.catalog_service import (
+    CatalogMutationError,
+    VariantOwnershipError,
+    bulk_insert_stock,
+    catalog_diagnostics,
+    patch_product,
+    upsert_product,
+)
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
@@ -17,6 +28,7 @@ class VariantSchema(BaseModel):
     duration: str = Field(min_length=1, max_length=120)
     priceLabel: str = Field(min_length=1, max_length=50)
     rawPrice: float = Field(gt=0)
+    isActive: bool = True
 
 class ProductSchema(BaseModel):
     id: str = Field(min_length=1, max_length=120)
@@ -27,6 +39,8 @@ class ProductSchema(BaseModel):
     assetUrl: str | None = None
     gradient: str = "from-gray-700 to-black"
     category: str = "tools"
+    features: List[str] | None = None
+    isActive: bool = True
     variants: List[VariantSchema]
 
 class ConfigUploadSchema(BaseModel):
@@ -36,12 +50,17 @@ class ConfigUploadSchema(BaseModel):
 
 class ProductUpdateSchema(BaseModel):
     title: Optional[str] = None
+    brand: Optional[str] = None
+    subtitle: Optional[str] = None
     rawPrice: Optional[float] = None
+    variantId: Optional[str] = None
     assetUrl: Optional[str] = None
+    features: List[str] | None = None
+    isActive: Optional[bool] = None
 
 async def verify_system_admin(request: Request):
     api_key = request.headers.get("X-Admin-Token")
-    if not api_key or api_key != settings.ADMIN_API_KEY:
+    if not api_key or not secrets.compare_digest(api_key, settings.ADMIN_API_KEY):
         raise HTTPException(status_code=403, detail="Invalid internal API key.")
     return True
 
@@ -75,7 +94,11 @@ async def list_internal_products(
         stock_result = await db.execute(
             select(func.count(InventoryItem.id)).where(
                 InventoryItem.product_id == product.id,
-                InventoryItem.status == ItemStatus.AVAILABLE
+                InventoryItem.status == ItemStatus.AVAILABLE,
+                or_(
+                    InventoryItem.expires_at.is_(None),
+                    InventoryItem.expires_at > utcnow(),
+                ),
             )
         )
         stock_count = stock_result.scalar() or 0
@@ -95,32 +118,32 @@ async def patch_product_internals(
     _: bool = Depends(verify_system_admin),
     db: AsyncSession = Depends(get_db)
 ):
-    product_result = await db.execute(select(Product).where(Product.id == product_id))
-    product = product_result.scalars().first()
-    if not product:
-        raise HTTPException(status_code=404, detail="Product not found.")
+    values = {}
+    if payload.title is not None:
+        values["title"] = payload.title
+    if payload.brand is not None:
+        values["brand"] = payload.brand
+    if payload.subtitle is not None:
+        values["subtitle"] = payload.subtitle
+    if payload.assetUrl is not None:
+        values["asset_url"] = payload.assetUrl
+        values["icon"] = "Image"
+    if "features" in payload.model_fields_set:
+        values["features"] = payload.features
 
-    if payload.title:
-        product.title = payload.title
-        product.brand = payload.title
-    
-    if payload.assetUrl:
-        product.asset_url = payload.assetUrl
-        product.icon = "Image"
-        
-    if payload.rawPrice is not None:
-        variants_result = await db.execute(
-            select(ProductVariant)
-            .where(ProductVariant.product_id == product_id, ProductVariant.is_active.is_(True))
-            .with_for_update()
+    try:
+        result = await patch_product(
+            db,
+            product_id,
+            values=values,
+            active=payload.isActive,
+            raw_price=Decimal(str(payload.rawPrice)) if payload.rawPrice is not None else None,
+            variant_id=payload.variantId,
         )
-        for variant in variants_result.scalars().all():
-            variant.raw_price = payload.rawPrice
-            variant.price_label = f"{int(payload.rawPrice):,}"
-            
-    await db.commit()
-    await redis_client.delete("cache:products:all")
-    return {"status": "success"}
+    except CatalogMutationError as exc:
+        status_code = 404 if str(exc) in {"Product not found.", "Product variant not found."} else 422
+        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+    return {"status": "success", "result": result.to_dict()}
 
 @router.post("/products")
 async def create_or_update_product(
@@ -128,46 +151,17 @@ async def create_or_update_product(
     _: bool = Depends(verify_system_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(select(Product).where(Product.id == payload.id))
-    product = result.scalars().first()
-
-    if not product:
-        product = Product(id=payload.id)
-        db.add(product)
-
-    product.title = payload.title
-    product.brand = payload.brand
-    product.subtitle = payload.subtitle
-    product.icon = payload.icon or "Box"
-    product.asset_url = payload.assetUrl
-    product.gradient = payload.gradient
-    product.category = payload.category
-    product.is_active = True
-
-    existing_variants_result = await db.execute(
-        select(ProductVariant).where(ProductVariant.product_id == payload.id).with_for_update()
-    )
-    existing_variants = {variant.id: variant for variant in existing_variants_result.scalars().all()}
-    incoming_variant_ids = set()
-
-    for variant_payload in payload.variants:
-        incoming_variant_ids.add(variant_payload.id)
-        variant = existing_variants.get(variant_payload.id)
-        if not variant:
-            variant = ProductVariant(id=variant_payload.id, product_id=payload.id)
-            db.add(variant)
-        variant.duration = variant_payload.duration
-        variant.price_label = variant_payload.priceLabel
-        variant.raw_price = variant_payload.rawPrice
-        variant.is_active = True
-
-    for variant_id, variant in existing_variants.items():
-        if variant_id not in incoming_variant_ids:
-            variant.is_active = False
-
-    await db.commit()
-    await redis_client.delete("cache:products:all")
-    return {"status": "success"}
+    try:
+        result = await upsert_product(
+            db,
+            payload.model_dump(),
+            replace_variants=True,
+        )
+    except VariantOwnershipError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except CatalogMutationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {"status": "success", "result": result.to_dict()}
 
 @router.post("/inventory/bulk-upload")
 async def bulk_upload_inventory(
@@ -175,42 +169,31 @@ async def bulk_upload_inventory(
     _: bool = Depends(verify_system_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    variant_result = await db.execute(
-        select(ProductVariant).where(
-            ProductVariant.id == payload.variant_id,
-            ProductVariant.product_id == payload.product_id,
+    try:
+        result = await bulk_insert_stock(
+            db,
+            product_id=payload.product_id,
+            variant_id=payload.variant_id,
+            credentials=payload.credentials,
         )
-    )
-    if not variant_result.scalars().first():
-        raise HTTPException(status_code=404, detail="Product variant not found.")
+    except CatalogMutationError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {
+        "status": "success",
+        "insertedCount": result.inserted_stock_count,
+        "duplicateCount": result.duplicate_stock_count,
+    }
 
-    inserted_count = 0
-    for raw_credential in payload.credentials:
-        credential = raw_credential.strip()
-        if not credential:
-            continue
-            
-        exists_result = await db.execute(
-            select(InventoryItem).where(
-                InventoryItem.product_id == payload.product_id,
-                InventoryItem.variant_id == payload.variant_id,
-                InventoryItem.credentials == credential,
-            ).with_for_update()
-        )
-        
-        if exists_result.scalars().first():
-            continue
-            
-        db.add(
-            InventoryItem(
-                product_id=payload.product_id,
-                variant_id=payload.variant_id,
-                credentials=credential,
-                status=ItemStatus.AVAILABLE,
-            )
-        )
-        inserted_count += 1
 
-    await db.commit()
-    await redis_client.delete("cache:products:all")
-    return {"status": "success", "insertedCount": inserted_count}
+@router.get("/products/{product_id}/diagnostics")
+async def get_catalog_diagnostics(
+    product_id: str,
+    _: bool = Depends(verify_system_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    return await catalog_diagnostics(db, product_id)
+
+
+@router.post("/catalog/refresh")
+async def refresh_catalog_cache(_: bool = Depends(verify_system_admin)):
+    return {"status": "success", "cacheInvalidated": await invalidate_catalog_cache()}

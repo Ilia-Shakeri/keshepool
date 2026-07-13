@@ -1,12 +1,16 @@
 "use client";
 
 import { useState } from "react";
-import { Check, ChevronLeft, Copy, Wallet } from "lucide-react";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import ProductIcon from "@/features/products/components/ProductIcon";
+import { Check, ChevronRight, Copy, Wallet } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import ProductIcon from "@/components/ProductIcon";
 import { Button } from "@/components/ui/button";
 import { checkoutWithWallet } from "@/lib/api";
-import type { Product, ProductVariant } from "@/features/products/types";
+import { copyText } from "@/lib/clipboard";
+import { shouldBlockFinancialDismiss } from "@/lib/modal-dismiss";
+import { useTelegramBackButton } from "@/hooks/useTelegramBackButton";
+import type { Product, ProductVariant } from "@/lib/products";
 import { formatPrice, toPersianDigits } from "@/lib/utils";
 
 interface CheckoutModalProps {
@@ -14,7 +18,7 @@ interface CheckoutModalProps {
   setIsOpen: (open: boolean) => void;
   product: Product;
   variant: ProductVariant;
-  walletBalance: number;
+  walletBalance: number | null;
   onSuccess?: () => void;
 }
 
@@ -43,27 +47,37 @@ const BACK_BTN_STYLE: React.CSSProperties = {
   border: "1px solid rgba(255,255,255,0.1)",
 };
 
+function createCheckoutKey(): string {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) return crypto.randomUUID();
+  return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
 export default function CheckoutModal({ isOpen, setIsOpen, product, variant, walletBalance, onSuccess }: CheckoutModalProps) {
+  const router = useRouter();
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [orderResult, setOrderResult] = useState<OrderResult | null>(null);
   const [copied, setCopied] = useState(false);
+  const [idempotencyKey, setIdempotencyKey] = useState(createCheckoutKey);
 
-  const canPay = walletBalance >= variant.rawPrice && (variant.stockCount ?? 0) > 0;
-  const hasEmptyWallet = walletBalance <= 0;
+  const isOutOfStock = (variant.stockCount ?? 0) <= 0;
+  const canPay = walletBalance !== null && walletBalance >= variant.rawPrice && !isOutOfStock;
+  const hasEmptyWallet = walletBalance === 0;
+  const shouldOfferCharge = walletBalance !== null && walletBalance < variant.rawPrice && !isOutOfStock;
 
   const handleSubmit = async () => {
     if (!canPay || isSubmitting) return;
     setIsSubmitting(true);
     setErrorMessage(null);
     try {
-      const result = await checkoutWithWallet(product.id, variant.id);
+      const result = await checkoutWithWallet(product.id, variant.id, idempotencyKey);
       setOrderResult({
         id: result.order.id,
         credentials: result.order.credentials,
         productBrand: result.order.productBrand,
         variantDuration: result.order.variantDuration,
       });
+      setIdempotencyKey(createCheckoutKey());
       onSuccess?.();
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "ثبت سفارش ناموفق بود.");
@@ -72,34 +86,40 @@ export default function CheckoutModal({ isOpen, setIsOpen, product, variant, wal
     }
   };
 
-  const handleCopy = () => {
+  const handleCopy = async () => {
     if (!orderResult) return;
-    navigator.clipboard.writeText(orderResult.credentials).then(() => {
+    if (await copyText(orderResult.credentials)) {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
-    });
+    } else {
+      window.Telegram?.WebApp?.showAlert(`اطلاعات را دستی کپی کنید:\n${orderResult.credentials}`);
+    }
   };
 
   const handleClose = () => {
+    if (isSubmitting) return;
     setOrderResult(null);
     setErrorMessage(null);
     setCopied(false);
     setIsOpen(false);
   };
 
+  useTelegramBackButton(handleClose, isOpen);
+
   const handleChargeWallet = () => {
-    setIsOpen(false);
-    window.location.href = "/finance?deposit=1";
+    handleClose();
+    router.push("/finance?deposit=1");
   };
 
   if (orderResult) {
     return (
-      <Dialog open={isOpen} onOpenChange={handleClose}>
-        <DialogContent className="text-[#F5F5F5] rounded-3xl w-[95%] max-w-md mx-auto overflow-y-auto max-h-[90vh] p-0 font-sans dir-rtl border-none" style={DIALOG_STYLE}>
+      <Dialog open={isOpen} onOpenChange={(open) => !open && handleClose()}>
+        <DialogContent className="dialog-safe-area max-h-[90dvh] w-[95%] max-w-md overflow-y-auto rounded-3xl border-none p-0 font-sans text-[#F5F5F5]" style={DIALOG_STYLE}>
+          <DialogDescription className="sr-only">اطلاعات سفارش و دسترسی خریداری‌شده</DialogDescription>
           <DialogHeader className="p-4 sticky top-0 z-20" style={HEADER_STYLE}>
             <div className="flex items-center gap-3">
-              <button onClick={handleClose} className="p-2 rounded-full hover:bg-white/10 transition-colors" style={BACK_BTN_STYLE}>
-                <ChevronLeft className="w-5 h-5" />
+              <button type="button" onClick={handleClose} className="p-2 rounded-full hover:bg-white/10 transition-colors" style={BACK_BTN_STYLE} aria-label="بستن نتیجه سفارش">
+                <ChevronRight className="w-5 h-5" />
               </button>
               <DialogTitle className="text-lg font-bold">سفارش ثبت شد</DialogTitle>
             </div>
@@ -116,7 +136,7 @@ export default function CheckoutModal({ isOpen, setIsOpen, product, variant, wal
 
             <div className="rounded-2xl p-4" style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)" }}>
               <p className="text-[10px] text-[#F5F5F5]/45 mb-2">اطلاعات دسترسی</p>
-              <p className="text-sm font-mono text-emerald-400 break-all leading-relaxed">{orderResult.credentials}</p>
+              <p className="select-text break-all font-mono text-sm leading-relaxed text-emerald-400">{orderResult.credentials}</p>
             </div>
 
             <Button
@@ -142,33 +162,41 @@ export default function CheckoutModal({ isOpen, setIsOpen, product, variant, wal
   }
 
   return (
-    <Dialog open={isOpen} onOpenChange={handleClose}>
-      <DialogContent className="text-[#F5F5F5] rounded-3xl w-[95%] max-w-md mx-auto overflow-y-auto max-h-[90vh] p-0 font-sans dir-rtl border-none" style={DIALOG_STYLE}>
+    <Dialog open={isOpen} onOpenChange={(open) => !open && handleClose()}>
+      <DialogContent
+        className="dialog-safe-area max-h-[90dvh] w-[95%] max-w-md overflow-y-auto rounded-3xl border-none p-0 font-sans text-[#F5F5F5]"
+        style={DIALOG_STYLE}
+        onEscapeKeyDown={(event) => shouldBlockFinancialDismiss(isSubmitting) && event.preventDefault()}
+        onPointerDownOutside={(event) => shouldBlockFinancialDismiss(isSubmitting) && event.preventDefault()}
+      >
+        <DialogDescription className="sr-only">بررسی محصول، موجودی کیف پول و ثبت سفارش</DialogDescription>
         <DialogHeader className="p-4 sticky top-0 z-20" style={HEADER_STYLE}>
           <div className="flex items-center gap-3">
-            <button onClick={handleClose} className="p-2 rounded-full hover:bg-white/10 transition-colors" style={BACK_BTN_STYLE}>
-              <ChevronLeft className="w-5 h-5" />
+            <button type="button" onClick={handleClose} disabled={isSubmitting} className="p-2 rounded-full hover:bg-white/10 transition-colors disabled:opacity-40" style={BACK_BTN_STYLE}>
+              <ChevronRight className="w-5 h-5" />
             </button>
             <DialogTitle className="text-lg font-bold">تسویه حساب</DialogTitle>
           </div>
         </DialogHeader>
 
         <div className="p-5 space-y-5">
-          <div className="rounded-2xl p-4 flex items-center justify-between" style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.09)" }}>
-            <div className="flex items-center gap-3">
+          <div className="flex items-center justify-between gap-3 rounded-2xl p-4" style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.09)" }}>
+            <div className="flex min-w-0 items-center gap-3">
               <ProductIcon icon={product.icon} assetUrl={product.assetUrl} gradient={product.gradient} category={product.category} sizeClassName="w-10 h-10" iconSizeClassName="w-4 h-4" />
-              <div>
-                <h4 className="font-bold text-sm">{product.brand}</h4>
+              <div className="min-w-0">
+                <h4 className="truncate text-sm font-bold">{product.brand}</h4>
                 <p className="text-xs text-[#F5F5F5]/55 mt-0.5">{variant.duration}</p>
               </div>
             </div>
-            <span className="font-bold text-[#F5F5F5]">{toPersianDigits(variant.priceLabel)}</span>
+            <span className="shrink-0 font-bold text-[#F5F5F5]">{toPersianDigits(variant.priceLabel)}</span>
           </div>
 
           <div className="rounded-2xl p-4 flex items-center justify-between" style={{ background: "rgba(230,57,70,0.07)", border: "1px solid rgba(230,57,70,0.2)" }}>
             <div className="text-right">
               <span className="block text-sm font-bold">کیف پول</span>
-              <span className="block text-[10px] text-[#F5F5F5]/50 mt-0.5">موجودی: {formatPrice(walletBalance)} تومان</span>
+              <span className="block text-[10px] text-[#F5F5F5]/50 mt-0.5">
+                {walletBalance === null ? "موجودی در دسترس نیست" : `موجودی: ${formatPrice(walletBalance)} تومان`}
+              </span>
             </div>
             <Wallet className="w-5 h-5 text-[#E63946]" />
           </div>
@@ -187,18 +215,22 @@ export default function CheckoutModal({ isOpen, setIsOpen, product, variant, wal
           {!canPay && (
             <div className="space-y-3 text-xs rounded-xl p-3" style={{ background: "rgba(230,57,70,0.1)", border: "1px solid rgba(230,57,70,0.2)" }}>
               <p className="text-[#E63946]">
-                {hasEmptyWallet
-                  ? "Wallet balance is zero. Charge your wallet first to complete this purchase."
-                  : "Wallet balance is not enough or the product is unavailable."}
+                {walletBalance === null
+                  ? "موجودی کیف پول دریافت نشد. پنجره را ببندید و دوباره تلاش کنید."
+                  : isOutOfStock
+                    ? "این گزینه اکنون موجود نیست."
+                    : hasEmptyWallet
+                      ? "موجودی کیف پول صفر است. پیش از خرید، کیف پول را شارژ کنید."
+                      : "موجودی کیف پول برای این خرید کافی نیست."}
               </p>
-              {hasEmptyWallet && (
+              {shouldOfferCharge && (
                 <Button
                   onClick={handleChargeWallet}
                   className="w-full py-4 rounded-xl text-xs font-bold transition-all active:scale-95 border-none gap-2"
                   style={{ background: "rgba(230,57,70,0.18)", color: "#F5F5F5" }}
                 >
                   <Wallet className="w-4 h-4" />
-                  Charge Wallet
+                  افزایش موجودی
                 </Button>
               )}
             </div>

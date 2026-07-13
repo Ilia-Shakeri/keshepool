@@ -1,8 +1,13 @@
+import logging
+
+from aiogram.enums import ChatMemberStatus
+from aiogram.exceptions import TelegramAPIError
 from aiogram.filters import BaseFilter
 from aiogram.types import CallbackQuery, Message
+
 from app.core.config import settings
 
-KESHEPOOL_ADMIN_GROUP_ID = "-5301036860"
+logger = logging.getLogger(__name__)
 
 
 class IsAdminFilter(BaseFilter):
@@ -18,12 +23,36 @@ class IsAdminFilter(BaseFilter):
         chat_id = str(getattr(chat, "id", ""))
         chat_type = getattr(chat, "type", "")
 
-        # Allow every member of the dedicated admin group to use admin commands there.
-        if chat_id == KESHEPOOL_ADMIN_GROUP_ID:
+        # Every admin action requires an explicit user allowlist entry.
+        if str(user.id) not in settings.admin_ids:
+            return False
+
+        if chat_type == "private":
             return True
 
-        # Allow only explicitly listed direct-message admins outside the group.
-        if chat_type == "private" and str(user.id) in settings.admin_direct_ids:
-            return True
+        # Group access also requires the configured chat and a current admin role.
+        if (
+            chat_type not in {"group", "supergroup"}
+            or not settings.ADMIN_GROUP_CHAT_ID
+            or chat_id != str(settings.ADMIN_GROUP_CHAT_ID)
+        ):
+            return False
 
-        return False
+        bot = getattr(event, "bot", None)
+        if bot is None:
+            logger.warning("Admin authorization denied because the bot context is unavailable.")
+            return False
+
+        try:
+            member = await bot.get_chat_member(chat_id=int(chat_id), user_id=user.id)
+        except TelegramAPIError as exc:
+            logger.warning(
+                "Admin authorization denied because group membership could not be verified: %s",
+                type(exc).__name__,
+            )
+            return False
+
+        return member.status in {
+            ChatMemberStatus.ADMINISTRATOR,
+            ChatMemberStatus.CREATOR,
+        }

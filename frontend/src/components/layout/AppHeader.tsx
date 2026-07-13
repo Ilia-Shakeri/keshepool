@@ -5,7 +5,7 @@ import Image from "next/image";
 export default function AppHeader() {
   return (
     <div
-      className="fixed top-0 left-0 w-full z-50 h-[52px]"
+      className="app-topbar fixed z-50"
       style={{
         background: "rgba(10, 10, 11, 0.82)",
         backdropFilter: "blur(24px)",
@@ -13,7 +13,7 @@ export default function AppHeader() {
         borderBottom: "1px solid rgba(255,255,255,0.06)",
       }}
     >
-      <div className="flex items-center justify-center h-full max-w-md mx-auto px-5">
+      <div className="flex h-full items-center justify-center px-5">
         {/* dir=ltr: forces icon-left / text-right regardless of the RTL page direction */}
         <div className="flex items-center gap-2" dir="ltr">
           <Image

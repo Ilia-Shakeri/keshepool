@@ -8,6 +8,14 @@ export interface TelegramWebAppUser {
   photo_url?: string;
 }
 
+export interface TelegramBackButton {
+  isVisible: boolean;
+  show: () => void;
+  hide: () => void;
+  onClick: (callback: () => void) => void;
+  offClick: (callback: () => void) => void;
+}
+
 export interface TelegramWebApp {
   ready: () => void;
   expand: () => void;
@@ -39,6 +47,7 @@ export interface TelegramWebApp {
   headerColor: string;
   backgroundColor: string;
   sendData: (data: string) => void;
+  BackButton: TelegramBackButton;
 }
 
 declare global {

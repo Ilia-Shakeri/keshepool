@@ -1,34 +1,49 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Check, Copy, Gift, Share2 } from "lucide-react";
-import { useRouter } from "next/navigation";
-import { getTelegramUserId, apiFetch } from "@/lib/api";
+import PageHeader from "@/components/PageHeader";
+import { getPublicConfig, getTelegramUserId } from "@/lib/api";
+import { copyText } from "@/lib/clipboard";
 
 export default function InvitePage() {
-  const router = useRouter();
   const [inviteLink, setInviteLink] = useState("");
   const [copied, setCopied] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+
+  const loadInviteLink = useCallback(async () => {
+    setLoadError(null);
+    try {
+      const config = await getPublicConfig();
+      const botUsername = config.botUsername?.replace(/^@/, "");
+      const telegramUserId = getTelegramUserId();
+      if (!botUsername) throw new Error("نام کاربری ربات تنظیم نشده است.");
+      setInviteLink(
+        telegramUserId
+          ? `https://t.me/${botUsername}?startapp=ref_${telegramUserId}`
+          : `https://t.me/${botUsername}`,
+      );
+    } catch (error) {
+      setInviteLink("");
+      setLoadError(error instanceof Error ? error.message : "لینک دعوت آماده نشد.");
+    }
+  }, []);
 
   useEffect(() => {
-    const telegramUserId = getTelegramUserId();
-    apiFetch<{ botUsername: string }>("/config")
-      .then((res) => {
-        const botUsername = res.botUsername || "keshepoolbot";
-        setInviteLink(`https://t.me/${botUsername}?start=ref_${telegramUserId || "guest"}`);
-      })
-      .catch(() => {
-        setInviteLink(`https://t.me/keshepoolbot?start=ref_${getTelegramUserId() || "guest"}`);
-      });
-  }, []);
+    void Promise.resolve().then(loadInviteLink);
+  }, [loadInviteLink]);
 
   const handleCopyLink = async () => {
     try {
-      await navigator.clipboard.writeText(inviteLink);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2500);
-    } catch (error) {
-      console.error("Clipboard copy failed:", error);
+      if (!inviteLink) return;
+      if (await copyText(inviteLink)) {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2500);
+      } else {
+        window.Telegram?.WebApp?.showAlert(`لینک را دستی کپی کنید:\n${inviteLink}`);
+      }
+    } catch {
+      window.Telegram?.WebApp?.showAlert(`لینک را دستی کپی کنید:\n${inviteLink}`);
     }
   };
 
@@ -40,18 +55,10 @@ export default function InvitePage() {
   };
 
   return (
-    <div className="min-h-screen text-[#F5F5F5] font-sans pb-32">
-      <header className="px-5 py-4 flex justify-between items-center">
-        <h1 className="text-base font-bold text-[#F5F5F5]">دعوت از دوستان</h1>
-        <button
-          onClick={() => router.back()}
-          className="text-[#F5F5F5]/50 text-xs px-3 py-1.5 rounded-xl transition-colors hover:text-[#F5F5F5] hover:bg-white/[0.06]"
-        >
-          بازگشت
-        </button>
-      </header>
+    <div className="min-h-[100dvh] pb-32 font-sans text-[#F5F5F5]">
+      <PageHeader title="دعوت از دوستان" />
 
-      <main className="px-5 flex flex-col items-center gap-6 mt-4">
+      <main className="mx-auto mt-4 flex max-w-lg flex-col items-center gap-6 px-5">
         {/* Gift icon */}
         <div className="relative">
           <div
@@ -69,7 +76,7 @@ export default function InvitePage() {
         <div className="text-center">
           <h2 className="text-lg font-bold text-[#F5F5F5] mb-2">دوست‌هایت را دعوت کن</h2>
           <p className="text-sm text-[#F5F5F5]/50 leading-relaxed max-w-xs mx-auto">
-            برای هر دوستی که دعوت کنی، <span className="text-[#E63946] font-semibold">تخفیف و اعتبار</span> هدیه می‌گیری.
+            این لینک، دعوت شما را هنگام ورود دوستتان ثبت می‌کند. ثبت دعوت به‌تنهایی به معنی پاداش مالی قطعی نیست.
           </p>
         </div>
 
@@ -91,9 +98,16 @@ export default function InvitePage() {
               {copied ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4 text-[#E63946]" />}
             </button>
             <span className="text-xs text-[#F5F5F5]/60 truncate dir-ltr font-mono flex-1 text-right">
-              {inviteLink || "در حال بارگذاری..."}
+              {inviteLink || (loadError ? "لینک در دسترس نیست" : "در حال بارگذاری...")}
             </span>
           </div>
+
+          {loadError && (
+            <div className="text-center text-xs text-[#E63946]">
+              <p>{loadError}</p>
+              <button type="button" onClick={() => void loadInviteLink()} className="mt-2 rounded-xl px-4 font-bold">تلاش دوباره</button>
+            </div>
+          )}
 
           {copied && (
             <p className="text-center text-xs text-emerald-400">لینک کپی شد!</p>

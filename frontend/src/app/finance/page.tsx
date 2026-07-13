@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   ArrowDownToLine,
   Bitcoin,
@@ -17,6 +17,9 @@ import {
   X,
 } from "lucide-react";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
+import { DialogDescription } from "@/components/ui/dialog";
+import PageHeader from "@/components/PageHeader";
+import { useTelegramBackButton } from "@/hooks/useTelegramBackButton";
 import {
   createCashoutRequest,
   createTetra98Payment,
@@ -29,6 +32,9 @@ import {
   type WalletTransaction,
 } from "@/lib/api";
 import { formatPrice, toPersianDigits } from "@/lib/utils";
+import { copyText } from "@/lib/clipboard";
+import { shouldBlockFinancialDismiss } from "@/lib/modal-dismiss";
+import { formatTransactionAmount } from "@/lib/transaction-format";
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -64,27 +70,13 @@ function txStatusBadge(status: string) {
 
 // ── main component ────────────────────────────────────────────────────────────
 
-function formatTransactionAmount(tx: WalletTransaction): string {
-  const sign = tx.amount >= 0 ? "+" : "";
-  const currency = (tx.currency || "IRR").toUpperCase();
-
-  if (currency === "USDT" || currency === "USD") {
-    return `${sign}$${Math.abs(tx.amount).toLocaleString("en-US", {
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2,
-    })}`;
-  }
-
-  return `${sign}${formatPrice(tx.amount)} تومان`;
-}
-
-
 export default function FinancePage() {
   const [activeTab, setActiveTab] = useState<ActiveTab>("wallet");
 
   // Wallet state
   const [walletBalance, setWalletBalance] = useState<number | null>(null);
   const [transactions, setTransactions] = useState<WalletTransaction[]>([]);
+  const [walletError, setWalletError] = useState<string | null>(null);
 
   // Deposit modal state
   const [isDepositOpen, setIsDepositOpen] = useState(false);
@@ -104,6 +96,7 @@ export default function FinancePage() {
 
   // Cashout state
   const [platforms, setPlatforms] = useState<CashoutPlatform[]>([]);
+  const [platformError, setPlatformError] = useState<string | null>(null);
   const [selectedPlatform, setSelectedPlatform] = useState("");
   const [customSource, setCustomSource] = useState("");
   const [cashoutDetails, setCashoutDetails] = useState("");
@@ -113,14 +106,23 @@ export default function FinancePage() {
 
   // Load wallet data
   const refreshWallet = async () => {
-    try {
-      const [balanceData, txData] = await Promise.all([getWalletBalance(), getWalletTransactions()]);
-      setWalletBalance(balanceData.balance);
-      setTransactions(txData);
-    } catch {
-      setWalletBalance(0);
-    }
+    setWalletError(null);
+    const [balanceData, txData] = await Promise.allSettled([getWalletBalance(), getWalletTransactions()]);
+    if (balanceData.status === "fulfilled") setWalletBalance(balanceData.value.balance);
+    else setWalletError("موجودی کیف پول دریافت نشد.");
+    if (txData.status === "fulfilled") setTransactions(txData.value);
+    else setWalletError("همه اطلاعات کیف پول دریافت نشد. دوباره تلاش کنید.");
   };
+
+  const loadPlatforms = useCallback(async () => {
+    setPlatformError(null);
+    try {
+      const data = await getCashoutPlatforms();
+      setPlatforms(data.platforms);
+    } catch (error) {
+      setPlatformError(error instanceof Error ? error.message : "فهرست منابع دریافت نشد.");
+    }
+  }, []);
 
   useEffect(() => {
     void Promise.resolve().then(refreshWallet);
@@ -129,11 +131,9 @@ export default function FinancePage() {
   // Load platforms when cashout tab activates
   useEffect(() => {
     if (activeTab === "cashout" && platforms.length === 0) {
-      getCashoutPlatforms()
-        .then((data) => setPlatforms(data.platforms))
-        .catch(() => {});
+      void Promise.resolve().then(loadPlatforms);
     }
-  }, [activeTab, platforms.length]);
+  }, [activeTab, loadPlatforms, platforms.length]);
 
   // ── deposit handlers ────────────────────────────────────────────────────────
 
@@ -214,14 +214,22 @@ export default function FinancePage() {
   };
 
   const handleCopyAddress = async (address: string) => {
-    try {
-      await navigator.clipboard.writeText(address);
+    if (await copyText(address)) {
       setCopiedAddress(true);
       setTimeout(() => setCopiedAddress(false), 2000);
-    } catch {
+    } else {
       window.Telegram?.WebApp?.showAlert(address);
     }
   };
+
+  const closeDeposit = () => {
+    if (shouldBlockFinancialDismiss(depositLoading)) return;
+    setCryptoDepositInfo(null);
+    setDepositError(null);
+    setIsDepositOpen(false);
+  };
+
+  useTelegramBackButton(closeDeposit, isDepositOpen);
 
   // ── cashout handler ─────────────────────────────────────────────────────────
 
@@ -260,14 +268,11 @@ export default function FinancePage() {
   // ── render ──────────────────────────────────────────────────────────────────
 
   return (
-    <div className="min-h-screen bg-[#0F0F10] text-[#F5F5F5] font-sans pb-32">
-      {/* Page header */}
-      <header className="p-5 pt-6 flex justify-center items-center">
-        <h1 className="text-base font-bold">مالی و کیف پول</h1>
-      </header>
+    <div className="min-h-[100dvh] bg-[#0F0F10] pb-32 font-sans text-[#F5F5F5]">
+      <PageHeader title="مالی و کیف پول" />
 
       {/* Tab switcher */}
-      <div className="px-5 mb-4">
+      <div className="mx-auto mb-4 max-w-2xl px-5">
         <div
           className="flex rounded-2xl p-1 gap-1"
           style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.08)" }}
@@ -298,7 +303,7 @@ export default function FinancePage() {
         </div>
       </div>
 
-      <main className="px-5 space-y-5">
+      <main className="mx-auto max-w-2xl space-y-5 px-5">
         {/* ── WALLET TAB ── */}
         {activeTab === "wallet" && (
           <>
@@ -334,6 +339,12 @@ export default function FinancePage() {
             {/* Transaction history */}
             <div>
               <h2 className="text-sm font-bold mb-3">تاریخچه تراکنش‌ها</h2>
+              {walletError && (
+                <div className="mb-3 flex items-center justify-between gap-3 rounded-2xl border border-amber-400/20 bg-amber-400/[0.07] p-3 text-xs text-amber-200">
+                  <span>{walletError}</span>
+                  <button type="button" onClick={() => void refreshWallet()} className="shrink-0 rounded-xl px-3 font-bold">تلاش دوباره</button>
+                </div>
+              )}
               <div className="space-y-1">
                 {transactions.length === 0 ? (
                   <div className="text-center py-10 text-[#F5F5F5]/40 text-sm">
@@ -345,7 +356,7 @@ export default function FinancePage() {
                       key={tx.id}
                       className="flex items-center justify-between p-3 rounded-2xl hover:bg-white/5 transition-colors"
                     >
-                      <div className="flex items-center gap-3">
+                      <div className="flex min-w-0 items-center gap-3">
                         <div
                           className={`w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0 ${
                             tx.amount >= 0
@@ -465,6 +476,15 @@ export default function FinancePage() {
                     </div>
                   </div>
 
+                  {platformError && (
+                    <div className="flex items-center justify-between gap-3 rounded-xl bg-[#E63946]/10 p-3 text-xs text-[#E63946]">
+                      <span>{platformError}</span>
+                      <button type="button" onClick={() => {
+                        void loadPlatforms();
+                      }} className="shrink-0 rounded-lg px-3 font-bold">تلاش دوباره</button>
+                    </div>
+                  )}
+
                   {/* Custom source input (shown only when "other" is selected) */}
                   {selectedPlatform === "other" && (
                     <div>
@@ -549,26 +569,26 @@ export default function FinancePage() {
       <Dialog
         open={isDepositOpen}
         onOpenChange={(open) => {
-          if (!open) {
-            setCryptoDepositInfo(null);
-            setDepositError(null);
-          }
-          setIsDepositOpen(open);
+          if (!open) closeDeposit();
         }}
       >
         <DialogContent
-          className="text-[#F5F5F5] rounded-3xl w-[95%] max-w-md mx-auto p-5 font-sans dir-rtl border-none"
+          className="dialog-safe-area max-h-[90dvh] w-[95%] max-w-md overflow-y-auto rounded-3xl border-none p-5 font-sans text-[#F5F5F5]"
           style={{
             background: "rgba(12,14,18,0.97)",
             backdropFilter: "blur(40px)",
             border: "1px solid rgba(255,255,255,0.09)",
           }}
+          onEscapeKeyDown={(event) => shouldBlockFinancialDismiss(depositLoading) && event.preventDefault()}
+          onPointerDownOutside={(event) => shouldBlockFinancialDismiss(depositLoading) && event.preventDefault()}
         >
+          <DialogDescription className="sr-only">انتخاب روش و مبلغ افزایش موجودی کیف پول</DialogDescription>
           <DialogTitle className="text-lg font-bold flex justify-between items-center mb-4">
             افزایش موجودی
             <button
-              onClick={() => setIsDepositOpen(false)}
-              className="p-1.5 rounded-full hover:bg-white/10 transition-colors"
+              onClick={closeDeposit}
+              disabled={depositLoading}
+              className="p-1.5 rounded-full hover:bg-white/10 transition-colors disabled:opacity-40"
               style={{
                 background: "rgba(255,255,255,0.07)",
                 border: "1px solid rgba(255,255,255,0.1)",
@@ -798,7 +818,7 @@ export default function FinancePage() {
                     ) : (
                       <Copy className="w-4 h-4 text-[#F5F5F5]/50" />
                     )}
-                    <span>{copiedAddress ? "Copied" : "Copy"}</span>
+                    <span>{copiedAddress ? "کپی شد" : "کپی"}</span>
                   </button>
                 </div>
               </div>

@@ -1,45 +1,57 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { ChevronLeft, FileText, MessageSquare, User, Users } from "lucide-react";
-import Image from "next/image";
+import { useCallback, useEffect, useState } from "react";
+import { ChevronLeft, FileText, MessageSquare, Users } from "lucide-react";
 import { useRouter } from "next/navigation";
+import PageHeader from "@/components/PageHeader";
+import UserAvatar from "@/components/UserAvatar";
 import { getProfile, type BootstrapProfile } from "@/lib/api";
 import { formatPrice, toPersianDigits } from "@/lib/utils";
 
 export default function ProfilePage() {
   const router = useRouter();
   const [profile, setProfile] = useState<BootstrapProfile | null>(null);
+  const [profileError, setProfileError] = useState<string | null>(null);
+
+  const loadProfile = useCallback(async () => {
+    setProfileError(null);
+    try {
+      setProfile(await getProfile());
+    } catch (error) {
+      setProfileError(error instanceof Error ? error.message : "پروفایل دریافت نشد.");
+    }
+  }, []);
 
   useEffect(() => {
-    getProfile().then(setProfile).catch((error) => console.error("Profile load failed:", error));
-  }, []);
+    void Promise.resolve().then(loadProfile);
+  }, [loadProfile]);
 
   const fullName = `${profile?.user.firstName || "کاربر"} ${profile?.user.lastName || ""}`.trim();
 
   return (
-    <div className="min-h-screen text-[#F5F5F5] font-sans pb-32">
-      <header className="px-5 py-4 flex justify-center items-center">
-        <h1 className="text-base font-bold text-[#F5F5F5]">پروفایل</h1>
-      </header>
+    <div className="min-h-[100dvh] pb-32 font-sans text-[#F5F5F5]">
+      <PageHeader title="پروفایل" />
 
-      <main className="px-5 mt-2">
+      <main className="mx-auto mt-2 max-w-2xl px-5">
+        {profileError && (
+          <div className="mb-5 rounded-2xl border border-[#E63946]/20 bg-[#E63946]/[0.06] p-4 text-center text-xs text-[#E63946]">
+            <p>{profileError}</p>
+            <button type="button" onClick={() => void loadProfile()} className="mt-2 rounded-xl px-4 font-bold">تلاش دوباره</button>
+          </div>
+        )}
         {/* Avatar + name */}
         <div className="flex flex-col items-center gap-3 mb-8">
-          <div
-            className="w-20 h-20 relative rounded-full flex items-center justify-center overflow-hidden"
+          <UserAvatar
+            firstName={profile?.user.firstName}
+            username={profile?.user.username}
+            telegramId={profile?.user.telegramId}
+            className="size-20 text-3xl"
             style={{
               background: "linear-gradient(135deg, rgba(255,255,255,0.1) 0%, rgba(255,255,255,0.04) 100%)",
               border: "2px solid rgba(255,255,255,0.12)",
               boxShadow: "0 0 40px rgba(230,57,70,0.12)",
             }}
-          >
-            {profile?.user.photoUrl ? (
-              <Image src={profile.user.photoUrl} alt="" fill sizes="80px" className="object-cover" unoptimized />
-            ) : (
-              <User className="w-9 h-9 text-[#F5F5F5]/50" />
-            )}
-          </div>
+          />
           <div className="text-center">
             <h2 className="text-lg font-bold text-[#F5F5F5]">{fullName}</h2>
             {profile?.user.username && (
@@ -56,25 +68,25 @@ export default function ProfilePage() {
             border: "1px solid rgba(255,255,255,0.09)",
           }}
         >
-          <div className="flex flex-col items-center gap-1">
-            <span className="text-xl font-bold text-[#F5F5F5]">{toPersianDigits(profile?.orderCount || 0)}</span>
+          <div className="flex min-w-0 flex-1 flex-col items-center gap-1">
+            <span className="max-w-full truncate text-base font-bold text-[#F5F5F5] sm:text-xl">{toPersianDigits(profile?.orderCount || 0)}</span>
             <span className="text-[10px] text-[#F5F5F5]/45">سفارش</span>
           </div>
 
           <div className="h-10 w-px" style={{ background: "rgba(255,255,255,0.08)" }} />
 
-          <div className="flex flex-col items-center gap-1">
-            <span className="text-xl font-bold text-emerald-400">{toPersianDigits(profile?.activeOrderCount || 0)}</span>
+          <div className="flex min-w-0 flex-1 flex-col items-center gap-1">
+            <span className="max-w-full truncate text-base font-bold text-emerald-400 sm:text-xl">{toPersianDigits(profile?.activeOrderCount || 0)}</span>
             <span className="text-[10px] text-[#F5F5F5]/45">سرویس فعال</span>
           </div>
 
           <div className="h-10 w-px" style={{ background: "rgba(255,255,255,0.08)" }} />
 
           <button
-            className="flex flex-col items-center gap-1 active:scale-95 transition-transform"
+            className="flex min-w-0 flex-1 flex-col items-center gap-1 transition-transform active:scale-95"
             onClick={() => router.push("/finance")}
           >
-            <span className="text-xl font-bold text-[#F5F5F5]">{formatPrice(profile?.walletBalance || 0)}</span>
+            <span className="max-w-full truncate text-base font-bold text-[#F5F5F5] sm:text-xl">{formatPrice(profile?.walletBalance || 0)}</span>
             <span className="text-[10px] text-[#F5F5F5]/45">موجودی</span>
           </button>
         </div>
@@ -116,7 +128,7 @@ export default function ProfilePage() {
               </div>
               <span className="text-sm font-medium text-[#F5F5F5]/80">دعوت از دوستان</span>
             </div>
-            <span className="text-[10px] font-bold text-[#E63946]">کسب درآمد</span>
+            <span className="text-[10px] font-bold text-[#E63946]">دعوت دوستان</span>
           </button>
         </div>
 
