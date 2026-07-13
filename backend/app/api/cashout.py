@@ -1,5 +1,5 @@
 import logging
-from typing import Dict
+from typing import Any, Dict
 
 from aiogram import Bot
 from fastapi import APIRouter, Depends, HTTPException
