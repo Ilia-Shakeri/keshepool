@@ -36,7 +36,7 @@ REGISTRY_IMAGE/backend:<full-commit-sha>
 REGISTRY_IMAGE/frontend:<full-commit-sha>
 ```
 
-Compose consumes images only. It does not contain `build:` sections. `deploy.sh` is the sole production migration owner; the backend entrypoint only starts the server. Do not run a second `alembic upgrade head` during the same release.
+Compose builds local images by default and consumes the explicit immutable image pair exported by `deploy.sh` in production. `deploy.sh` is the sole production migration owner; the backend entrypoint only starts the server. Do not run a second `alembic upgrade head` during the same release.
 
 The deployment order is:
 

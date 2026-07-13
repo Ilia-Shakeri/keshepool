@@ -10,7 +10,7 @@ from app.core.database import get_db
 from app.core.security import validate_telegram_data
 from app.models import Order, User
 from app.services.cache_service import check_rate_limit, invalidate_catalog_cache
-from app.services.catalog_service import get_public_catalog, parse_product_features
+from app.services.catalog_service import get_public_catalog
 from app.services.inventory_service import fulfill_wallet_order
 from app.services.user_service import ensure_user_from_telegram_init
 

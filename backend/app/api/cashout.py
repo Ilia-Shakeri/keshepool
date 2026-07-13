@@ -59,7 +59,7 @@ class CashoutRequestCreate(BaseModel):
     def validate_platform(cls, value: str) -> str:
         normalised = value.lower().strip()
         if normalised not in ALLOWED_PLATFORMS:
-            raise ValueError(f"Unsupported platform.")
+            raise ValueError("Unsupported platform.")
         return normalised
 
     @field_validator("details_text")

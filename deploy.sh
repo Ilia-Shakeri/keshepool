@@ -145,8 +145,7 @@ if ! wait_for_health redis 30; then
 fi
 
 echo "[deploy] Preparing persistent asset permissions."
-docker compose run --rm --no-deps --user root backend \
-  sh -c 'mkdir -p /app/static && chown -R appuser:appuser /app/static'
+docker compose run --rm --no-deps static-init
 
 echo "[deploy] Entering the migration maintenance window."
 cutover_started=true

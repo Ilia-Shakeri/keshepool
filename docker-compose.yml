@@ -80,6 +80,17 @@ services:
       - keshepool_internal_net
     logging: *default-logging
 
+  static-init:
+    image: ${BACKEND_IMAGE:-keshepool-backend:local}
+    build:
+      context: ./backend
+    user: root
+    command: ["sh", "-c", "mkdir -p /app/static && chown -R appuser:appuser /app/static"]
+    restart: "no"
+    volumes:
+      - ./static:/app/static
+    logging: *default-logging
+
   backend:
     image: ${BACKEND_IMAGE:-keshepool-backend:local}
     build:
@@ -120,6 +131,8 @@ services:
     volumes:
       - ./static:/app/static
     depends_on:
+      static-init:
+        condition: service_completed_successfully
       db:
         condition: service_healthy
       redis:

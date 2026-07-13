@@ -183,7 +183,7 @@ def test_tetra_redirect_urls_are_https_and_bound_to_gateway_identity(monkeypatch
     for bad_url, kind in (
         (f"http://pay.example.test/payment/{authority}", "web"),
         (f"https://evil.example/payment/{authority}", "web"),
-        (f"https://pay.example.test/payment/other", "web"),
+        ("https://pay.example.test/payment/other", "web"),
         (f"https://evil.example/Tetra98_bot?start=pay_{authority}", "bot"),
         ("https://t.me/Tetra98_bot?start=pay_other", "bot"),
         ("https://t.me/Tetra98_bot?broken", "bot"),

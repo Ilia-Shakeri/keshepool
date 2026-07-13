@@ -4,7 +4,6 @@ import html
 import io
 import json
 import logging
-import mimetypes
 import re
 from decimal import Decimal, InvalidOperation
 from pathlib import Path

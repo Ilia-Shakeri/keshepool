@@ -1,6 +1,5 @@
 import asyncio
 from datetime import datetime, timezone
-from types import SimpleNamespace
 
 from app.models import User, Wallet
 from app.services.user_service import ensure_user_from_telegram_init, parse_telegram_user

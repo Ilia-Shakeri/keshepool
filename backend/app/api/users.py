@@ -86,7 +86,6 @@ async def get_wallet_transactions(user: User = Depends(current_user), db: AsyncS
     if not wallet:
         return []
 
-    from app.models import Transaction
     tx_result = await db.execute(
         select(Transaction)
         .where(Transaction.wallet_id == wallet.id)

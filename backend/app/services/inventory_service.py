@@ -12,7 +12,6 @@ from app.models import (
     Notification,
     Order,
     OrderStatus,
-    Product,
     ProductVariant,
     Transaction,
     TransactionStatus,
