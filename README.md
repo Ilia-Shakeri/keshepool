@@ -70,21 +70,16 @@ ADMIN_TELEGRAM_IDS=123456789
 ADMIN_API_KEY=your_internal_admin_api_key
 ```
 
-### 3. Build Local Images
+### 3. Run the Stack
 
-Compose runs a matched image pair and does not build or mix local source during deployment. For local use, build both expected image names first:
+For a source checkout, Compose builds the backend and frontend images locally when `--build` is used:
 
 ```bash
-docker build -t keshepool-backend:local ./backend
-docker build --build-arg BACKEND_INTERNAL_URL=http://backend:8000 --build-arg NEXT_PUBLIC_API_URL=/api --build-arg DEPLOYMENT_VERSION=local -t keshepool-frontend:local ./frontend
 docker network create caddy_gateway_net
-docker compose up -d db redis
-docker compose stop frontend
-docker compose stop backend
-docker compose run --rm --no-deps backend python3 /app/scripts/stamp_if_legacy.py
-docker compose run --rm --no-deps backend alembic upgrade head
-docker compose up -d --force-recreate backend frontend
+docker compose up -d --build --force-recreate
 ```
+
+Production releases still use the registry image pair selected by `BACKEND_IMAGE` and `FRONTEND_IMAGE`; `deploy.sh` pulls and verifies those images before cutover.
 
 ### 4. Verify Deployment
 

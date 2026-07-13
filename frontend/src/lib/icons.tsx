@@ -1,6 +1,6 @@
 import { Shield, Music, MonitorPlay, MessageCircle, Sparkles, Gamepad2, Twitter, Bot, PenTool, Briefcase, BookOpen, LineChart, Video, Box, Wrench } from "lucide-react";
 import React from "react";
-import type { ProductCategory } from "@/lib/products";
+import type { ProductCategory } from "@/features/products/types";
 
 type IconRenderer = (sizeClass?: string) => React.ReactNode;
 

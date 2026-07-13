@@ -3,10 +3,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Bell, Bot, Code, Flame, Layout, MessageCircle, MoreHorizontal, Music, PlaySquare, Shield, X } from "lucide-react";
-import ProductIcon from "@/components/ProductIcon";
+import ProductIcon from "@/features/products/components/ProductIcon";
 import UserAvatar from "@/components/UserAvatar";
 import { getNotifications, getProducts, markNotificationsRead, type UserNotification } from "@/lib/api";
-import type { Product } from "@/lib/products";
+import type { Product } from "@/features/products/types";
 import { toPersianDigits } from "@/lib/utils";
 
 export default function Home() {

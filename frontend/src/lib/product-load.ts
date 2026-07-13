@@ -1,4 +1,4 @@
-import type { Product } from "@/lib/products";
+import type { Product } from "@/features/products/types";
 
 export interface ProductWalletLoadResult {
   products: Product[];

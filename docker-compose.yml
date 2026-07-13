@@ -82,6 +82,8 @@ services:
 
   backend:
     image: ${BACKEND_IMAGE:-keshepool-backend:local}
+    build:
+      context: ./backend
     container_name: keshepool-backend
     restart: unless-stopped
     init: true
@@ -134,6 +136,12 @@ services:
 
   frontend:
     image: ${FRONTEND_IMAGE:-keshepool-frontend:local}
+    build:
+      context: ./frontend
+      args:
+        BACKEND_INTERNAL_URL: http://backend:8000
+        NEXT_PUBLIC_API_URL: /api
+        DEPLOYMENT_VERSION: ${IMAGE_TAG:-local}
     container_name: keshepool-frontend
     restart: unless-stopped
     init: true

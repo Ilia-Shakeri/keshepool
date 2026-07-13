@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const output = resolve(root, ".test-dist");
 const compiler = resolve(root, "node_modules", "typescript", "bin", "tsc");
-const testFile = resolve(output, "all.test.js");
+const testFile = resolve(output, "lib", "all.test.js");
 
 let exitCode = 1;
 try {

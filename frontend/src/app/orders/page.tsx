@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Check, ChevronRight, Copy, Headphones } from "lucide-react";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import ProductIcon from "@/components/ProductIcon";
+import ProductIcon from "@/features/products/components/ProductIcon";
 import PageHeader from "@/components/PageHeader";
 import { getOrders, getPublicConfig, type UserOrder } from "@/lib/api";
 import { copyText } from "@/lib/clipboard";

@@ -3,14 +3,14 @@
 import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Check, RotateCcw, Search, SlidersHorizontal, X } from "lucide-react";
-import ProductDetailModal from "@/components/ProductDetailModal";
-import CheckoutModal from "@/components/CheckoutModal";
-import ProductIcon from "@/components/ProductIcon";
+import ProductDetailModal from "@/features/products/components/ProductDetailModal";
+import CheckoutModal from "@/features/products/components/CheckoutModal";
+import ProductIcon from "@/features/products/components/ProductIcon";
 import PageHeader from "@/components/PageHeader";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { useTelegramBackButton } from "@/hooks/useTelegramBackButton";
 import { getProducts, getWalletBalance } from "@/lib/api";
-import type { Product, ProductCategory, ProductVariant } from "@/lib/products";
+import type { Product, ProductCategory, ProductVariant } from "@/features/products/types";
 import { resolveProductWalletLoad } from "@/lib/product-load";
 import {
   countActiveProductFilters,

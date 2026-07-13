@@ -2,7 +2,7 @@
 
 import Image from "next/image";
 import { IconMap, CATEGORY_ICON_MAP } from "@/lib/icons";
-import type { ProductCategory } from "@/lib/products";
+import type { ProductCategory } from "@/features/products/types";
 
 interface ProductIconProps {
   icon?: string;

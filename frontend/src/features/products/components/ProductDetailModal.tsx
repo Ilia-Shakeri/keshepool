@@ -3,9 +3,9 @@
 import { useMemo, useState } from "react";
 import { ChevronRight, CheckCircle2 } from "lucide-react";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
-import ProductIcon from "@/components/ProductIcon";
+import ProductIcon from "@/features/products/components/ProductIcon";
 import { useTelegramBackButton } from "@/hooks/useTelegramBackButton";
-import type { Product, ProductVariant } from "@/lib/products";
+import type { Product, ProductVariant } from "@/features/products/types";
 import { toPersianDigits } from "@/lib/utils";
 
 interface ProductDetailModalProps {

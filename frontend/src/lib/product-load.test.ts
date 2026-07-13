@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { Product } from "./products.ts";
+import type { Product } from "../features/products/types.ts";
 import { resolveProductWalletLoad } from "./product-load.ts";
 
 test("catalog stays available when wallet loading fails", () => {

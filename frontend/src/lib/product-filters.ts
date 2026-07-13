@@ -1,4 +1,4 @@
-import type { ProductCategory, ProductVariant } from "@/lib/products";
+import type { ProductCategory, ProductVariant } from "@/features/products/types";
 
 export type ProductSort = "newest" | "price-asc" | "price-desc" | "alphabetical";
 export type AvailabilityFilter = "all" | "in-stock";

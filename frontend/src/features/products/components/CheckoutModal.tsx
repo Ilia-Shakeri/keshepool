@@ -4,13 +4,13 @@ import { useState } from "react";
 import { Check, ChevronRight, Copy, Wallet } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import ProductIcon from "@/components/ProductIcon";
+import ProductIcon from "@/features/products/components/ProductIcon";
 import { Button } from "@/components/ui/button";
 import { checkoutWithWallet } from "@/lib/api";
 import { copyText } from "@/lib/clipboard";
 import { shouldBlockFinancialDismiss } from "@/lib/modal-dismiss";
 import { useTelegramBackButton } from "@/hooks/useTelegramBackButton";
-import type { Product, ProductVariant } from "@/lib/products";
+import type { Product, ProductVariant } from "@/features/products/types";
 import { formatPrice, toPersianDigits } from "@/lib/utils";
 
 interface CheckoutModalProps {

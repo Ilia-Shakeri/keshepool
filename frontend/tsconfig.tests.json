@@ -7,6 +7,7 @@
     "noEmit": false,
     "incremental": false,
     "isolatedModules": false,
+    "rootDir": "src",
     "outDir": ".test-dist",
     "rewriteRelativeImportExtensions": true,
     "types": ["node"]
