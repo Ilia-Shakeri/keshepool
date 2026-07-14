@@ -28,10 +28,10 @@ export default function RootLayout({
     <html lang="fa" dir="rtl" suppressHydrationWarning>
       <body className="bg-[#0F0F10] font-sans text-[#F5F5F5] antialiased" suppressHydrationWarning>
         <Script src="https://telegram.org/js/telegram-web-app.js" strategy="beforeInteractive" />
-        <TelegramBootstrap />
         <div className="app-shell relative overflow-x-clip bg-[#0F0F10] shadow-2xl lg:border-x lg:border-[#33383F]/50">
           <AppHeader />
           <main className="app-main">
+            <TelegramBootstrap />
             {children}
           </main>
           <BottomNav />

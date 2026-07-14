@@ -318,12 +318,12 @@ function ProductsContent() {
           </button>
         </div>
 
-        <div className="flex gap-2 overflow-x-auto scrollbar-hide dir-rtl pb-1 -mx-5 px-5">
+        <div className="scrollbar-hide -mx-5 flex snap-x snap-mandatory gap-2 overflow-x-auto px-5 pb-1" dir="rtl">
           {CATEGORIES.map((cat) => (
             <button
               key={cat.id}
               onClick={() => selectCategory(cat.id)}
-              className={`whitespace-nowrap px-4 py-1.5 rounded-xl text-xs font-semibold transition-all duration-200 ${
+              className={`shrink-0 snap-start whitespace-nowrap rounded-xl px-4 py-1.5 text-xs font-semibold transition-all duration-200 ${
                 activeCategory === cat.id
                   ? "bg-[#E63946] text-white shadow-lg shadow-[#E63946]/25"
                   : "bg-white/[0.06] text-[#F5F5F5]/60 border border-white/[0.08] hover:bg-white/[0.1] hover:text-[#F5F5F5]/80"

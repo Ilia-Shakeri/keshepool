@@ -37,8 +37,8 @@ export default function TelegramBootstrap() {
   if (!errorMessage) return null;
 
   return (
-    <div className="fixed inset-x-4 top-[calc(var(--app-header-height)+var(--safe-area-top)+0.75rem)] z-[10000] mx-auto flex max-w-xl items-center justify-between gap-3 rounded-2xl border border-[#E63946]/30 bg-[#181013]/95 p-3 text-right shadow-2xl backdrop-blur-xl">
-      <p className="text-xs leading-5 text-[#F5F5F5]/85">{errorMessage}</p>
+    <div className="relative z-30 mx-4 mt-3 flex items-center justify-between gap-3 rounded-2xl border border-[#E63946]/30 bg-[#181013]/95 p-3 text-right shadow-xl backdrop-blur-xl sm:mx-auto sm:max-w-xl">
+      <p className="min-w-0 flex-1 text-xs leading-5 text-[#F5F5F5]/85">{errorMessage}</p>
       <button
         type="button"
         onClick={() => void runBootstrap()}
