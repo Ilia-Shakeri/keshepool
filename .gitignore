@@ -4,6 +4,7 @@
 
 # Environment Variables
 .env
+.env.*
 .env.local
 .env.*.local
 
@@ -47,10 +48,25 @@ full_Keshepool_project_code.txt
 #Design Png Files
 Design_Refrence
 
-# Claude AI and Graphify Ignore Rules
-CLAUDE.md
+# Tool output
 graphify-out/
 
 #backups
 backups/*
 !backups/.gitkeep
+
+# Sensitive and generated exports
+*.pem
+*.key
+*.crt
+*.cer
+*.p12
+*.pfx
+*.sql
+*.sql.gz
+*.dump
+*.backup
+*.tar
+*.tar.gz
+*.tgz
+*.zip

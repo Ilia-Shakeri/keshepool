@@ -24,7 +24,19 @@ compose_validation:
     - docker compose --env-file .env.example config --quiet
     - sh -n deploy.sh
     - sh -n smoke.sh
+    - sh -n scripts/check-backup.sh
+    - sh -n scripts/export-source.sh
     - sh -n backend/tests/validate_legacy_migration.sh
+
+secret_scan:
+  stage: validate
+  variables:
+    GIT_DEPTH: "0"
+  image:
+    name: ghcr.io/gitleaks/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f
+    entrypoint: [""]
+  script:
+    - gitleaks git --source . --config .gitleaks.toml --redact --verbose
 
 backend_tests:
   stage: test
@@ -45,6 +57,7 @@ backend_tests:
     WEB_APP_URL: https://example.test
     ADMIN_API_KEY: test_admin_api_key
     ADMIN_TELEGRAM_IDS: "123456"
+    ADMIN_REPORT_LANGUAGE: fa
     ENVIRONMENT: test
     ASSET_ROOT: /tmp/keshepool-static
     KESHEPOOL_RUN_POSTGRES_TESTS: "1"
@@ -86,6 +99,7 @@ publish_images:
       alias: docker
   needs:
     - compose_validation
+    - secret_scan
     - backend_tests
     - frontend_checks
   before_script:
@@ -121,8 +135,9 @@ deploy_production:
     - if [ -f "$DEPLOY_KNOWN_HOSTS" ]; then cp "$DEPLOY_KNOWN_HOSTS" ~/.ssh/known_hosts; else printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts; fi
     - chmod 600 ~/.ssh/known_hosts
   script:
-    - ssh "$DEPLOY_USER@$DEPLOY_HOST" "mkdir -p '$DEPLOY_PATH'"
+    - ssh "$DEPLOY_USER@$DEPLOY_HOST" "mkdir -p '$DEPLOY_PATH/scripts'"
     - scp docker-compose.yml deploy.sh smoke.sh "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_PATH/"
+    - scp scripts/check-backup.sh "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_PATH/scripts/"
     - printf '%s' "$CI_REGISTRY_PASSWORD" | ssh "$DEPLOY_USER@$DEPLOY_HOST" "docker login -u '$CI_REGISTRY_USER' --password-stdin '$CI_REGISTRY'"
     - ssh "$DEPLOY_USER@$DEPLOY_HOST" "cd '$DEPLOY_PATH' && REGISTRY_IMAGE='$CI_REGISTRY_IMAGE' IMAGE_TAG='$CI_COMMIT_SHA' sh ./deploy.sh"
   rules:

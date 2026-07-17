@@ -1,4 +1,5 @@
 import json
+import hmac
 import logging
 import re
 import sys
@@ -40,6 +41,47 @@ module_logger = logging.getLogger(__name__)
 
 WEBHOOK_PATH = "/webhook"
 
+
+def _safe_webhook_info(bot_type: str, expected_url: str, info: object) -> dict[str, object]:
+    actual_url = str(getattr(info, "url", "") or "")
+    last_error_date = getattr(info, "last_error_date", None)
+    if hasattr(last_error_date, "isoformat"):
+        last_error_date = last_error_date.isoformat()
+    return {
+        "bot_type": bot_type,
+        "configured": bool(actual_url),
+        "url_matches_expected": hmac.compare_digest(actual_url, expected_url),
+        "pending_update_count": getattr(info, "pending_update_count", 0),
+        "last_error_date": last_error_date,
+        "last_error_message": getattr(info, "last_error_message", None),
+    }
+
+
+async def _log_webhook_info(target_bot: Bot, bot_type: str, expected_url: str) -> None:
+    info = await target_bot.get_webhook_info()
+    module_logger.info(
+        "Telegram webhook status checked.",
+        extra=_safe_webhook_info(bot_type, expected_url, info),
+    )
+
+
+def _webhook_request_fields(
+    request: Request,
+    bot_type: str,
+    result: str,
+    update_id: int | None = None,
+    exception_class: str | None = None,
+) -> dict[str, object]:
+    fields: dict[str, object] = {
+        "request_id": getattr(request.state, "request_id", None),
+        "bot_type": bot_type,
+        "telegram_update_id": update_id,
+        "result": result,
+    }
+    if exception_class:
+        fields["exception_class"] = exception_class
+    return fields
+
 # Validate critical environment configurations prior to application start
 if not settings.BOT_TOKEN or not settings.ADMIN_BOT_TOKEN or not settings.WEBHOOK_URL:
     module_logger.critical("Critical environment variables (BOT_TOKEN/ADMIN_BOT_TOKEN/WEBHOOK_URL) are missing.")
@@ -65,16 +107,20 @@ async def lifespan(app: FastAPI):
 
         full_webhook_url = settings.WEBHOOK_URL.rstrip('/')
         module_logger.info("Setting Telegram webhooks and bot configurations...")
+        main_webhook_url = f"{full_webhook_url}{WEBHOOK_PATH}/main"
         await bot.set_webhook(
-            url=f"{full_webhook_url}{WEBHOOK_PATH}/main",
+            url=main_webhook_url,
             drop_pending_updates=False,
             secret_token=settings.WEBHOOK_SECRET,
         )
+        await _log_webhook_info(bot, "main", main_webhook_url)
+        admin_webhook_url = f"{full_webhook_url}{WEBHOOK_PATH}/admin"
         await admin_bot.set_webhook(
-            url=f"{full_webhook_url}{WEBHOOK_PATH}/admin",
+            url=admin_webhook_url,
             drop_pending_updates=False,
             secret_token=settings.WEBHOOK_SECRET,
         )
+        await _log_webhook_info(admin_bot, "admin", admin_webhook_url)
         await admin_bot.set_my_commands([
             types.BotCommand(command="start", description="Open Admin Panel")
         ])
@@ -168,16 +214,26 @@ async def bot_webhook(
 ):
     # Enforce webhook authenticity using the secret token
     if x_telegram_bot_api_secret_token != settings.WEBHOOK_SECRET:
-        module_logger.warning("Unauthorized webhook payload received.")
+        module_logger.warning(
+            "Telegram webhook request rejected.",
+            extra=_webhook_request_fields(request, bot_type, "rejected"),
+        )
         raise HTTPException(status_code=401, detail="Invalid secret token.")
 
+    update_id = None
     try:
         update_data = await request.json()
         telegram_update = types.Update(**update_data)
-    except (json.JSONDecodeError, ValidationError, TypeError, ValueError):
+        update_id = telegram_update.update_id
+    except (json.JSONDecodeError, ValidationError, TypeError, ValueError) as exc:
         module_logger.warning(
-            "Malformed webhook update ignored.",
-            extra={"request_id": request.state.request_id, "bot_type": bot_type},
+            "Telegram webhook request ignored.",
+            extra=_webhook_request_fields(
+                request,
+                bot_type,
+                "ignored",
+                exception_class=type(exc).__name__,
+            ),
         )
         return {"status": "ignored"}
 
@@ -187,11 +243,21 @@ async def bot_webhook(
         else:
             await dp.feed_update(bot=bot, update=telegram_update)
     except Exception as exc:
-        module_logger.exception(
+        module_logger.error(
             "Webhook handler failed and may be retried.",
-            extra={"request_id": request.state.request_id, "bot_type": bot_type},
+            extra=_webhook_request_fields(
+                request,
+                bot_type,
+                "failed",
+                update_id,
+                type(exc).__name__,
+            ),
         )
         raise HTTPException(status_code=503, detail="Webhook handling failed.") from exc
+    module_logger.info(
+        "Telegram webhook request accepted.",
+        extra=_webhook_request_fields(request, bot_type, "accepted", update_id),
+    )
     return {"status": "ok"}
 
 @app.get("/health")

@@ -20,6 +20,7 @@ def settings_values(**overrides):
         "WEB_APP_URL": "https://example.test",
         "ADMIN_API_KEY": "test-admin-key",
         "ADMIN_TELEGRAM_IDS": "123456",
+        "ADMIN_REPORT_LANGUAGE": "fa",
         "USDT_TO_IRR_RATE": 85000,
     }
     values.update(overrides)
@@ -101,6 +102,11 @@ class AdminSettingsTests(unittest.TestCase):
         configured = Settings(**settings_values(CACHE_NAMESPACE="keshepool", ENVIRONMENT="staging"))
         self.assertEqual(configured.cache_namespace, "keshepool:staging")
 
+    def test_admin_report_language_accepts_only_supported_values(self):
+        self.assertEqual(Settings(**settings_values(ADMIN_REPORT_LANGUAGE="en")).ADMIN_REPORT_LANGUAGE, "en")
+        with self.assertRaises(ValidationError):
+            Settings(**settings_values(ADMIN_REPORT_LANGUAGE="de"))
+
 
 class AdminFilterTests(unittest.TestCase):
     def setUp(self):
@@ -129,6 +135,11 @@ class AdminFilterTests(unittest.TestCase):
     def test_explicit_admin_can_use_private_chat(self):
         event = self.event(42, 42, "private", ChatMemberStatus.MEMBER)
         self.assertTrue(self.authorize(event))
+        self.assertEqual(event.bot.calls, [])
+
+    def test_non_allowlisted_private_user_is_denied(self):
+        event = self.event(99, 99, "private", ChatMemberStatus.MEMBER)
+        self.assertFalse(self.authorize(event))
         self.assertEqual(event.bot.calls, [])
 
     def test_ordinary_group_member_is_denied(self):

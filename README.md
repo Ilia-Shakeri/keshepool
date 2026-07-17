@@ -79,7 +79,7 @@ docker network create caddy_gateway_net
 docker compose up -d --build --force-recreate
 ```
 
-Production releases still use the registry image pair selected by `BACKEND_IMAGE` and `FRONTEND_IMAGE`; `deploy.sh` pulls and verifies those images before cutover.
+Production uses only `sh ./deploy.sh` with one non-zero full Git SHA for both registry images. The script verifies image IDs and the frontend revision before cutover completes.
 
 ### 4. Verify Deployment
 
@@ -94,4 +94,6 @@ Production releases use immutable registry images tagged with the same full comm
 
 * Ensure your `WEBHOOK_URL` is secured with an SSL certificate (HTTPS), as this is strictly required by Telegram for Webhooks.
 * Keep your `.env` file out of version control.
+* Export shared source only with `sh ./scripts/export-source.sh`; CI scans commits for secrets.
+* Keep host `vm.overcommit_memory = 1` persistent for Redis. Containers do not change host kernel settings.
 * Information entered in the "Personal Account" checkout flow is sensitive; ensure proper encryption in your database layer before moving to production.

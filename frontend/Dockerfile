@@ -22,10 +22,12 @@ RUN --mount=type=cache,target=/root/.npm \
 
 FROM node:22-alpine AS runner
 WORKDIR /app
+ARG DEPLOYMENT_VERSION=local
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV BACKEND_INTERNAL_URL=http://backend:8000
 ENV NEXT_PUBLIC_API_URL=/api
+ENV DEPLOYMENT_VERSION=$DEPLOYMENT_VERSION
 
 RUN addgroup --system --gid 1001 nodejs
 RUN adduser --system --uid 1001 nextjs

@@ -17,6 +17,7 @@ TEST_ENV = {
     "WEB_APP_URL": "https://example.test",
     "ADMIN_API_KEY": "test-admin-key",
     "ADMIN_TELEGRAM_IDS": "123456",
+    "ADMIN_REPORT_LANGUAGE": "fa",
     "TETRA98_API_URL": "https://pay.example.test",
     "ASSET_ROOT": str(Path(tempfile.gettempdir()) / "keshepool-test-static"),
 }

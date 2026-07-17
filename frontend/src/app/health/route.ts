@@ -1,12 +1,12 @@
-import { proxyToBackend } from "@/lib/server-proxy";
+import { headResponse, livenessResponse } from "@/lib/health";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-export function GET(request: Request) {
-  return proxyToBackend(request, "/health");
+export function GET() {
+  return livenessResponse();
 }
 
-export function HEAD(request: Request) {
-  return proxyToBackend(request, "/health");
+export function HEAD() {
+  return headResponse(livenessResponse());
 }

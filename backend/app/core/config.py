@@ -1,5 +1,5 @@
 from functools import cached_property
-from typing import Set
+from typing import Literal, Set
 from urllib.parse import urlparse
 
 from pydantic import Field, model_validator
@@ -23,6 +23,7 @@ class Settings(BaseSettings):
     CRYPTO_DEPOSIT_ADDRESS_USDT: str = ""
     ADMIN_TELEGRAM_IDS: str = ""
     ADMIN_GROUP_CHAT_ID: str = ""
+    ADMIN_REPORT_LANGUAGE: Literal["fa", "en"] = "fa"
     ADMIN_API_KEY: str = Field(default="")
     ASSET_ROOT: str = "/app/static"
     PUBLIC_ASSET_BASE_URL: str = "/static"

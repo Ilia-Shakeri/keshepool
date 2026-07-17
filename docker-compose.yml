@@ -45,7 +45,7 @@ services:
       BACKUP_KEEP_MONTHS: 6
       # gzip level 6 — smaller dumps without heavy CPU cost.
       POSTGRES_EXTRA_OPTS: "-Z6"
-      HEALTHCHECK_PORT: 8080
+      BACKUP_MAX_AGE_SECONDS: ${BACKUP_MAX_AGE_SECONDS:-28800}
       TZ: ${TZ:-UTC}
     depends_on:
       db:
@@ -53,12 +53,13 @@ services:
     volumes:
       # Bind to host so dumps survive even total stack teardown and are reachable for off-site sync.
       - ./backups:/backups
+      - ./scripts/check-backup.sh:/usr/local/bin/check-backup:ro
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O - http://localhost:8080/ >/dev/null 2>&1 || exit 1"]
-      interval: 1m
-      timeout: 10s
+      test: ["CMD", "/bin/sh", "/usr/local/bin/check-backup"]
+      interval: 10m
+      timeout: 30s
       retries: 3
-      start_period: 30s
+      start_period: 6h30m
     networks:
       - keshepool_internal_net
     logging: *default-logging
@@ -115,6 +116,7 @@ services:
       - USDT_TO_IRR_RATE=${USDT_TO_IRR_RATE:?Set an operator-reviewed emergency USDT rate in .env}
       - ADMIN_TELEGRAM_IDS=${ADMIN_TELEGRAM_IDS}
       - ADMIN_GROUP_CHAT_ID=${ADMIN_GROUP_CHAT_ID:-}
+      - ADMIN_REPORT_LANGUAGE=${ADMIN_REPORT_LANGUAGE:-fa}
       - BOT_USERNAME=${BOT_USERNAME:-keshepoolbot}
       - ASSET_ROOT=/app/static
       - PUBLIC_ASSET_BASE_URL=/static
@@ -145,6 +147,7 @@ services:
       start_period: 20s
     networks:
       - keshepool_internal_net
+      - caddy_gateway_net
     logging: *default-logging
 
   frontend:
@@ -163,11 +166,39 @@ services:
       - NODE_ENV=production
       - BACKEND_INTERNAL_URL=http://backend:8000
       - PUBLIC_BASE_URL=${WEB_APP_URL}
+      - DEPLOYMENT_VERSION=${IMAGE_TAG:-local}
     depends_on:
       backend:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/health/ready').then((response) => { if (!response.ok) process.exit(1); }).catch(() => process.exit(1))"]
+      test:
+        - CMD
+        - node
+        - -e
+        - |
+          (async () => {
+            try {
+              const response = await fetch('http://127.0.0.1:3000/health/live', { signal: AbortSignal.timeout(3000) });
+              const body = (await response.text()).slice(0, 500);
+              if (!response.ok) {
+                console.error('frontend health HTTP ' + response.status + ': ' + body);
+                process.exit(1);
+              }
+              let payload;
+              try { payload = JSON.parse(body); } catch (error) {
+                console.error('frontend health malformed response: ' + error.name + ': ' + error.message);
+                process.exit(1);
+              }
+              if (payload.status !== 'alive') {
+                console.error('frontend health invalid body: ' + body);
+                process.exit(1);
+              }
+              console.log('frontend health ok: HTTP ' + response.status);
+            } catch (error) {
+              console.error('frontend health ' + (error.name || 'Error') + ': ' + (error.message || String(error)));
+              process.exit(1);
+            }
+          })();
       interval: 10s
       timeout: 5s
       retries: 12

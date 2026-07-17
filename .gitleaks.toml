@@ -1,0 +1,13 @@
+title = "Keshepool secret scan"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Clearly fake test and example values"
+regexTarget = "line"
+regexes = [
+  '''(?i)(your_main_bot_token|your_stealth_admin_token|change_me_to_a_strong_random_password|your_long_random_secure_string_here|a_very_long_random_string|replace_with_current_toman_rate|test[-_]webhook[-_]secret|test[-_]admin([-_]api)?[-_]key|keshepool_test_password)''',
+  '''123456:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA''',
+  '''123457:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB'''
+]

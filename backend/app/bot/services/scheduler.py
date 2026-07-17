@@ -1,8 +1,9 @@
 import logging
+from datetime import datetime, timezone
 
 from aiogram import Bot
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from sqlalchemy import select, func
+from sqlalchemy import and_, func, select
 
 from app.core.config import settings
 from app.core.database import AsyncSessionLocal
@@ -18,32 +19,26 @@ async def _check_low_stock(session) -> list[str]:
 
     Uses a LEFT JOIN so variants with zero available items are also included.
     """
-    from sqlalchemy import case
-
-    subq = (
+    checked_at = datetime.now(timezone.utc)
+    query = (
         select(
             ProductVariant.id.label("vid"),
             ProductVariant.duration.label("dur"),
-            func.coalesce(
-                func.count(
-                    case((InventoryItem.status == ItemStatus.AVAILABLE, InventoryItem.id))
-                ),
-                0,
-            ).label("qty"),
+            func.count(InventoryItem.id).label("qty"),
         )
-        .outerjoin(InventoryItem, InventoryItem.variant_id == ProductVariant.id)
+        .outerjoin(
+            InventoryItem,
+            and_(
+                InventoryItem.variant_id == ProductVariant.id,
+                InventoryItem.status == ItemStatus.AVAILABLE,
+                (InventoryItem.expires_at.is_(None) | (InventoryItem.expires_at > checked_at)),
+            ),
+        )
         .where(ProductVariant.is_active.is_(True))
         .group_by(ProductVariant.id, ProductVariant.duration)
-        .having(
-            func.coalesce(
-                func.count(
-                    case((InventoryItem.status == ItemStatus.AVAILABLE, InventoryItem.id))
-                ),
-                0,
-            ) < LOW_STOCK_THRESHOLD
-        )
+        .having(func.count(InventoryItem.id) <= LOW_STOCK_THRESHOLD)
     )
-    result = await session.execute(subq)
+    result = await session.execute(query)
     rows = result.all()
     return [f"⚠️ {row.vid} / {row.dur}: {row.qty} remaining" for row in rows]
 
@@ -56,7 +51,7 @@ async def send_hourly_report(bot: Bot):
         # Import here to avoid circular imports at module load time
         from app.bot.handlers.admin_panel import build_report_text
 
-        report_text = await build_report_text()
+        report_text = await build_report_text(settings.ADMIN_REPORT_LANGUAGE)
 
         async with AsyncSessionLocal() as session:
             low_stock_warnings = await _check_low_stock(session)
@@ -70,8 +65,9 @@ async def send_hourly_report(bot: Bot):
             parse_mode="HTML",
         )
         logger.info("Hourly report dispatched successfully.")
-    except Exception as exc:
-        logger.error("Failed to dispatch hourly report: %s", exc)
+    except Exception:
+        logger.exception("Failed to dispatch hourly report.")
+        raise
 
 
 def start_scheduler(bot: Bot) -> AsyncIOScheduler:

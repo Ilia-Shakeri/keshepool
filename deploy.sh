@@ -19,6 +19,16 @@ if ! printf '%s' "$IMAGE_TAG" | grep -Eq '^[0-9a-f]{40}$'; then
   exit 2
 fi
 
+if [ "$IMAGE_TAG" = "0000000000000000000000000000000000000000" ]; then
+  echo "[deploy] IMAGE_TAG cannot be the all-zero example placeholder." >&2
+  exit 2
+fi
+
+if [ "$REGISTRY_IMAGE" = "local" ]; then
+  echo "[deploy] REGISTRY_IMAGE cannot be local in production." >&2
+  exit 2
+fi
+
 if [ ! -f .env ]; then
   echo "[deploy] .env is required on the deployment host." >&2
   exit 2
@@ -96,6 +106,28 @@ verify_running_image() {
   echo "[deploy] $service runs $expected_image ($expected_image_id)."
 }
 
+verify_frontend_revision() {
+  expected_revision="$1"
+  container_id="$(docker compose ps -q frontend)"
+  if ! docker exec -e EXPECTED_REVISION="$expected_revision" "$container_id" node -e '
+    fetch("http://127.0.0.1:3000/health/live", { signal: AbortSignal.timeout(3000) })
+      .then(async (response) => {
+        const payload = await response.json();
+        if (!response.ok || payload.deploymentVersion !== process.env.EXPECTED_REVISION) {
+          console.error("frontend revision mismatch: expected=" + process.env.EXPECTED_REVISION + " actual=" + payload.deploymentVersion);
+          process.exit(1);
+        }
+      })
+      .catch((error) => {
+        console.error("frontend revision check failed: " + error.name + ": " + error.message);
+        process.exit(1);
+      });
+  '; then
+    return 1
+  fi
+  echo "[deploy] frontend reports revision $expected_revision."
+}
+
 rollback_on_failure() {
   exit_code="$?"
   if [ "$exit_code" -eq 0 ] || [ "$deployment_complete" = true ]; then
@@ -166,6 +198,7 @@ wait_for_health backend 180
 docker compose up -d --no-deps --force-recreate frontend
 verify_running_image frontend "$FRONTEND_IMAGE"
 wait_for_health frontend 180
+verify_frontend_revision "$IMAGE_TAG"
 
 echo "[deploy] Running routing smoke checks."
 sh ./smoke.sh

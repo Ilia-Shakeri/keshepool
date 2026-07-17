@@ -11,6 +11,7 @@ const HOP_BY_HOP_HEADERS = [
   "transfer-encoding",
   "upgrade",
 ];
+const UPSTREAM_TIMEOUT_MS = 10_000;
 
 function backendBaseUrl(): string {
   const rawUrl = process.env.BACKEND_INTERNAL_URL || "http://backend:8000";
@@ -48,7 +49,7 @@ export async function proxyToBackend(request: Request, pathname: string): Promis
       body: hasBody ? await request.arrayBuffer() : undefined,
       cache: "no-store",
       redirect: "manual",
-      signal: request.signal,
+      signal: AbortSignal.any([request.signal, AbortSignal.timeout(UPSTREAM_TIMEOUT_MS)]),
     });
 
     return new Response(upstream.body, {
@@ -56,10 +57,11 @@ export async function proxyToBackend(request: Request, pathname: string): Promis
       statusText: upstream.statusText,
       headers: responseHeaders(upstream),
     });
-  } catch {
+  } catch (error) {
+    const timedOut = error instanceof DOMException && error.name === "TimeoutError";
     return Response.json(
-      { detail: "Upstream service unavailable." },
-      { status: 502, headers: { "Cache-Control": "no-store" } },
+      { detail: timedOut ? "Upstream service timed out." : "Upstream service unavailable." },
+      { status: timedOut ? 504 : 502, headers: { "Cache-Control": "no-store" } },
     );
   }
 }

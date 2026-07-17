@@ -1,0 +1,38 @@
+{
+    log default {
+        format filter {
+            wrap json
+            request>headers>X-Telegram-Init-Data delete
+            request>headers>X-Telegram-Bot-Api-Secret-Token delete
+            request>headers>X-Admin-Token delete
+            request>headers>Authorization delete
+            request>headers>Cookie delete
+            request>headers>Set-Cookie delete
+            resp_headers>Set-Cookie delete
+        }
+    }
+}
+
+keshepool.example.com {
+    log {
+        output stdout
+        format filter {
+            wrap json
+            request>headers>X-Telegram-Init-Data delete
+            request>headers>X-Telegram-Bot-Api-Secret-Token delete
+            request>headers>X-Admin-Token delete
+            request>headers>Authorization delete
+            request>headers>Cookie delete
+            request>headers>Set-Cookie delete
+            resp_headers>Set-Cookie delete
+        }
+    }
+
+    handle /health/ready {
+        reverse_proxy keshepool-backend:8000
+    }
+
+    handle {
+        reverse_proxy keshepool-frontend:3000
+    }
+}
