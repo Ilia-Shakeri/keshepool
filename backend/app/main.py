@@ -1,8 +1,8 @@
+import asyncio
 import json
 import hmac
 import logging
 import re
-import sys
 import tempfile
 import uuid
 from contextlib import asynccontextmanager
@@ -82,11 +82,6 @@ def _webhook_request_fields(
         fields["exception_class"] = exception_class
     return fields
 
-# Validate critical environment configurations prior to application start
-if not settings.BOT_TOKEN or not settings.ADMIN_BOT_TOKEN or not settings.WEBHOOK_URL:
-    module_logger.critical("Critical environment variables (BOT_TOKEN/ADMIN_BOT_TOKEN/WEBHOOK_URL) are missing.")
-    sys.exit(1)
-
 # Initialize application bots and dispatchers
 bot = Bot(token=settings.BOT_TOKEN)
 dp = Dispatcher()
@@ -101,32 +96,55 @@ admin_dp.include_router(products_router)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     scheduler = None
+    polling_tasks: list[asyncio.Task] = []
     try:
         await init_db()
-        scheduler = start_scheduler(admin_bot)
+        if settings.TELEGRAM_BOT_MODE != "disabled":
+            scheduler = start_scheduler(admin_bot)
 
-        full_webhook_url = settings.WEBHOOK_URL.rstrip('/')
-        module_logger.info("Setting Telegram webhooks and bot configurations...")
-        main_webhook_url = f"{full_webhook_url}{WEBHOOK_PATH}/main"
-        await bot.set_webhook(
-            url=main_webhook_url,
-            drop_pending_updates=False,
-            secret_token=settings.WEBHOOK_SECRET,
-        )
-        await _log_webhook_info(bot, "main", main_webhook_url)
-        admin_webhook_url = f"{full_webhook_url}{WEBHOOK_PATH}/admin"
-        await admin_bot.set_webhook(
-            url=admin_webhook_url,
-            drop_pending_updates=False,
-            secret_token=settings.WEBHOOK_SECRET,
-        )
-        await _log_webhook_info(admin_bot, "admin", admin_webhook_url)
-        await admin_bot.set_my_commands([
-            types.BotCommand(command="start", description="Open Admin Panel")
-        ])
-        await admin_bot.set_chat_menu_button(menu_button=types.MenuButtonCommands())
+        if settings.TELEGRAM_BOT_MODE == "webhook":
+            full_webhook_url = settings.WEBHOOK_URL.rstrip('/')
+            module_logger.info("Setting Telegram webhooks and bot configurations...")
+            main_webhook_url = f"{full_webhook_url}{WEBHOOK_PATH}/main"
+            await bot.set_webhook(
+                url=main_webhook_url,
+                drop_pending_updates=False,
+                secret_token=settings.WEBHOOK_SECRET,
+            )
+            await _log_webhook_info(bot, "main", main_webhook_url)
+            admin_webhook_url = f"{full_webhook_url}{WEBHOOK_PATH}/admin"
+            await admin_bot.set_webhook(
+                url=admin_webhook_url,
+                drop_pending_updates=False,
+                secret_token=settings.WEBHOOK_SECRET,
+            )
+            await _log_webhook_info(admin_bot, "admin", admin_webhook_url)
+        elif settings.TELEGRAM_BOT_MODE == "polling":
+            module_logger.info("Starting Telegram polling for local development.")
+            await bot.delete_webhook(drop_pending_updates=False)
+            await admin_bot.delete_webhook(drop_pending_updates=False)
+            polling_tasks = [
+                asyncio.create_task(dp.start_polling(bot, handle_signals=False)),
+                asyncio.create_task(admin_dp.start_polling(admin_bot, handle_signals=False)),
+            ]
+        else:
+            module_logger.info("Telegram bot transport disabled.")
+
+        if settings.TELEGRAM_BOT_MODE != "disabled":
+            await admin_bot.set_my_commands([
+                types.BotCommand(command="start", description="Open Admin Panel")
+            ])
+            await admin_bot.set_chat_menu_button(menu_button=types.MenuButtonCommands())
         yield
     finally:
+        if polling_tasks:
+            for dispatcher in (dp, admin_dp):
+                try:
+                    await dispatcher.stop_polling()
+                except RuntimeError:
+                    pass
+            await asyncio.gather(*polling_tasks, return_exceptions=True)
+
         if scheduler is not None:
             try:
                 scheduler.shutdown()

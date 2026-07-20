@@ -708,6 +708,10 @@ def _coerce_product_payload(raw: Any) -> Dict[str, Any]:
                 "duration": duration,
                 "raw_price": raw_price,
                 "price_label": str(variant_raw.get("priceLabel") or _price_label(raw_price)),
+                "is_active": variant_raw.get(
+                    "is_active",
+                    variant_raw.get("isActive", True),
+                ),
                 "credentials": [str(item).strip() for item in credentials if str(item).strip()],
             }
         )
@@ -718,10 +722,11 @@ def _coerce_product_payload(raw: Any) -> Dict[str, Any]:
         "brand": brand,
         "subtitle": str(raw.get("subtitle", "")).strip(),
         "icon": str(raw.get("icon", "Box") or "Box").strip(),
-        "asset_url": raw.get("assetUrl"),
+        "asset_url": raw.get("asset_url", raw.get("assetUrl")),
         "gradient": str(raw.get("gradient", "from-gray-700 to-black") or "from-gray-700 to-black").strip(),
         "category": category,
         "features": features,
+        "is_active": raw.get("is_active", raw.get("isActive", True)),
         "variants": normalized_variants,
     }
 

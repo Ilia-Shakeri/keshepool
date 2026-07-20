@@ -12,8 +12,9 @@ class Settings(BaseSettings):
     REDIS_URL: str = Field(default="redis://redis:6379/0")
     BOT_TOKEN: str
     ADMIN_BOT_TOKEN: str
-    WEBHOOK_URL: str
-    WEBHOOK_SECRET: str
+    TELEGRAM_BOT_MODE: Literal["webhook", "polling", "disabled"] = "webhook"
+    WEBHOOK_URL: str = ""
+    WEBHOOK_SECRET: str = ""
     WEB_APP_URL: str
     BOT_USERNAME: str = Field(default="keshepoolbot")
     TETRA98_API_URL: str = ""
@@ -44,11 +45,18 @@ class Settings(BaseSettings):
     def validate_production_security(self):
         # Fail fast when production security settings cannot verify privileged calls.
         if self.ENVIRONMENT.lower() == "production":
+            if self.TELEGRAM_BOT_MODE != "webhook":
+                raise ValueError("TELEGRAM_BOT_MODE must be webhook in production.")
+
             if self.ALLOW_INSECURE_DEV_AUTH:
                 raise ValueError("ALLOW_INSECURE_DEV_AUTH cannot be enabled in production.")
 
             if not self.WEBHOOK_SECRET:
                 raise ValueError("WEBHOOK_SECRET must be configured in production.")
+
+            webhook_url = urlparse(self.WEBHOOK_URL.strip())
+            if webhook_url.scheme != "https" or not webhook_url.netloc:
+                raise ValueError("WEBHOOK_URL must be an explicit HTTPS URL in production.")
             
             if not self.ADMIN_API_KEY:
                 raise ValueError("ADMIN_API_KEY must be defined and strictly set in the production environment to prevent unauthorized internal access.")
@@ -86,6 +94,12 @@ class Settings(BaseSettings):
 
         if not self.CACHE_NAMESPACE.strip().strip(":"):
             raise ValueError("CACHE_NAMESPACE must contain a non-empty application name.")
+
+        if self.TELEGRAM_BOT_MODE == "webhook":
+            if not self.WEBHOOK_URL.strip():
+                raise ValueError("WEBHOOK_URL is required in webhook mode.")
+            if not self.WEBHOOK_SECRET.strip():
+                raise ValueError("WEBHOOK_SECRET is required in webhook mode.")
 
         return self
 

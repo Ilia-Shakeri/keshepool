@@ -14,7 +14,7 @@ const HOP_BY_HOP_HEADERS = [
 const UPSTREAM_TIMEOUT_MS = 10_000;
 
 function backendBaseUrl(): string {
-  const rawUrl = process.env.BACKEND_INTERNAL_URL || "http://backend:8000";
+  const rawUrl = process.env.BACKEND_INTERNAL_URL || "http://127.0.0.1:8000";
   const url = new URL(rawUrl);
   if (url.protocol !== "http:" && url.protocol !== "https:") {
     throw new Error("BACKEND_INTERNAL_URL must use http or https.");

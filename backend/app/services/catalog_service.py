@@ -142,6 +142,26 @@ def _decimal_price(value: Any) -> Decimal:
     return price
 
 
+def _mapping_boolean(
+    payload: Mapping[str, Any],
+    snake_name: str,
+    camel_name: str,
+    *,
+    default: bool,
+) -> bool:
+    if snake_name in payload:
+        value = payload[snake_name]
+    elif camel_name in payload:
+        value = payload[camel_name]
+    else:
+        return default
+    if isinstance(value, bool):
+        return value
+    if value in (0, 1):
+        return bool(value)
+    raise CatalogMutationError(f"{snake_name} must be a boolean.")
+
+
 def product_mutation_from_mapping(payload: Mapping[str, Any]) -> ProductMutation:
     category = str(payload.get("category") or "tools").strip()
     if category not in CATALOG_CATEGORIES:
@@ -184,7 +204,12 @@ def product_mutation_from_mapping(payload: Mapping[str, Any]) -> ProductMutation
                     or raw_variant.get("priceLabel")
                     or f"{int(price):,}"
                 ).strip(),
-                is_active=bool(raw_variant.get("is_active", raw_variant.get("isActive", True))),
+                is_active=_mapping_boolean(
+                    raw_variant,
+                    "is_active",
+                    "isActive",
+                    default=True,
+                ),
                 credentials=credentials,
             )
         )
@@ -199,7 +224,7 @@ def product_mutation_from_mapping(payload: Mapping[str, Any]) -> ProductMutation
         gradient=str(payload.get("gradient") or "from-gray-700 to-black").strip(),
         category=category,
         features=features,
-        is_active=bool(payload.get("is_active", payload.get("isActive", True))),
+        is_active=_mapping_boolean(payload, "is_active", "isActive", default=True),
         variants=tuple(variants),
     )
 
@@ -577,7 +602,13 @@ async def build_public_catalog(db: AsyncSession) -> list[dict[str, Any]]:
     output: list[dict[str, Any]] = []
     for product in product_result.scalars().all():
         active_variants = [variant for variant in product.variants if variant.is_active]
-        if not active_variants:
+        if catalog_visibility_reason(
+            active=product.is_active,
+            title=product.title,
+            brand=product.brand,
+            category=product.category,
+            active_variant_count=len(active_variants),
+        ) != "visible":
             continue
         output.append(
             {

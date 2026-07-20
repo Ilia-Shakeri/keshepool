@@ -95,9 +95,6 @@ function mapApiError(status: number, detail?: unknown): string {
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const initData = getTelegramInitData();
-  if (!initData) {
-    throw new Error("اطلاعات ورود تلگرام در دسترس نیست. برنامه را از تلگرام باز کنید.");
-  }
 
   const controller = new AbortController();
   let didTimeout = false;
@@ -109,7 +106,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   init.signal?.addEventListener("abort", abortFromCaller, { once: true });
 
   const headers = new Headers(init.headers);
-  headers.set("X-Telegram-Init-Data", initData);
+  if (initData) headers.set("X-Telegram-Init-Data", initData);
   if (init.body && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
 
   let response: Response;

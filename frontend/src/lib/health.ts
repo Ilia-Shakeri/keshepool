@@ -9,7 +9,7 @@ function deploymentVersion(): string {
 }
 
 function backendReadyUrl(): string {
-  const base = new URL(process.env.BACKEND_INTERNAL_URL || "http://backend:8000");
+  const base = new URL(process.env.BACKEND_INTERNAL_URL || "http://127.0.0.1:8000");
   if (base.protocol !== "http:" && base.protocol !== "https:") {
     throw new Error("BACKEND_INTERNAL_URL must use http or https.");
   }
