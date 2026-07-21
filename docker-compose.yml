@@ -116,6 +116,7 @@ services:
       - USDT_TO_IRR_RATE=${USDT_TO_IRR_RATE:?Set an operator-reviewed emergency USDT rate in .env}
       - ADMIN_TELEGRAM_IDS=${ADMIN_TELEGRAM_IDS}
       - ADMIN_GROUP_CHAT_ID=${ADMIN_GROUP_CHAT_ID:-}
+      - TZ=${TZ:-Asia/Tehran}
       - ADMIN_REPORT_LANGUAGE=${ADMIN_REPORT_LANGUAGE:-fa}
       - BOT_USERNAME=${BOT_USERNAME:-keshepoolbot}
       - ASSET_ROOT=/app/static

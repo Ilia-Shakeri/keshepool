@@ -72,14 +72,10 @@ def _h(text: object) -> str:
 def get_persistent_menu(lang: str) -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
-            [
-                KeyboardButton(text="🏠 " + get_text(lang, "home_btn")),
-                KeyboardButton(text=get_text(lang, "inventory_title")),
-            ],
-            [
-                KeyboardButton(text=get_text(lang, "users_title")),
-                KeyboardButton(text=get_text(lang, "report_btn")),
-            ],
+            [KeyboardButton(text="🏠 " + get_text(lang, "home_btn"))],
+            [KeyboardButton(text=get_text(lang, "inventory_title"))],
+            [KeyboardButton(text=get_text(lang, "users_title"))],
+            [KeyboardButton(text=get_text(lang, "report_btn"))],
         ],
         resize_keyboard=True,
         is_persistent=True,
@@ -89,25 +85,24 @@ def get_persistent_menu(lang: str) -> ReplyKeyboardMarkup:
 def get_main_menu_markup(lang: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [
-                InlineKeyboardButton(text=get_text(lang, "users_title"), callback_data="manage_users_0"),
-                InlineKeyboardButton(text=get_text(lang, "inventory_title"), callback_data="manage_inventory"),
-            ],
-            [
-                InlineKeyboardButton(text=get_text(lang, "cashouts_title"), callback_data="manage_cashouts_0"),
-                InlineKeyboardButton(text=get_text(lang, "stats_title"), callback_data="manage_stats"),
-            ],
-            [
-                InlineKeyboardButton(text=get_text(lang, "broadcast_title"), callback_data="broadcast_msg"),
-                InlineKeyboardButton(text=get_text(lang, "search_user_title"), callback_data="search_user"),
-            ],
-            [
-                InlineKeyboardButton(text=get_text(lang, "rates_btn"), callback_data="manage_rates"),
-                InlineKeyboardButton(text=get_text(lang, "report_btn"), callback_data="force_report"),
-            ],
-            [
-                InlineKeyboardButton(text=get_text(lang, "toggle_lang"), callback_data="toggle_language"),
-            ],
+            [InlineKeyboardButton(text=get_text(lang, "users_title"), callback_data="manage_users_0")],
+            [InlineKeyboardButton(text=get_text(lang, "inventory_title"), callback_data="manage_inventory")],
+            [InlineKeyboardButton(text=get_text(lang, "cashouts_title"), callback_data="manage_cashouts_0")],
+            [InlineKeyboardButton(text=get_text(lang, "transactions_title"), callback_data="manage_transactions")],
+            [InlineKeyboardButton(text=get_text(lang, "stats_title"), callback_data="manage_stats")],
+            [InlineKeyboardButton(text=get_text(lang, "report_btn"), callback_data="force_report")],
+            [InlineKeyboardButton(text=get_text(lang, "broadcast_title"), callback_data="broadcast_msg")],
+            [InlineKeyboardButton(text=get_text(lang, "search_user_title"), callback_data="search_user")],
+            [InlineKeyboardButton(text=get_text(lang, "rates_btn"), callback_data="manage_rates")],
+            [InlineKeyboardButton(text=get_text(lang, "toggle_lang"), callback_data="toggle_language")],
+        ]
+    )
+
+
+def _back_markup(lang: str, callback_data: str = "main_menu") -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=get_text(lang, "back"), callback_data=callback_data)]
         ]
     )
 
@@ -200,7 +195,7 @@ async def cmd_start(message: Message, state: FSMContext):
 async def cmd_cancel(message: Message, state: FSMContext):
     lang = await get_admin_lang(message.from_user.id)
     await state.clear()
-    await message.answer(get_text(lang, "operation_cancelled"))
+    await message.answer(get_text(lang, "operation_cancelled"), reply_markup=get_main_menu_markup(lang))
 
 
 # ── Persistent-menu shortcuts ─────────────────────────────────────────────────
@@ -236,7 +231,7 @@ async def shortcut_report(message: Message, state: FSMContext):
     lang = await get_admin_lang(message.from_user.id)
     try:
         text = await build_report_text(lang)
-        await message.answer(text=text, parse_mode="HTML")
+        await message.answer(text=text, parse_mode="HTML", reply_markup=_back_markup(lang))
     except Exception as exc:
         logger.error("Report shortcut failed: %s", exc)
         await message.answer(get_text(lang, "db_error"))
@@ -304,7 +299,11 @@ async def process_force_report(callback: CallbackQuery):
     try:
         text = await build_report_text(lang)
         # Send the full report directly to the admin who triggered it.
-        await callback.message.answer(text=text, parse_mode="HTML")
+        await callback.message.answer(
+            text=text,
+            parse_mode="HTML",
+            reply_markup=_back_markup(lang),
+        )
         # Relay the instant report to the configured group when needed.
         if settings.ADMIN_GROUP_CHAT_ID and str(callback.message.chat.id) != str(settings.ADMIN_GROUP_CHAT_ID):
             try:
@@ -357,7 +356,8 @@ async def _send_users_page(target, lang: str, page: int, send_new: bool = False)
         balance = float(u.wallet.balance) if u.wallet else 0.0
         uname = _h(u.username or "—")
         fname = _h(u.first_name or "")
-        lines.append(f"• <code>{u.id}</code> @{uname} {fname} | <b>{balance:,.0f}</b>")
+        access_icon = "🚫" if u.is_banned else "✅"
+        lines.append(f"{access_icon} <code>{u.id}</code> @{uname} {fname} | <b>{balance:,.0f}</b>")
         label = (u.first_name or u.username or str(u.telegram_id))[:20]
         user_buttons.append(
             InlineKeyboardButton(text=f"👤 {label}", callback_data=f"user_detail_{u.id}")
@@ -432,19 +432,104 @@ async def view_user_detail(callback: CallbackQuery):
         role=_h(user.role),
         registered=created,
         last_seen=last_seen,
+        access=get_text(lang, "user_access_banned" if user.is_banned else "user_access_active"),
     )
+
+    access_button = get_text(lang, "unban_user_btn" if user.is_banned else "ban_user_btn")
 
     markup = InlineKeyboardMarkup(
         inline_keyboard=[
-            [
-                InlineKeyboardButton(text=get_text(lang, "notify_btn"), callback_data=f"notify_user_{user.id}"),
-                InlineKeyboardButton(text=get_text(lang, "orders_btn"), callback_data=f"user_orders_{user.id}"),
-            ],
+            [InlineKeyboardButton(text=get_text(lang, "notify_btn"), callback_data=f"notify_user_{user.id}")],
+            [InlineKeyboardButton(text=get_text(lang, "orders_btn"), callback_data=f"user_orders_{user.id}")],
+            [InlineKeyboardButton(text=access_button, callback_data=f"user_access_prompt_{user.id}")],
             [InlineKeyboardButton(text=get_text(lang, "back"), callback_data="manage_users_0")],
         ]
     )
     await callback.message.edit_text(text=text, reply_markup=markup, parse_mode="HTML")
     await callback.answer()
+
+
+@admin_router.callback_query(F.data.startswith("user_access_prompt_"))
+async def prompt_user_access_change(callback: CallbackQuery):
+    lang = await get_admin_lang(callback.from_user.id)
+    user_id = int(callback.data.removeprefix("user_access_prompt_"))
+    try:
+        async with AsyncSessionLocal() as session:
+            user = await session.get(User, user_id)
+    except Exception as exc:
+        logger.error("User access prompt failed: %s", exc, exc_info=True)
+        await callback.answer(get_text(lang, "db_error"), show_alert=True)
+        return
+    if user is None:
+        await callback.answer(get_text(lang, "not_found"), show_alert=True)
+        return
+    if user.telegram_id in settings.admin_ids and not user.is_banned:
+        await callback.answer(get_text(lang, "cannot_ban_admin"), show_alert=True)
+        return
+
+    action = "unban" if user.is_banned else "ban"
+    text_key = "confirm_unban_user" if user.is_banned else "confirm_ban_user"
+    button_key = "confirm_unban_user_btn" if user.is_banned else "confirm_ban_user_btn"
+    markup = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=get_text(lang, button_key), callback_data=f"user_{action}_confirm_{user.id}")],
+            [InlineKeyboardButton(text=get_text(lang, "back"), callback_data=f"user_detail_{user.id}")],
+        ]
+    )
+    await callback.message.edit_text(
+        get_text(lang, text_key).format(name=_h(user.first_name or user.username or user.telegram_id)),
+        reply_markup=markup,
+        parse_mode="HTML",
+    )
+    await callback.answer()
+
+
+async def _set_user_ban(callback: CallbackQuery, user_id: int, banned: bool) -> None:
+    lang = await get_admin_lang(callback.from_user.id)
+    try:
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(
+                select(User).where(User.id == user_id).with_for_update()
+            )
+            user = result.scalars().first()
+            if user is None:
+                await callback.answer(get_text(lang, "not_found"), show_alert=True)
+                return
+            if banned and user.telegram_id in settings.admin_ids:
+                await callback.answer(get_text(lang, "cannot_ban_admin"), show_alert=True)
+                return
+            user.is_banned = banned
+            user.banned_at = utcnow() if banned else None
+            user.banned_by = str(callback.from_user.id) if banned else None
+            await add_admin_audit(
+                session,
+                actor_telegram_id=callback.from_user.id,
+                action="user_ban" if banned else "user_unban",
+                target_type="user",
+                target_id=user.id,
+                details={"telegram_id": user.telegram_id},
+            )
+            await session.commit()
+    except Exception as exc:
+        logger.error("User access update failed: %s", exc, exc_info=True)
+        await callback.answer(get_text(lang, "db_error"), show_alert=True)
+        return
+
+    await callback.message.edit_text(
+        get_text(lang, "user_banned" if banned else "user_unbanned"),
+        reply_markup=_back_markup(lang, f"user_detail_{user_id}"),
+    )
+    await callback.answer()
+
+
+@admin_router.callback_query(F.data.startswith("user_ban_confirm_"))
+async def confirm_user_ban(callback: CallbackQuery):
+    await _set_user_ban(callback, int(callback.data.removeprefix("user_ban_confirm_")), True)
+
+
+@admin_router.callback_query(F.data.startswith("user_unban_confirm_"))
+async def confirm_user_unban(callback: CallbackQuery):
+    await _set_user_ban(callback, int(callback.data.removeprefix("user_unban_confirm_")), False)
 
 
 @admin_router.callback_query(F.data.startswith("user_orders_"))
@@ -498,6 +583,7 @@ async def prompt_user_notification(callback: CallbackQuery, state: FSMContext):
     await callback.message.answer(
         get_text(lang, "notification_prompt"),
         parse_mode="HTML",
+        reply_markup=_back_markup(lang, f"user_detail_{user_id}"),
     )
     await state.set_state(AdminPanelStates.awaiting_notification_text)
     await callback.answer()
@@ -532,7 +618,10 @@ async def process_user_notification(message: Message, state: FSMContext):
         return
 
     await state.clear()
-    await message.answer(get_text(lang, "notification_sent"))
+    await message.answer(
+        get_text(lang, "notification_sent"),
+        reply_markup=_back_markup(lang, f"user_detail_{target_id}"),
+    )
 
 
 # ── Search user ───────────────────────────────────────────────────────────────
@@ -540,7 +629,10 @@ async def process_user_notification(message: Message, state: FSMContext):
 @admin_router.callback_query(F.data == "search_user")
 async def prompt_search(callback: CallbackQuery, state: FSMContext):
     lang = await get_admin_lang(callback.from_user.id)
-    await callback.message.answer(get_text(lang, "search_prompt") + "\n\n/cancel to abort.")
+    await callback.message.answer(
+        get_text(lang, "search_prompt") + "\n\n" + get_text(lang, "cancel_hint"),
+        reply_markup=_back_markup(lang),
+    )
     await state.set_state(AdminPanelStates.awaiting_search_query)
     await callback.answer()
 
@@ -571,7 +663,7 @@ async def process_search(message: Message, state: FSMContext):
         return
 
     if not users:
-        await message.answer(get_text(lang, "user_not_found"))
+        await message.answer(get_text(lang, "user_not_found"), reply_markup=_back_markup(lang))
         return
 
     for user in users:
@@ -582,11 +674,13 @@ async def process_search(message: Message, state: FSMContext):
             username=_h(user.username or "N/A"),
             balance=f"{balance:,.0f}",
             role=_h(user.role),
+            access=get_text(lang, "user_access_banned" if user.is_banned else "user_access_active"),
         )
         markup = InlineKeyboardMarkup(
-            inline_keyboard=[[
-                InlineKeyboardButton(text=get_text(lang, "view_detail"), callback_data=f"user_detail_{user.id}")
-            ]]
+            inline_keyboard=[
+                [InlineKeyboardButton(text=get_text(lang, "view_detail"), callback_data=f"user_detail_{user.id}")],
+                [InlineKeyboardButton(text=get_text(lang, "back_to_menu"), callback_data="main_menu")],
+            ]
         )
         await message.answer(text=text, reply_markup=markup, parse_mode="HTML")
 
@@ -596,7 +690,7 @@ async def process_search(message: Message, state: FSMContext):
 @admin_router.callback_query(F.data == "broadcast_msg")
 async def prompt_broadcast(callback: CallbackQuery, state: FSMContext):
     lang = await get_admin_lang(callback.from_user.id)
-    await callback.message.answer(get_text(lang, "broadcast_prompt"))
+    await callback.message.answer(get_text(lang, "broadcast_prompt"), reply_markup=_back_markup(lang))
     await state.set_state(AdminPanelStates.awaiting_broadcast_message)
     await callback.answer()
 
@@ -640,7 +734,7 @@ async def process_broadcast(message: Message, state: FSMContext):
 async def cancel_broadcast(callback: CallbackQuery, state: FSMContext):
     lang = await get_admin_lang(callback.from_user.id)
     await state.clear()
-    await callback.message.edit_text(get_text(lang, "operation_cancelled"))
+    await callback.message.edit_text(get_text(lang, "operation_cancelled"), reply_markup=_back_markup(lang))
     await callback.answer()
 
 
@@ -687,7 +781,8 @@ async def confirm_broadcast(callback: CallbackQuery, state: FSMContext):
 
     await state.clear()
     await callback.message.edit_text(
-        get_text(lang, "broadcast_sent").replace("{count}", str(count))
+        get_text(lang, "broadcast_sent").replace("{count}", str(count)),
+        reply_markup=_back_markup(lang),
     )
     await callback.answer()
 
@@ -746,9 +841,9 @@ async def _send_cashouts_page(target, lang: str, page: int, send_new: bool = Fal
 
         nav: list[InlineKeyboardButton] = []
         if page > 0:
-            nav.append(InlineKeyboardButton(text="⬅️", callback_data=f"manage_cashouts_{page - 1}"))
+            nav.append(InlineKeyboardButton(text=get_text(lang, "previous_page"), callback_data=f"manage_cashouts_{page - 1}"))
         if (page + 1) * PAGE_SIZE < total_count:
-            nav.append(InlineKeyboardButton(text="➡️", callback_data=f"manage_cashouts_{page + 1}"))
+            nav.append(InlineKeyboardButton(text=get_text(lang, "next_page"), callback_data=f"manage_cashouts_{page + 1}"))
         if nav:
             keyboard.append(nav)
         keyboard.append([InlineKeyboardButton(text=get_text(lang, "back_to_menu"), callback_data="main_menu")])
@@ -829,10 +924,8 @@ async def view_cashout_detail(callback: CallbackQuery):
     markup = InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text=get_text(lang, "cashout_private_btn"), callback_data=f"cashout_dm_{cashout_id}")],
-            [
-                InlineKeyboardButton(text=get_text(lang, "mark_done_btn"), callback_data=f"cashout_done_{cashout_id}"),
-                InlineKeyboardButton(text=get_text(lang, "mark_reviewed_btn"), callback_data=f"cashout_review_{cashout_id}"),
-            ],
+            [InlineKeyboardButton(text=get_text(lang, "mark_done_btn"), callback_data=f"cashout_done_{cashout_id}")],
+            [InlineKeyboardButton(text=get_text(lang, "mark_reviewed_btn"), callback_data=f"cashout_review_{cashout_id}")],
             [InlineKeyboardButton(text=get_text(lang, "back"), callback_data="manage_cashouts_0")],
         ]
     )
@@ -863,7 +956,10 @@ async def prompt_cashout_private_message(callback: CallbackQuery, state: FSMCont
         return
 
     await state.update_data(cashout_dm_user_telegram_id=cashout.user.telegram_id, cashout_dm_id=cashout_id)
-    await callback.message.answer(get_text(lang, "cashout_private_prompt"))
+    await callback.message.answer(
+        get_text(lang, "cashout_private_prompt"),
+        reply_markup=_back_markup(lang, f"cashout_view_{cashout_id}"),
+    )
     await state.set_state(AdminPanelStates.awaiting_cashout_private_message)
     await callback.answer()
 
@@ -883,12 +979,20 @@ async def process_cashout_private_message(message: Message, state: FSMContext):
         await _send_customer_message(user_telegram_id, text)
     except Exception as exc:
         logger.warning("Cashout private message delivery failed: %s", exc)
-        await message.answer(get_text(lang, "cashout_private_failed"))
+        cashout_id = data.get("cashout_dm_id")
+        await message.answer(
+            get_text(lang, "cashout_private_failed"),
+            reply_markup=_back_markup(lang, f"cashout_view_{cashout_id}" if cashout_id else "manage_cashouts_0"),
+        )
         await state.clear()
         return
 
+    cashout_id = data.get("cashout_dm_id")
     await state.clear()
-    await message.answer(get_text(lang, "cashout_private_sent"))
+    await message.answer(
+        get_text(lang, "cashout_private_sent"),
+        reply_markup=_back_markup(lang, f"cashout_view_{cashout_id}" if cashout_id else "manage_cashouts_0"),
+    )
 
 
 @admin_router.callback_query(F.data.startswith("cashout_done_"))
@@ -1011,7 +1115,11 @@ async def show_rates(callback: CallbackQuery):
 @admin_router.callback_query(F.data == "set_usdt_rate")
 async def prompt_usdt_rate(callback: CallbackQuery, state: FSMContext):
     lang = await get_admin_lang(callback.from_user.id)
-    await callback.message.answer(get_text(lang, "enter_usdt_rate"), parse_mode="HTML")
+    await callback.message.answer(
+        get_text(lang, "enter_usdt_rate"),
+        parse_mode="HTML",
+        reply_markup=_back_markup(lang, "manage_rates"),
+    )
     await state.set_state(AdminPanelStates.awaiting_usdt_rate)
     await callback.answer()
 

@@ -45,6 +45,8 @@ async def ensure_user_from_telegram_init(
     user = user_result.scalars().first()
     current_time = utcnow()
     attempted_user_insert = user is None
+    if user is not None and user.is_banned:
+        raise HTTPException(status_code=403, detail="User access is blocked.")
     referrer_id = None
     if attempted_user_insert and referrer_telegram_id and referrer_telegram_id != telegram_id:
         referrer_result = await db.execute(select(User).where(User.telegram_id == referrer_telegram_id))

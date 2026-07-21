@@ -30,6 +30,8 @@ class ProductAdminStates(StatesGroup):
     awaiting_bulk_import_file = State()
     # Logo upload
     awaiting_logo_upload = State()
+    awaiting_product_removal_query = State()
+    awaiting_all_products_confirmation = State()
 
 
 class AdminPanelStates(StatesGroup):
@@ -39,3 +41,4 @@ class AdminPanelStates(StatesGroup):
     awaiting_notification_text = State()
     awaiting_cashout_private_message = State()
     awaiting_usdt_rate = State()
+    awaiting_transaction_report_range = State()

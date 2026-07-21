@@ -21,6 +21,8 @@ from sqlalchemy import text
 from app.api import admin, cashout, payments, products, users
 from app.bot.handlers.admin_panel import admin_router
 from app.bot.handlers.products_admin import products_router
+from app.bot.handlers.transactions_admin import transactions_router
+from app.bot.middleware import BlockBannedUserMiddleware
 from app.bot.services.scheduler import start_scheduler
 from app.core.config import settings
 from app.core.database import AsyncSessionLocal, engine, init_db
@@ -85,6 +87,7 @@ def _webhook_request_fields(
 # Initialize application bots and dispatchers
 bot = Bot(token=settings.BOT_TOKEN)
 dp = Dispatcher()
+dp.update.outer_middleware(BlockBannedUserMiddleware())
 
 admin_bot = Bot(token=settings.ADMIN_BOT_TOKEN)
 admin_dp = Dispatcher()
@@ -92,6 +95,7 @@ admin_dp = Dispatcher()
 # Register modular routers
 admin_dp.include_router(admin_router)
 admin_dp.include_router(products_router)
+admin_dp.include_router(transactions_router)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):

@@ -104,25 +104,38 @@ def _button_label(value: object, max_chars: int = 60) -> str:
 
 def _cancel_markup(lang: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
-        inline_keyboard=[[
-            InlineKeyboardButton(
-                text=get_text(lang, "broadcast_cancel_btn"),
-                callback_data="cancel_input",
-            )
-        ]]
+        inline_keyboard=[
+            [InlineKeyboardButton(text=get_text(lang, "back"), callback_data="manage_inventory")],
+            [
+                InlineKeyboardButton(
+                    text=get_text(lang, "broadcast_cancel_btn"),
+                    callback_data="cancel_input",
+                )
+            ],
+        ]
+    )
+
+
+def _inventory_back_markup(lang: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=get_text(lang, "back"), callback_data="manage_inventory")]
+        ]
     )
 
 
 # ── Product management navigation ─────────────────────────────────────────────
 
 async def show_product_management_menu(target, lang: str, state: FSMContext, send_new: bool = False) -> None:
-    """Show the three primary product management actions."""
+    """Show primary product management actions."""
     await state.clear()
     markup = InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text=get_text(lang, "add_single_product"), callback_data="add_single_product")],
             [InlineKeyboardButton(text=get_text(lang, "add_bulk_product"), callback_data="bulk_import_products")],
             [InlineKeyboardButton(text=get_text(lang, "view_products"), callback_data="view_products")],
+            [InlineKeyboardButton(text=get_text(lang, "remove_products_btn"), callback_data="remove_products")],
+            [InlineKeyboardButton(text=get_text(lang, "back_to_menu"), callback_data="main_menu")],
         ]
     )
     text = get_text(lang, "product_mgmt_title")
@@ -193,6 +206,236 @@ async def trigger_product_list(callback: CallbackQuery, state: FSMContext):
     lang = await _lang(callback.from_user.id)
     await show_brands(callback, lang, state)
     await callback.answer()
+
+
+async def _show_remove_products(callback: CallbackQuery, state: FSMContext, lang: str) -> None:
+    try:
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(
+                select(Product)
+                .where(Product.is_active.is_(True))
+                .order_by(Product.title.asc(), Product.id.asc())
+            )
+            products = result.scalars().all()
+    except Exception as exc:
+        logger.error("Product removal list failed: %s", exc, exc_info=True)
+        await callback.answer(get_text(lang, "db_error"), show_alert=True)
+        return
+
+    if not products:
+        markup = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text=get_text(lang, "back"), callback_data="manage_inventory")]
+            ]
+        )
+        await callback.message.edit_text(
+            get_text(lang, "remove_products_empty"),
+            reply_markup=markup,
+        )
+        await callback.answer()
+        return
+
+    product_map = {str(index): product.id for index, product in enumerate(products, start=1)}
+    product_names = {
+        product.id: {
+            "title": product.title,
+            "brand": product.brand,
+        }
+        for product in products
+    }
+    lines = [
+        f"{index}. {_h(product.title)} — {_h(product.brand)} — <code>{_h(product.id)}</code>"
+        for index, product in enumerate(products, start=1)
+    ]
+    visible_lines = lines[:80]
+    if len(lines) > len(visible_lines):
+        visible_lines.append(get_text(lang, "remove_products_more").format(count=len(lines) - len(visible_lines)))
+
+    await state.update_data(
+        removal_product_map=product_map,
+        removal_product_names=product_names,
+    )
+    await state.set_state(ProductAdminStates.awaiting_product_removal_query)
+    markup = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=get_text(lang, "remove_all_products_btn"), callback_data="remove_all_products")],
+            [InlineKeyboardButton(text=get_text(lang, "back"), callback_data="manage_inventory")],
+        ]
+    )
+    await callback.message.edit_text(
+        get_text(lang, "remove_products_prompt") + "\n\n" + "\n".join(visible_lines),
+        reply_markup=markup,
+        parse_mode="HTML",
+    )
+    await callback.answer()
+
+
+@products_router.callback_query(F.data == "remove_products")
+async def show_remove_products(callback: CallbackQuery, state: FSMContext):
+    lang = await _lang(callback.from_user.id)
+    await _show_remove_products(callback, state, lang)
+
+
+def _normalize_number_text(value: str) -> str:
+    return value.translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789"))
+
+
+@products_router.message(ProductAdminStates.awaiting_product_removal_query)
+async def select_product_for_removal(message: Message, state: FSMContext):
+    lang = await _lang(message.from_user.id)
+    query = _normalize_number_text((message.text or "").strip())
+    data = await state.get_data()
+    product_map = data.get("removal_product_map") or {}
+    product_names = data.get("removal_product_names") or {}
+
+    product_id = product_map.get(query)
+    if product_id is None:
+        normalized_query = query.casefold()
+        matches = [
+            item_id
+            for item_id, names in product_names.items()
+            if normalized_query in {
+                item_id.casefold(),
+                str(names.get("title", "")).casefold(),
+                str(names.get("brand", "")).casefold(),
+            }
+        ]
+        if not matches:
+            matches = [
+                item_id
+                for item_id, names in product_names.items()
+                if normalized_query in item_id.casefold()
+                or normalized_query in str(names.get("title", "")).casefold()
+                or normalized_query in str(names.get("brand", "")).casefold()
+            ]
+        if len(matches) != 1:
+            key = "remove_products_not_found" if not matches else "remove_products_ambiguous"
+            await message.answer(get_text(lang, key), reply_markup=_cancel_markup(lang))
+            return
+        product_id = matches[0]
+
+    title = product_names.get(product_id, {}).get("title", product_id)
+    await state.update_data(removal_target_product_id=product_id, removal_target_title=title)
+    markup = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=get_text(lang, "confirm_remove_one_btn"), callback_data="confirm_remove_one_product")],
+            [InlineKeyboardButton(text=get_text(lang, "back"), callback_data="remove_products")],
+        ]
+    )
+    await message.answer(
+        get_text(lang, "confirm_remove_one").format(title=_h(title), product_id=_h(product_id)),
+        reply_markup=markup,
+        parse_mode="HTML",
+    )
+
+
+@products_router.callback_query(F.data == "confirm_remove_one_product")
+async def confirm_remove_one_product(callback: CallbackQuery, state: FSMContext):
+    lang = await _lang(callback.from_user.id)
+    data = await state.get_data()
+    product_id = data.get("removal_target_product_id")
+    if not product_id:
+        await callback.answer(get_text(lang, "not_found"), show_alert=True)
+        return
+    try:
+        async with AsyncSessionLocal() as session:
+            await set_product_active(
+                session,
+                product_id,
+                False,
+                deactivate_variants=True,
+                commit=False,
+            )
+            await add_admin_audit(
+                session,
+                actor_telegram_id=callback.from_user.id,
+                action="product_remove",
+                target_type="product",
+                target_id=product_id,
+            )
+            await commit_catalog_change(session)
+    except CatalogMutationError:
+        await callback.answer(get_text(lang, "not_found"), show_alert=True)
+        return
+    except Exception as exc:
+        logger.error("Product removal failed: %s", exc, exc_info=True)
+        await callback.answer(get_text(lang, "db_error"), show_alert=True)
+        return
+
+    await state.clear()
+    await callback.message.edit_text(
+        get_text(lang, "remove_one_done").format(title=_h(data.get("removal_target_title", product_id))),
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text=get_text(lang, "back"), callback_data="manage_inventory")]
+            ]
+        ),
+        parse_mode="HTML",
+    )
+    await callback.answer()
+
+
+@products_router.callback_query(F.data == "remove_all_products")
+async def prompt_remove_all_products(callback: CallbackQuery, state: FSMContext):
+    lang = await _lang(callback.from_user.id)
+    await state.set_state(ProductAdminStates.awaiting_all_products_confirmation)
+    markup = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=get_text(lang, "back"), callback_data="remove_products")],
+            [InlineKeyboardButton(text=get_text(lang, "broadcast_cancel_btn"), callback_data="cancel_input")],
+        ]
+    )
+    await callback.message.answer(
+        get_text(lang, "confirm_remove_all_prompt").format(phrase=get_text(lang, "remove_all_confirm_phrase")),
+        reply_markup=markup,
+        parse_mode="HTML",
+    )
+    await callback.answer()
+
+
+@products_router.message(ProductAdminStates.awaiting_all_products_confirmation)
+async def confirm_remove_all_products(message: Message, state: FSMContext):
+    lang = await _lang(message.from_user.id)
+    if (message.text or "").strip() != get_text(lang, "remove_all_confirm_phrase"):
+        await message.answer(get_text(lang, "remove_all_phrase_wrong"), reply_markup=_cancel_markup(lang))
+        return
+
+    try:
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(
+                select(Product.id).where(Product.is_active.is_(True)).with_for_update()
+            )
+            product_ids = list(result.scalars().all())
+            for product_id in product_ids:
+                await set_product_active(
+                    session,
+                    product_id,
+                    False,
+                    deactivate_variants=True,
+                    commit=False,
+                )
+            await add_admin_audit(
+                session,
+                actor_telegram_id=message.from_user.id,
+                action="product_remove_all",
+                target_type="catalog",
+                details={"product_count": len(product_ids)},
+            )
+            await commit_catalog_change(session)
+    except Exception as exc:
+        logger.error("Remove all products failed: %s", exc, exc_info=True)
+        await message.answer(get_text(lang, "db_error"), reply_markup=_cancel_markup(lang))
+        return
+
+    await state.clear()
+    await message.answer(
+        get_text(lang, "remove_all_done").format(count=len(product_ids)),
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text=get_text(lang, "back"), callback_data="manage_inventory")]
+            ]
+        ),
+    )
 
 
 @products_router.callback_query(F.data == "add_single_product")
@@ -656,7 +899,8 @@ async def confirm_guided_product(callback: CallbackQuery, state: FSMContext):
     await callback.message.edit_text(
         get_text(lang, "guided_saved")
         .replace("{inserted}", str(result.inserted_stock_count))
-        .replace("{duplicates}", str(result.duplicate_stock_count))
+        .replace("{duplicates}", str(result.duplicate_stock_count)),
+        reply_markup=_inventory_back_markup(lang),
     )
     await callback.answer()
 
@@ -777,7 +1021,7 @@ async def process_single_product_json(message: Message, state: FSMContext):
         return
 
     await state.clear()
-    await message.answer(get_text(lang, "single_product_success"))
+    await message.answer(get_text(lang, "single_product_success"), reply_markup=_inventory_back_markup(lang))
 
 
 @products_router.callback_query(F.data.startswith("sel_brand_"))
@@ -906,35 +1150,17 @@ async def select_product_action(callback: CallbackQuery, state: FSMContext):
 
     markup = InlineKeyboardMarkup(
         inline_keyboard=[
-            [
-                InlineKeyboardButton(text=get_text(lang, "edit_title"), callback_data="action_edit_name"),
-                InlineKeyboardButton(text=get_text(lang, "variant_price_btn"), callback_data="action_edit_price"),
-            ],
-            [
-                InlineKeyboardButton(text=get_text(lang, "edit_subtitle"), callback_data="action_edit_subtitle"),
-                InlineKeyboardButton(text=get_text(lang, "edit_features"), callback_data="action_edit_features"),
-            ],
-            [
-                InlineKeyboardButton(text=get_text(lang, "add_stock"), callback_data="action_add_stock"),
-                InlineKeyboardButton(text=get_text(lang, "upload_logo"), callback_data="action_upload_logo"),
-            ],
-            [
-                InlineKeyboardButton(text=toggle_label, callback_data="action_toggle_active"),
-                InlineKeyboardButton(text=get_text(lang, "variant_toggle_btn"), callback_data="action_manage_variants"),
-            ],
-            [
-                InlineKeyboardButton(
-                    text=get_text(lang, "catalog_diagnostics"),
-                    callback_data="action_catalog_diagnostics",
-                ),
-                InlineKeyboardButton(
-                    text=get_text(lang, "refresh_catalog_cache"),
-                    callback_data="action_refresh_catalog_cache",
-                ),
-            ],
-            [
-                InlineKeyboardButton(text=get_text(lang, "delete_product"), callback_data="action_delete_product"),
-            ],
+            [InlineKeyboardButton(text=get_text(lang, "edit_title"), callback_data="action_edit_name")],
+            [InlineKeyboardButton(text=get_text(lang, "variant_price_btn"), callback_data="action_edit_price")],
+            [InlineKeyboardButton(text=get_text(lang, "edit_subtitle"), callback_data="action_edit_subtitle")],
+            [InlineKeyboardButton(text=get_text(lang, "edit_features"), callback_data="action_edit_features")],
+            [InlineKeyboardButton(text=get_text(lang, "add_stock"), callback_data="action_add_stock")],
+            [InlineKeyboardButton(text=get_text(lang, "upload_logo"), callback_data="action_upload_logo")],
+            [InlineKeyboardButton(text=toggle_label, callback_data="action_toggle_active")],
+            [InlineKeyboardButton(text=get_text(lang, "variant_toggle_btn"), callback_data="action_manage_variants")],
+            [InlineKeyboardButton(text=get_text(lang, "catalog_diagnostics"), callback_data="action_catalog_diagnostics")],
+            [InlineKeyboardButton(text=get_text(lang, "refresh_catalog_cache"), callback_data="action_refresh_catalog_cache")],
+            [InlineKeyboardButton(text=get_text(lang, "delete_product"), callback_data="action_delete_product")],
             [InlineKeyboardButton(text=get_text(lang, "back"), callback_data="manage_inventory")],
         ]
     )
@@ -1026,7 +1252,7 @@ async def show_catalog_diagnostics(callback: CallbackQuery, state: FSMContext):
         stock=int(diagnostics.get("available_stock_count", 0)),
         cache=_h(cache_status),
     )
-    await callback.message.answer(report, parse_mode="HTML")
+    await callback.message.answer(report, parse_mode="HTML", reply_markup=_inventory_back_markup(lang))
     await callback.answer()
 
 
@@ -1074,7 +1300,7 @@ async def soft_delete_product(callback: CallbackQuery, state: FSMContext):
         return
 
     await state.clear()
-    await callback.message.edit_text(get_text(lang, "product_deleted"))
+    await callback.message.edit_text(get_text(lang, "product_deleted"), reply_markup=_inventory_back_markup(lang))
     await callback.answer()
 
 
@@ -1112,7 +1338,7 @@ async def process_new_name(message: Message, state: FSMContext):
             return
 
     await state.clear()
-    await message.answer(get_text(lang, "name_updated"))
+    await message.answer(get_text(lang, "name_updated"), reply_markup=_inventory_back_markup(lang))
 
 
 # ── Edit subtitle ─────────────────────────────────────────────────────────────
@@ -1149,7 +1375,7 @@ async def process_new_subtitle(message: Message, state: FSMContext):
             return
 
     await state.clear()
-    await message.answer(get_text(lang, "subtitle_updated"))
+    await message.answer(get_text(lang, "subtitle_updated"), reply_markup=_inventory_back_markup(lang))
 
 
 # ── Edit features ─────────────────────────────────────────────────────────────
@@ -1210,7 +1436,10 @@ async def process_new_features(message: Message, state: FSMContext):
 
     await state.clear()
     preview = "\n".join(f"  ⭐ {f}" for f in features)
-    await message.answer(f"{get_text(lang, 'features_updated')}\n\n{preview}")
+    await message.answer(
+        f"{get_text(lang, 'features_updated')}\n\n{preview}",
+        reply_markup=_inventory_back_markup(lang),
+    )
 
 
 # ── Edit price ────────────────────────────────────────────────────────────────
@@ -1247,7 +1476,10 @@ async def process_new_price(message: Message, state: FSMContext):
             return
 
     await state.clear()
-    await message.answer(get_text(lang, "price_updated").replace("{price}", _price_label(Decimal(new_price))))
+    await message.answer(
+        get_text(lang, "price_updated").replace("{price}", _price_label(Decimal(new_price))),
+        reply_markup=_inventory_back_markup(lang),
+    )
 
 
 # ── Add stock ─────────────────────────────────────────────────────────────────
@@ -1274,7 +1506,8 @@ async def prompt_variant_selection(callback: CallbackQuery, state: FSMContext):
             if len(active_variants) == 1:
                 await state.update_data(target_variant_id=active_variants[0].id)
                 await callback.message.answer(
-                    get_text(lang, "enter_stock_lines") + "\n\n" + get_text(lang, "cancel_hint")
+                    get_text(lang, "enter_stock_lines") + "\n\n" + get_text(lang, "cancel_hint"),
+                    reply_markup=_cancel_markup(lang),
                 )
                 await state.set_state(ProductAdminStates.awaiting_stock_text)
                 await callback.answer()
@@ -1319,7 +1552,10 @@ async def variant_selected_for_stock(callback: CallbackQuery, state: FSMContext)
         await callback.answer(get_text(lang, "not_found"), show_alert=True)
         return
     await state.update_data(target_variant_id=variant_id)
-    await callback.message.answer(get_text(lang, "enter_stock_lines") + "\n\n" + get_text(lang, "cancel_hint"))
+    await callback.message.answer(
+        get_text(lang, "enter_stock_lines") + "\n\n" + get_text(lang, "cancel_hint"),
+        reply_markup=_cancel_markup(lang),
+    )
     await state.set_state(ProductAdminStates.awaiting_stock_text)
     await callback.answer()
 
@@ -1354,7 +1590,10 @@ async def process_stock_text(message: Message, state: FSMContext):
             return
 
     await state.clear()
-    await message.answer(get_text(lang, "stock_added").replace("{count}", str(inserted)))
+    await message.answer(
+        get_text(lang, "stock_added").replace("{count}", str(inserted)),
+        reply_markup=_inventory_back_markup(lang),
+    )
 
 
 # ── Upload logo ───────────────────────────────────────────────────────────────
@@ -1362,7 +1601,10 @@ async def process_stock_text(message: Message, state: FSMContext):
 @products_router.callback_query(F.data == "action_upload_logo")
 async def prompt_logo_upload(callback: CallbackQuery, state: FSMContext):
     lang = await _lang(callback.from_user.id)
-    await callback.message.answer(get_text(lang, "send_logo") + "\n\n" + get_text(lang, "cancel_hint"))
+    await callback.message.answer(
+        get_text(lang, "send_logo") + "\n\n" + get_text(lang, "cancel_hint"),
+        reply_markup=_cancel_markup(lang),
+    )
     await state.set_state(ProductAdminStates.awaiting_logo_upload)
     await callback.answer()
 
@@ -1437,7 +1679,7 @@ async def process_logo_upload(message: Message, state: FSMContext):
             return
 
     await state.clear()
-    await message.answer(get_text(lang, "logo_uploaded"))
+    await message.answer(get_text(lang, "logo_uploaded"), reply_markup=_inventory_back_markup(lang))
 
 
 # ── Bulk import ───────────────────────────────────────────────────────────────
@@ -1539,7 +1781,10 @@ def _group_product_import_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any
 @products_router.callback_query(F.data == "bulk_import_products")
 async def prompt_bulk_import(callback: CallbackQuery, state: FSMContext):
     lang = await _lang(callback.from_user.id)
-    await callback.message.answer(get_text(lang, "bulk_import_help") + "\n\n" + get_text(lang, "cancel_hint"))
+    await callback.message.answer(
+        get_text(lang, "bulk_import_help") + "\n\n" + get_text(lang, "cancel_hint"),
+        reply_markup=_cancel_markup(lang),
+    )
     await state.set_state(ProductAdminStates.awaiting_bulk_import_file)
     await callback.answer()
 
@@ -1596,7 +1841,8 @@ async def process_bulk_import_file(message: Message, state: FSMContext):
         await message.answer(
             get_text(lang, "bulk_import_success")
             .replace("{products}", str(len(product_payloads)))
-            .replace("{credentials}", str(inserted_credentials))
+            .replace("{credentials}", str(inserted_credentials)),
+            reply_markup=_inventory_back_markup(lang),
         )
         return
 
@@ -1632,7 +1878,8 @@ async def process_bulk_import_file(message: Message, state: FSMContext):
     await message.answer(
         get_text(lang, "bulk_import_success")
         .replace("{products}", str(len(product_payloads)))
-        .replace("{credentials}", str(inserted_credentials))
+        .replace("{credentials}", str(inserted_credentials)),
+        reply_markup=_inventory_back_markup(lang),
     )
 
 
@@ -1641,7 +1888,10 @@ async def inline_cancel(callback: CallbackQuery, state: FSMContext):
     lang = await _lang(callback.from_user.id)
     await state.clear()
     try:
-        await callback.message.edit_text(get_text(lang, "operation_cancelled"))
+        await callback.message.edit_text(
+            get_text(lang, "operation_cancelled"),
+            reply_markup=_inventory_back_markup(lang),
+        )
     except Exception:
         await callback.answer(get_text(lang, "operation_cancelled"))
     await callback.answer()
@@ -1651,4 +1901,4 @@ async def inline_cancel(callback: CallbackQuery, state: FSMContext):
 async def cmd_cancel(message: Message, state: FSMContext):
     lang = await _lang(message.from_user.id)
     await state.clear()
-    await message.answer(get_text(lang, "operation_cancelled"))
+    await message.answer(get_text(lang, "operation_cancelled"), reply_markup=_inventory_back_markup(lang))
