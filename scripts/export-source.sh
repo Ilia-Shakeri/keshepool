@@ -44,6 +44,7 @@ smoke.sh
 README.md
 DEPLOYMENT.md
 ADMIN_PRODUCT_MANUAL.md
+SECURITY_INCIDENT.md
 "
 
 git archive --format=tar HEAD $allowlist | tar -xf - -C "$stage"

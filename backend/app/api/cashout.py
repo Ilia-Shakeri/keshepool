@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.users import current_user
 from app.core.config import settings
 from app.core.database import get_db
-from app.models import CashoutRequest, CashoutRequestStatus, User
+from app.models import CashoutRequest, CashoutRequestStatus, Notification, User
 from app.services.cache_service import check_rate_limit
 
 logger = logging.getLogger(__name__)
@@ -125,6 +125,8 @@ async def create_cashout_request(
         limit=5,
         window_seconds=3600,
     )
+    if not rate_limit.backend_available:
+        raise HTTPException(status_code=503, detail="Cashout rate limiter is unavailable.")
     if not rate_limit.allowed:
         raise HTTPException(status_code=429, detail="Too many requests. Please try again later.")
 
@@ -136,6 +138,13 @@ async def create_cashout_request(
         status=CashoutRequestStatus.PENDING,
     )
     db.add(cashout)
+    db.add(
+        Notification(
+            user_id=user.id,
+            title="درخواست نقد کردن درآمد ارزی",
+            description="درخواست شما ثبت شد. تغییر وضعیت از همین بخش اعلان‌ها نمایش داده می‌شود.",
+        )
+    )
     await db.commit()
     await db.refresh(cashout)
 
@@ -154,7 +163,7 @@ async def create_cashout_request(
     return {
         "status": "submitted",
         "requestId": cashout.id,
-        "message": "درخواست شما با موفقیت ثبت شد. تیم ما با شما تماس خواهد گرفت.",
+        "message": "درخواست ثبت شد. وضعیت آن از طریق اعلان‌های داخل برنامه در دسترس است.",
     }
 
 

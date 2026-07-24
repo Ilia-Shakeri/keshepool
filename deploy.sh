@@ -185,9 +185,8 @@ docker compose stop frontend
 docker compose stop backend
 
 echo "[deploy] Running the single migration owner."
-docker compose run --rm --no-deps backend python3 /app/scripts/stamp_if_legacy.py
 migration_started=true
-docker compose run --rm --no-deps backend alembic upgrade head
+docker compose run --rm --no-deps migrate
 schema_changed=true
 
 echo "[deploy] Starting backend, then frontend."

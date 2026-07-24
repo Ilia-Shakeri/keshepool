@@ -1,10 +1,17 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Bell, Bot, Code, Flame, Layout, MessageCircle, MoreHorizontal, Music, PlaySquare, Shield, X } from "lucide-react";
 import ProductIcon from "@/features/products/components/ProductIcon";
 import UserAvatar from "@/components/UserAvatar";
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { getNotifications, getProducts, markNotificationsRead, type UserNotification } from "@/lib/api";
 import type { Product } from "@/features/products/types";
 import { toPersianDigits } from "@/lib/utils";
@@ -15,13 +22,17 @@ export default function Home() {
   const [products, setProducts] = useState<Product[]>([]);
   const [notifications, setNotifications] = useState<UserNotification[]>([]);
   const [productError, setProductError] = useState<string | null>(null);
+  const [notificationError, setNotificationError] = useState<string | null>(null);
+  const [notificationLoading, setNotificationLoading] = useState(true);
+  const [isMarkingRead, setIsMarkingRead] = useState(false);
   const [isNotifOpen, setIsNotifOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
-  const bellRef = useRef<HTMLButtonElement>(null);
 
   const loadHomeData = useCallback(() => {
     setIsLoading(true);
+    setNotificationLoading(true);
     setProductError(null);
+    setNotificationError(null);
     const webApp = window.Telegram?.WebApp;
     if (webApp) setTgUser(webApp.initDataUnsafe?.user || null);
 
@@ -40,27 +51,38 @@ export default function Home() {
           setNotifications(notifData.value);
         } else {
           setNotifications([]);
+          setNotificationError("دریافت اعلان‌ها ناموفق بود.");
           console.error("Notification data load failed:", notifData.reason);
         }
       })
-      .finally(() => setIsLoading(false));
+      .finally(() => {
+        setIsLoading(false);
+        setNotificationLoading(false);
+      });
   }, []);
 
   useEffect(() => {
     void Promise.resolve().then(loadHomeData);
   }, [loadHomeData]);
 
-  useEffect(() => {
-    if (!isNotifOpen) return;
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setIsNotifOpen(false);
-    };
-    window.addEventListener("keydown", closeOnEscape);
-    return () => window.removeEventListener("keydown", closeOnEscape);
-  }, [isNotifOpen]);
-
   const hotItems = useMemo(() => products.slice(0, 6), [products]);
   const unreadCount = notifications.filter((n) => !n.isRead).length;
+
+  const markAllRead = useCallback(async () => {
+    if (unreadCount === 0 || isMarkingRead) return;
+    setIsMarkingRead(true);
+    setNotificationError(null);
+    try {
+      await markNotificationsRead();
+      setNotifications(await getNotifications());
+    } catch (error) {
+      setNotificationError(
+        error instanceof Error ? error.message : "به‌روزرسانی اعلان‌ها ناموفق بود.",
+      );
+    } finally {
+      setIsMarkingRead(false);
+    }
+  }, [isMarkingRead, unreadCount]);
 
   function getStartingPrice(product: Product): string {
     const startingVariant = product.variants.reduce<Product["variants"][number] | null>((lowest, variant) => {
@@ -102,82 +124,106 @@ export default function Home() {
         {/* Right: notification bell */}
         <div className="relative shrink-0">
           <button
-            ref={bellRef}
-            onClick={() => {
-              const opening = !isNotifOpen;
-              setIsNotifOpen(opening);
-              if (opening && unreadCount > 0) {
-                markNotificationsRead().then(() =>
-                  setNotifications((prev) => prev.map((n) => ({ ...n, isRead: true })))
-                ).catch((error) => console.error("Notification update failed:", error));
-              }
-            }}
-            className="relative p-2.5 rounded-full border border-white/10 active:scale-95 transition-all"
+            onClick={() => setIsNotifOpen(true)}
+            className="relative grid size-10 place-items-center rounded-full border border-white/10 p-0 leading-none transition-all active:scale-95"
             style={{ background: "rgba(255,255,255,0.06)", backdropFilter: "blur(12px)" }}
             aria-label="اعلانات"
           >
-            <Bell className="w-[18px] h-[18px] text-[#F5F5F5]" />
+            <Bell className="block size-[18px] text-[#F5F5F5]" aria-hidden="true" />
             {unreadCount > 0 && (
-              <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-[#E63946] rounded-full border border-[#0F0F10] shadow-sm" />
+              <span className="absolute end-1 top-1 size-2 rounded-full border border-[#0F0F10] bg-[#E63946] shadow-sm" />
             )}
           </button>
         </div>
       </header>
 
-      {/* Notification dropdown — rendered outside header to escape its stacking context */}
-      {isNotifOpen && (
-        <>
-          {/* Full-screen overlay — catches outside clicks */}
-          <div
-            className="fixed inset-0 z-[9998]"
-            onClick={() => setIsNotifOpen(false)}
-            aria-hidden="true"
-          />
-          {/* Panel — fixed so it always floats above everything including BottomNav */}
-          <div
-            className="app-floating-end fixed z-[9999] w-[min(18rem,calc(100vw-2.5rem))] overflow-hidden rounded-2xl"
-            style={{
-              background: "#111318",
-              border: "1px solid rgba(255,255,255,0.12)",
-              boxShadow: "0 24px 64px rgba(0,0,0,0.7), 0 4px 16px rgba(0,0,0,0.4)",
-            }}
-          >
-            <div
-              className="flex justify-between items-center px-4 py-3"
-              style={{ borderBottom: "1px solid rgba(255,255,255,0.08)" }}
+      <Dialog open={isNotifOpen} onOpenChange={setIsNotifOpen}>
+        <DialogContent
+          dir="rtl"
+          className="max-h-[min(82dvh,40rem)] overflow-hidden rounded-3xl border border-white/15 bg-[#111318] p-0 text-[#F5F5F5] shadow-[0_28px_90px_rgba(0,0,0,0.82)] sm:max-w-md"
+        >
+          <div className="flex items-start justify-between gap-4 border-b border-white/10 px-5 py-4">
+            <div>
+              <DialogTitle className="text-base font-black">اعلان‌ها</DialogTitle>
+              <DialogDescription className="mt-1 text-xs text-[#F5F5F5]/55">
+                {unreadCount > 0
+                  ? `${toPersianDigits(String(unreadCount))} اعلان خوانده‌نشده`
+                  : "همه اعلان‌ها خوانده شده‌اند."}
+              </DialogDescription>
+            </div>
+            <DialogClose
+              className="grid size-9 shrink-0 place-items-center rounded-full border border-white/10 bg-white/5"
+              aria-label="بستن اعلان‌ها"
             >
-              <span className="text-sm font-bold text-[#F5F5F5]">اعلانات</span>
-              <button
-                onClick={() => setIsNotifOpen(false)}
-                className="p-1 rounded-lg transition-colors hover:bg-white/10"
-              >
-                <X className="w-3.5 h-3.5 text-[#F5F5F5]/60" />
-              </button>
-            </div>
-            <div className="max-h-72 overflow-y-auto">
-              {notifications.length === 0 ? (
-                <div className="p-6 text-center text-xs text-[#F5F5F5]/40">اعلان جدیدی ندارید.</div>
-              ) : (
-                notifications.map((notification) => (
-                  <div
-                    key={notification.id}
-                    className={`px-4 py-3 ${notification.isRead ? "opacity-50" : ""}`}
-                    style={{ borderBottom: "1px solid rgba(255,255,255,0.05)" }}
-                  >
-                    <div className="flex items-center gap-2 mb-0.5">
-                      {!notification.isRead && (
-                        <span className="w-1.5 h-1.5 rounded-full bg-[#E63946] flex-shrink-0" />
-                      )}
-                      <h4 className="text-xs font-bold text-[#F5F5F5]">{notification.title}</h4>
-                    </div>
-                    <p className="text-[10px] text-[#F5F5F5]/55 leading-relaxed">{notification.description}</p>
-                  </div>
-                ))
-              )}
-            </div>
+              <X className="size-4" aria-hidden="true" />
+            </DialogClose>
           </div>
-        </>
-      )}
+
+          <div className="max-h-[55dvh] overflow-y-auto px-2 py-2">
+            {notificationLoading ? (
+              <p className="p-8 text-center text-xs text-[#F5F5F5]/55" role="status">
+                در حال دریافت اعلان‌ها…
+              </p>
+            ) : notificationError ? (
+              <div className="m-3 rounded-2xl border border-[#E63946]/30 bg-[#E63946]/10 p-4 text-center">
+                <p className="text-xs text-[#F5F5F5]/80" role="alert">{notificationError}</p>
+                <button
+                  type="button"
+                  onClick={() => void loadHomeData()}
+                  className="mt-3 rounded-xl bg-white/10 px-4 py-2 text-xs font-bold"
+                >
+                  تلاش دوباره
+                </button>
+              </div>
+            ) : notifications.length === 0 ? (
+              <div className="p-8 text-center">
+                <Bell className="mx-auto size-8 text-[#F5F5F5]/25" aria-hidden="true" />
+                <p className="mt-3 text-xs text-[#F5F5F5]/50">هنوز اعلانی ندارید.</p>
+              </div>
+            ) : (
+              notifications.map((notification) => (
+                <article
+                  key={notification.id}
+                  className={`m-1 rounded-2xl border p-4 ${
+                    notification.isRead
+                      ? "border-white/5 bg-white/[0.025]"
+                      : "border-[#E63946]/25 bg-[#E63946]/[0.07]"
+                  }`}
+                >
+                  <div className="flex items-start gap-2">
+                    {!notification.isRead && (
+                      <span className="mt-1.5 size-1.5 shrink-0 rounded-full bg-[#E63946]" />
+                    )}
+                    <div className="min-w-0">
+                      <h3 className="text-sm font-bold">{notification.title}</h3>
+                      <p className="mt-1 text-xs leading-6 text-[#F5F5F5]/65">
+                        {notification.description}
+                      </p>
+                      <time className="mt-2 block text-[10px] text-[#F5F5F5]/35">
+                        {new Intl.DateTimeFormat("fa-IR", {
+                          dateStyle: "medium",
+                          timeStyle: "short",
+                        }).format(new Date(notification.createdAt))}
+                      </time>
+                    </div>
+                  </div>
+                </article>
+              ))
+            )}
+          </div>
+
+          <div className="border-t border-white/10 p-4">
+            <button
+              type="button"
+              onClick={() => void markAllRead()}
+              disabled={unreadCount === 0 || isMarkingRead}
+              className="w-full rounded-2xl bg-[#E63946] px-4 py-3 text-sm font-bold text-white disabled:cursor-not-allowed disabled:opacity-45"
+            >
+              {isMarkingRead ? "در حال ثبت…" : "خواندن همه اعلان‌ها"}
+            </button>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       <main className="relative z-10 mx-auto mt-2 max-w-4xl space-y-8 px-5">
         {/* Featured products horizontal scroll */}

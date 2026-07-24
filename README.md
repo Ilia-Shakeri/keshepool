@@ -90,6 +90,8 @@ Production uses only `sh ./deploy.sh` with one non-zero full Git SHA for both re
 
 Production releases use immutable registry images tagged with the same full commit SHA. See [DEPLOYMENT.md](DEPLOYMENT.md) for ingress, CI variables, release, and rollback details.
 
+Before any production release after a source exposure, complete every operator step in [SECURITY_INCIDENT.md](SECURITY_INCIDENT.md).
+
 ## 🔒 Security Notes
 
 * Ensure your `WEBHOOK_URL` is secured with an SSL certificate (HTTPS), as this is strictly required by Telegram for Webhooks.

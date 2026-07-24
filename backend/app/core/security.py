@@ -3,6 +3,7 @@ import hmac
 import json
 import time
 import urllib.parse
+import re
 from typing import Any, Dict, Optional
 
 from fastapi import Header, HTTPException
@@ -11,9 +12,27 @@ from app.core.config import settings
 from app.services.cache_service import namespaced_key, read_json, write_json
 
 def _parse_init_data(init_data: str) -> Dict[str, str]:
-    parsed_data = dict(urllib.parse.parse_qsl(init_data, keep_blank_values=True))
+    if len(init_data.encode("utf-8")) > settings.TELEGRAM_INIT_DATA_MAX_BYTES:
+        raise HTTPException(status_code=413, detail="Telegram init data is too large.")
+    if re.search(r"%(?![0-9A-Fa-f]{2})", init_data):
+        raise HTTPException(status_code=401, detail="Malformed Telegram init data.")
+    try:
+        pairs = urllib.parse.parse_qsl(
+            init_data,
+            keep_blank_values=True,
+            strict_parsing=True,
+            max_num_fields=64,
+        )
+    except (ValueError, UnicodeError) as exc:
+        raise HTTPException(status_code=401, detail="Malformed Telegram init data.") from exc
+    keys = [key for key, _ in pairs]
+    if len(keys) != len(set(keys)):
+        raise HTTPException(status_code=401, detail="Duplicate Telegram init data field.")
+    parsed_data = dict(pairs)
     if "hash" not in parsed_data:
         raise HTTPException(status_code=401, detail="Missing Telegram hash parameter.")
+    if not re.fullmatch(r"[0-9a-fA-F]{64}", parsed_data["hash"]):
+        raise HTTPException(status_code=401, detail="Malformed Telegram hash parameter.")
     return parsed_data
 
 async def validate_telegram_data(

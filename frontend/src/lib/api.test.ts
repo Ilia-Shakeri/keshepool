@@ -64,9 +64,10 @@ test("concurrent reads share one bootstrap and one matching read", async (contex
   const { checkoutWithWallet, getProducts } = await import("./api.ts");
   await Promise.all(Array.from({ length: 10 }, () => getProducts()));
   await checkoutWithWallet("product-1", "variant-1", "checkout-key-123");
+  await getProducts();
 
   assert.equal(bootstrapCalls, 1);
-  assert.equal(productCalls, 1);
+  assert.equal(productCalls, 2);
   assert.equal(checkoutCalls, 1);
   assert.equal(checkoutHeader, "checkout-key-123");
   assert.deepEqual(checkoutBody, {

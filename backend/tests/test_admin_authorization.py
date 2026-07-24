@@ -112,8 +112,10 @@ class AdminFilterTests(unittest.TestCase):
     def setUp(self):
         self.previous_admin_ids = settings.__dict__.get("admin_ids")
         self.previous_group_id = settings.ADMIN_GROUP_CHAT_ID
+        self.previous_require_group_admin = settings.ADMIN_REQUIRE_GROUP_ADMIN
         settings.__dict__["admin_ids"] = {"42"}
         settings.ADMIN_GROUP_CHAT_ID = "-100123"
+        settings.ADMIN_REQUIRE_GROUP_ADMIN = False
 
     def tearDown(self):
         if self.previous_admin_ids is None:
@@ -121,6 +123,7 @@ class AdminFilterTests(unittest.TestCase):
         else:
             settings.__dict__["admin_ids"] = self.previous_admin_ids
         settings.ADMIN_GROUP_CHAT_ID = self.previous_group_id
+        settings.ADMIN_REQUIRE_GROUP_ADMIN = self.previous_require_group_admin
 
     def event(self, user_id, chat_id, chat_type, status):
         return SimpleNamespace(
@@ -142,13 +145,21 @@ class AdminFilterTests(unittest.TestCase):
         self.assertFalse(self.authorize(event))
         self.assertEqual(event.bot.calls, [])
 
-    def test_ordinary_group_member_is_denied(self):
+    def test_ordinary_group_member_is_allowed_by_default(self):
         event = self.event(42, -100123, "supergroup", ChatMemberStatus.MEMBER)
-        self.assertFalse(self.authorize(event))
+        self.assertTrue(self.authorize(event))
+        self.assertEqual(event.bot.calls, [])
 
     def test_explicit_group_admin_is_allowed(self):
+        settings.ADMIN_REQUIRE_GROUP_ADMIN = True
         event = self.event(42, -100123, "supergroup", ChatMemberStatus.ADMINISTRATOR)
         self.assertTrue(self.authorize(event))
+        self.assertEqual(event.bot.calls, [(-100123, 42)])
+
+    def test_strict_group_mode_rejects_ordinary_member(self):
+        settings.ADMIN_REQUIRE_GROUP_ADMIN = True
+        event = self.event(42, -100123, "supergroup", ChatMemberStatus.MEMBER)
+        self.assertFalse(self.authorize(event))
         self.assertEqual(event.bot.calls, [(-100123, 42)])
 
     def test_unlisted_group_admin_is_denied_without_lookup(self):

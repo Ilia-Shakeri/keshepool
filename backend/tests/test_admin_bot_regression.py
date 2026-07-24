@@ -4,12 +4,13 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
-from aiogram.types import InlineKeyboardMarkup, ReplyKeyboardMarkup
+from aiogram.fsm.storage.redis import RedisStorage
+from aiogram.types import ForceReply, InlineKeyboardMarkup, ReplyKeyboardMarkup
 from fastapi import HTTPException
 from starlette.requests import Request
 
 from app import main
-from app.bot.handlers import admin_panel
+from app.bot.handlers import admin_panel, products_admin
 from app.bot.locales.translations import get_text
 
 
@@ -55,6 +56,33 @@ def test_allowlisted_admin_start_clears_state_and_sends_both_menus(monkeypatch):
     assert second["text"] == get_text("fa", "persistent_hint")
     assert isinstance(second["reply_markup"], ReplyKeyboardMarkup)
     assert second["reply_markup"].is_persistent is True
+
+
+def test_group_start_uses_only_reliable_inline_menu(monkeypatch):
+    state = SimpleNamespace(clear=AsyncMock())
+    message = SimpleNamespace(
+        from_user=SimpleNamespace(id=123456),
+        chat=SimpleNamespace(type="supergroup"),
+        answer=AsyncMock(),
+    )
+    monkeypatch.setattr(admin_panel, "get_admin_lang", AsyncMock(return_value="fa"))
+    asyncio.run(admin_panel.cmd_start(message, state))
+    assert message.answer.await_count == 1
+    assert isinstance(message.answer.await_args.kwargs["reply_markup"], InlineKeyboardMarkup)
+
+
+def test_guided_text_step_uses_selective_force_reply():
+    target = SimpleNamespace(answer=AsyncMock())
+    state = SimpleNamespace(set_state=AsyncMock())
+    asyncio.run(products_admin._prompt_guided_title(target, "fa", state))
+    force_reply = target.answer.await_args.kwargs["reply_markup"]
+    assert isinstance(force_reply, ForceReply)
+    assert force_reply.selective is True
+
+
+def test_dispatchers_use_durable_redis_fsm_storage():
+    assert isinstance(main.dp.storage, RedisStorage)
+    assert isinstance(main.admin_dp.storage, RedisStorage)
 
 
 def test_webhook_status_fields_do_not_expose_url_or_secret():
@@ -103,6 +131,19 @@ def test_malformed_webhook_payload_is_safely_ignored():
         main.bot_webhook("admin", make_request(b"not-json"), main.settings.WEBHOOK_SECRET)
     )
     assert response == {"status": "ignored"}
+
+
+def test_oversized_webhook_payload_returns_413(monkeypatch):
+    monkeypatch.setattr(main.settings, "TELEGRAM_WEBHOOK_MAX_BYTES", 32)
+    with pytest.raises(HTTPException) as raised:
+        asyncio.run(
+            main.bot_webhook(
+                "admin",
+                make_request(b"x" * 33),
+                main.settings.WEBHOOK_SECRET,
+            )
+        )
+    assert raised.value.status_code == 413
 
 
 def test_webhook_handler_failure_returns_503(monkeypatch):

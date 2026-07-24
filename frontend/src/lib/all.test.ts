@@ -7,3 +7,4 @@ import "./product-load.test.ts";
 import "./request-diagnostics.test.ts";
 import "./telegram-back.test.ts";
 import "./transaction-format.test.ts";
+import "./ui-contract.test.ts";

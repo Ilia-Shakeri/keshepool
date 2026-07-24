@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Literal
 
 from aiogram import Bot, Dispatcher, types
+from aiogram.fsm.storage.redis import DefaultKeyBuilder, RedisStorage
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -20,6 +21,7 @@ from sqlalchemy import text
 
 from app.api import admin, cashout, payments, products, users
 from app.bot.handlers.admin_panel import admin_router
+from app.bot.handlers.customer import customer_router
 from app.bot.handlers.products_admin import products_router
 from app.bot.handlers.transactions_admin import transactions_router
 from app.bot.middleware import BlockBannedUserMiddleware
@@ -55,7 +57,7 @@ def _safe_webhook_info(bot_type: str, expected_url: str, info: object) -> dict[s
         "url_matches_expected": hmac.compare_digest(actual_url, expected_url),
         "pending_update_count": getattr(info, "pending_update_count", 0),
         "last_error_date": last_error_date,
-        "last_error_message": getattr(info, "last_error_message", None),
+        "has_last_error": bool(getattr(info, "last_error_message", None)),
     }
 
 
@@ -65,6 +67,35 @@ async def _log_webhook_info(target_bot: Bot, bot_type: str, expected_url: str) -
         "Telegram webhook status checked.",
         extra=_safe_webhook_info(bot_type, expected_url, info),
     )
+
+
+async def _log_admin_group_status() -> None:
+    if not settings.ADMIN_GROUP_CHAT_ID:
+        module_logger.info("Admin group is not configured.")
+        return
+    try:
+        bot_user = await admin_bot.get_me()
+        member = await admin_bot.get_chat_member(
+            chat_id=int(settings.ADMIN_GROUP_CHAT_ID),
+            user_id=bot_user.id,
+        )
+        module_logger.info(
+            "Admin group membership checked.",
+            extra={
+                "group_configured": True,
+                "group_reachable": True,
+                "bot_member_status": str(member.status),
+            },
+        )
+    except Exception as exc:
+        module_logger.warning(
+            "Admin group membership check failed.",
+            extra={
+                "group_configured": True,
+                "group_reachable": False,
+                "exception_class": type(exc).__name__,
+            },
+        )
 
 
 def _webhook_request_fields(
@@ -86,13 +117,26 @@ def _webhook_request_fields(
 
 # Initialize application bots and dispatchers
 bot = Bot(token=settings.BOT_TOKEN)
-dp = Dispatcher()
+customer_storage = RedisStorage.from_url(
+    settings.REDIS_URL,
+    key_builder=DefaultKeyBuilder(with_bot_id=True, with_destiny=True),
+    state_ttl=settings.ADMIN_FSM_TTL_SECONDS,
+    data_ttl=settings.ADMIN_FSM_TTL_SECONDS,
+)
+dp = Dispatcher(storage=customer_storage)
 dp.update.outer_middleware(BlockBannedUserMiddleware())
 
 admin_bot = Bot(token=settings.ADMIN_BOT_TOKEN)
-admin_dp = Dispatcher()
+admin_storage = RedisStorage.from_url(
+    settings.REDIS_URL,
+    key_builder=DefaultKeyBuilder(with_bot_id=True, with_destiny=True),
+    state_ttl=settings.ADMIN_FSM_TTL_SECONDS,
+    data_ttl=settings.ADMIN_FSM_TTL_SECONDS,
+)
+admin_dp = Dispatcher(storage=admin_storage)
 
 # Register modular routers
+dp.include_router(customer_router)
 admin_dp.include_router(admin_router)
 admin_dp.include_router(products_router)
 admin_dp.include_router(transactions_router)
@@ -135,6 +179,16 @@ async def lifespan(app: FastAPI):
             module_logger.info("Telegram bot transport disabled.")
 
         if settings.TELEGRAM_BOT_MODE != "disabled":
+            await _log_admin_group_status()
+            await bot.set_my_commands([
+                types.BotCommand(command="start", description="Open Keshepool")
+            ])
+            await bot.set_chat_menu_button(
+                menu_button=types.MenuButtonWebApp(
+                    text="Open Keshepool",
+                    web_app=types.WebAppInfo(url=settings.WEB_APP_URL),
+                )
+            )
             await admin_bot.set_my_commands([
                 types.BotCommand(command="start", description="Open Admin Panel")
             ])
@@ -158,6 +212,8 @@ async def lifespan(app: FastAPI):
         shutdown_steps = (
             ("main bot session", bot.session.close),
             ("admin bot session", admin_bot.session.close),
+            ("customer FSM storage", customer_storage.close),
+            ("admin FSM storage", admin_storage.close),
             ("Redis client", redis_client.aclose),
             ("database engine", engine.dispose),
         )
@@ -167,7 +223,14 @@ async def lifespan(app: FastAPI):
             except Exception:
                 module_logger.exception("Shutdown failed for %s.", component)
 
-app = FastAPI(title="Keshepool API", lifespan=lifespan)
+production = settings.ENVIRONMENT.lower() == "production"
+app = FastAPI(
+    title="Keshepool API",
+    lifespan=lifespan,
+    docs_url=None if production else "/docs",
+    redoc_url=None if production else "/redoc",
+    openapi_url=None if production else "/openapi.json",
+)
 
 
 @app.middleware("http")
@@ -186,13 +249,12 @@ async def add_correlation_id(request: Request, call_next):
 # Restrict CORS to the configured frontend origin only
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[settings.WEB_APP_URL],
-    allow_credentials=True,
+    allow_origins=[settings.web_app_origin],
+    allow_credentials=False,
     allow_methods=["GET", "POST", "PATCH"],
     allow_headers=[
         "Content-Type",
         "X-Telegram-Init-Data",
-        "X-Admin-Token",
         "X-Idempotency-Key",
     ],
 )
@@ -202,7 +264,8 @@ app.include_router(users.router)
 app.include_router(products.router)
 app.include_router(payments.router)
 app.include_router(cashout.router)
-app.include_router(admin.router)
+if settings.ENABLE_INTERNAL_ADMIN_API:
+    app.include_router(admin.router)
 
 def _prepare_asset_root() -> Path:
     asset_root = Path(settings.ASSET_ROOT)
@@ -235,7 +298,10 @@ async def bot_webhook(
     x_telegram_bot_api_secret_token: str = Header(None, alias="X-Telegram-Bot-Api-Secret-Token")
 ):
     # Enforce webhook authenticity using the secret token
-    if x_telegram_bot_api_secret_token != settings.WEBHOOK_SECRET:
+    if not hmac.compare_digest(
+        x_telegram_bot_api_secret_token or "",
+        settings.WEBHOOK_SECRET,
+    ):
         module_logger.warning(
             "Telegram webhook request rejected.",
             extra=_webhook_request_fields(request, bot_type, "rejected"),
@@ -244,7 +310,21 @@ async def bot_webhook(
 
     update_id = None
     try:
-        update_data = await request.json()
+        content_length = request.headers.get("content-length")
+        if content_length:
+            try:
+                if int(content_length) > settings.TELEGRAM_WEBHOOK_MAX_BYTES:
+                    raise HTTPException(status_code=413, detail="Webhook payload is too large.")
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail="Invalid content length.") from exc
+        chunks: list[bytes] = []
+        body_size = 0
+        async for chunk in request.stream():
+            body_size += len(chunk)
+            if body_size > settings.TELEGRAM_WEBHOOK_MAX_BYTES:
+                raise HTTPException(status_code=413, detail="Webhook payload is too large.")
+            chunks.append(chunk)
+        update_data = json.loads(b"".join(chunks))
         telegram_update = types.Update(**update_data)
         update_id = telegram_update.update_id
     except (json.JSONDecodeError, ValidationError, TypeError, ValueError) as exc:

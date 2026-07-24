@@ -24,19 +24,27 @@ class Settings(BaseSettings):
     CRYPTO_DEPOSIT_ADDRESS_USDT: str = ""
     ADMIN_TELEGRAM_IDS: str = ""
     ADMIN_GROUP_CHAT_ID: str = ""
+    ADMIN_REQUIRE_GROUP_ADMIN: bool = Field(default=False)
     ADMIN_REPORT_LANGUAGE: Literal["fa", "en"] = "fa"
+    ADMIN_FSM_TTL_SECONDS: int = Field(default=3600, ge=300, le=86400)
     TZ: str = "Asia/Tehran"
     ADMIN_API_KEY: str = Field(default="")
+    ENABLE_INTERNAL_ADMIN_API: bool = Field(default=False)
     ASSET_ROOT: str = "/app/static"
     PUBLIC_ASSET_BASE_URL: str = "/static"
     SUPPORT_TELEGRAM_USERNAME: str = ""
     ALLOW_INSECURE_DEV_AUTH: bool = Field(default=False)
     TELEGRAM_AUTH_MAX_AGE_SECONDS: int = Field(default=86400, ge=60)
     TELEGRAM_AUTH_FUTURE_SKEW_SECONDS: int = Field(default=60, ge=0)
+    TELEGRAM_INIT_DATA_MAX_BYTES: int = Field(default=8192, ge=1024, le=65536)
+    TELEGRAM_WEBHOOK_MAX_BYTES: int = Field(default=1_048_576, ge=1024, le=10_485_760)
     USER_LAST_SEEN_WRITE_INTERVAL_SECONDS: int = Field(default=300, ge=60)
     CACHE_NAMESPACE: str = Field(default="keshepool", min_length=1)
+    CATALOG_CACHE_TTL_SECONDS: int = Field(default=30, ge=5, le=300)
+    CATALOG_CACHE_LOCK_TTL_SECONDS: int = Field(default=5, ge=1, le=30)
     REDIS_CONNECT_TIMEOUT_SECONDS: float = Field(default=2.0, gt=0)
     REDIS_SOCKET_TIMEOUT_SECONDS: float = Field(default=2.0, gt=0)
+    TRUSTED_PROXY_IPS: str = Field(default="127.0.0.1")
     USDT_TO_IRR_RATE: int = Field(default=85000, description="USDT to تومان exchange rate (تومان per 1 USDT)")
     TETRA98_SIG_HEADER: str = Field(default="X-Tetra98-Signature", description="Header name Tetra98 uses for HMAC signature")
 
@@ -59,11 +67,23 @@ class Settings(BaseSettings):
             if webhook_url.scheme != "https" or not webhook_url.netloc:
                 raise ValueError("WEBHOOK_URL must be an explicit HTTPS URL in production.")
             
-            if not self.ADMIN_API_KEY:
-                raise ValueError("ADMIN_API_KEY must be defined and strictly set in the production environment to prevent unauthorized internal access.")
+            if self.ENABLE_INTERNAL_ADMIN_API and not self.ADMIN_API_KEY:
+                raise ValueError(
+                    "ADMIN_API_KEY is required when ENABLE_INTERNAL_ADMIN_API is enabled."
+                )
 
             if not self.admin_ids:
                 raise ValueError("ADMIN_TELEGRAM_IDS must contain at least one numeric Telegram user ID in production.")
+
+            web_app_url = urlparse(self.WEB_APP_URL.strip())
+            if (
+                web_app_url.scheme != "https"
+                or not web_app_url.netloc
+                or web_app_url.username
+                or web_app_url.password
+                or web_app_url.fragment
+            ):
+                raise ValueError("WEB_APP_URL must be a safe explicit HTTPS URL in production.")
 
             if self.TETRA98_API_KEY:
                 tetra98_url = urlparse(self.TETRA98_API_URL.strip())
@@ -96,6 +116,9 @@ class Settings(BaseSettings):
         if not self.CACHE_NAMESPACE.strip().strip(":"):
             raise ValueError("CACHE_NAMESPACE must contain a non-empty application name.")
 
+        if not self.TRUSTED_PROXY_IPS.strip() or "*" in self.TRUSTED_PROXY_IPS:
+            raise ValueError("TRUSTED_PROXY_IPS must list explicit proxy addresses or networks.")
+
         if self.TELEGRAM_BOT_MODE == "webhook":
             if not self.WEBHOOK_URL.strip():
                 raise ValueError("WEBHOOK_URL is required in webhook mode.")
@@ -120,5 +143,10 @@ class Settings(BaseSettings):
     @property
     def tetra98_callback_url(self) -> str:
         return f"{self.WEBHOOK_URL.rstrip('/')}/api/pay/tetra98/callback"
+
+    @property
+    def web_app_origin(self) -> str:
+        parsed = urlparse(self.WEB_APP_URL.strip())
+        return f"{parsed.scheme}://{parsed.netloc}"
 
 settings = Settings()

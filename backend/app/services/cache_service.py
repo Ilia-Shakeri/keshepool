@@ -13,8 +13,8 @@ from app.core.redis import redis_client
 logger = logging.getLogger(__name__)
 
 CATALOG_CACHE_VERSION = "v2"
-CATALOG_CACHE_TTL_SECONDS = 60
-CATALOG_LOCK_TTL_SECONDS = 5
+CATALOG_CACHE_TTL_SECONDS = settings.CATALOG_CACHE_TTL_SECONDS
+CATALOG_LOCK_TTL_SECONDS = settings.CATALOG_CACHE_LOCK_TTL_SECONDS
 LEGACY_CATALOG_CACHE_KEY = "cache:products:all"
 
 T = TypeVar("T")

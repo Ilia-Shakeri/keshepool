@@ -87,6 +87,8 @@ async def checkout_with_wallet(
         limit=20,
         window_seconds=60,
     )
+    if not rate_limit.backend_available:
+        raise HTTPException(status_code=503, detail="Checkout rate limiter is unavailable.")
     if not rate_limit.allowed:
         raise HTTPException(status_code=429, detail="Rate limit exceeded.")
 

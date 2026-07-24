@@ -53,7 +53,42 @@ export interface UserNotification {
 const API_BASE = (process.env.NEXT_PUBLIC_API_URL || "/api").replace(/\/$/, "");
 const REQUEST_TIMEOUT_MS = 12_000;
 const pendingReads = new Map<string, Promise<unknown>>();
+const cachedReads = new Map<string, { expiresAt: number; value: unknown }>();
 let bootstrapPromise: Promise<BootstrapProfile> | null = null;
+const READ_TTL_MS: Record<string, number> = {
+  "/config": 300_000,
+  "/products": 10_000,
+  "/notifications": 5_000,
+  "/me": 15_000,
+  "/wallet/balance": 3_000,
+  "/wallet/transactions": 3_000,
+  "/orders": 3_000,
+  "/cashout/platforms": 300_000,
+  "/pay/crypto/rate": 15_000,
+  "/pay/crypto/deposit-address": 300_000,
+};
+
+function clearCachedPaths(paths: string[]): void {
+  for (const path of paths) cachedReads.delete(path);
+}
+
+function invalidateAfterWrite(path: string): void {
+  if (path === "/notifications/mark-read") {
+    clearCachedPaths(["/notifications"]);
+    return;
+  }
+  if (path === "/checkout") {
+    clearCachedPaths(["/products", "/wallet/balance", "/wallet/transactions", "/orders", "/me"]);
+    return;
+  }
+  if (path === "/cashout") {
+    clearCachedPaths(["/notifications"]);
+    return;
+  }
+  if (path.startsWith("/pay/")) {
+    clearCachedPaths(["/wallet/balance", "/wallet/transactions", "/me"]);
+  }
+}
 
 export function getTelegramInitData(): string {
   if (typeof window === "undefined") return "";
@@ -167,12 +202,24 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
   await startBootstrap(getReferrerTelegramId());
 
   const method = (init.method || "GET").toUpperCase();
-  if (method !== "GET") return request<T>(path, init);
+  if (method !== "GET") {
+    const result = await request<T>(path, init);
+    invalidateAfterWrite(path);
+    return result;
+  }
+
+  const cached = cachedReads.get(path);
+  if (cached && cached.expiresAt > Date.now()) return cached.value as T;
+  if (cached) cachedReads.delete(path);
 
   const existing = pendingReads.get(path) as Promise<T> | undefined;
   if (existing) return existing;
 
-  const current = request<T>(path, init);
+  const current = request<T>(path, init).then((value) => {
+    const ttl = READ_TTL_MS[path] || 0;
+    if (ttl > 0) cachedReads.set(path, { expiresAt: Date.now() + ttl, value });
+    return value;
+  });
   pendingReads.set(path, current);
   const removePending = () => {
     if (pendingReads.get(path) === current) pendingReads.delete(path);

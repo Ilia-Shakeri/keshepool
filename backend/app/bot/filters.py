@@ -36,7 +36,7 @@ class IsAdminFilter(BaseFilter):
         if chat_type == "private":
             return True
 
-        # Group access also requires the configured chat and a current admin role.
+        # Group access always requires the one configured chat.
         if chat_type not in {"group", "supergroup"}:
             _log_rejection("wrong_chat")
             return False
@@ -48,6 +48,9 @@ class IsAdminFilter(BaseFilter):
         if chat_id != str(settings.ADMIN_GROUP_CHAT_ID):
             _log_rejection("wrong_chat")
             return False
+
+        if not settings.ADMIN_REQUIRE_GROUP_ADMIN:
+            return True
 
         bot = getattr(event, "bot", None)
         if bot is None:

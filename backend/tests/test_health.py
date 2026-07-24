@@ -16,7 +16,11 @@ class FakeSession:
 
 
 def test_liveness_and_readiness_routes_are_distinct():
-    paths = {route.path for route in main.app.routes}
+    paths = {
+        path
+        for route in main.app.routes
+        if (path := getattr(route, "path", None)) is not None
+    }
     assert "/health/live" in paths
     assert "/health/ready" in paths
     assert "/health" in paths

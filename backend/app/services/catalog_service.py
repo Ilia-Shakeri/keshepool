@@ -1,7 +1,9 @@
 import json
+import re
 from dataclasses import asdict, dataclass
 from decimal import Decimal, InvalidOperation
 from typing import Any, Iterable, Mapping, Sequence
+from urllib.parse import urlparse
 
 from sqlalchemy import func, or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -27,6 +29,17 @@ CATALOG_CATEGORIES = {
     "edu",
     "finance",
 }
+SAFE_CATALOG_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$")
+MAX_TITLE_LENGTH = 180
+MAX_BRAND_LENGTH = 180
+MAX_SUBTITLE_LENGTH = 500
+MAX_FEATURES = 4
+MAX_FEATURE_LENGTH = 200
+MAX_VARIANTS_PER_PRODUCT = 50
+MAX_PRICE = Decimal("999999999999.99")
+MAX_ASSET_URL_LENGTH = 2048
+MAX_CREDENTIAL_LENGTH = 4096
+MAX_INVENTORY_BATCH_SIZE = 5000
 
 
 class CatalogMutationError(ValueError):
@@ -125,10 +138,18 @@ def catalog_visibility_reason(
     return "visible"
 
 
-def _clean_required(value: Any, field: str) -> str:
+def _clean_required(
+    value: Any,
+    field: str,
+    *,
+    min_length: int = 1,
+    max_length: int,
+) -> str:
     clean_value = str(value or "").strip()
-    if not clean_value:
-        raise CatalogMutationError(f"{field} is required.")
+    if not min_length <= len(clean_value) <= max_length:
+        raise CatalogMutationError(
+            f"{field} must be between {min_length} and {max_length} characters."
+        )
     return clean_value
 
 
@@ -137,9 +158,104 @@ def _decimal_price(value: Any) -> Decimal:
         price = Decimal(str(value))
     except (InvalidOperation, TypeError, ValueError) as exc:
         raise CatalogMutationError("Variant raw_price must be a valid number.") from exc
-    if price <= 0:
+    if not price.is_finite():
+        raise CatalogMutationError("Variant raw_price must be finite.")
+    if price <= 0 or price > MAX_PRICE:
         raise CatalogMutationError("Variant raw_price must be positive.")
-    return price
+    if price.as_tuple().exponent < -2:
+        raise CatalogMutationError("Variant raw_price supports at most two decimal places.")
+    return price.quantize(Decimal("0.01"))
+
+
+def _catalog_id(value: Any, field: str) -> str:
+    clean_value = _clean_required(value, field, max_length=120)
+    if not SAFE_CATALOG_ID_RE.fullmatch(clean_value):
+        raise CatalogMutationError(
+            f"{field} may contain only letters, numbers, dot, underscore, colon, and hyphen."
+        )
+    return clean_value
+
+
+def _asset_url(value: Any) -> str | None:
+    if value in (None, ""):
+        return None
+    clean_value = str(value).strip()
+    if len(clean_value) > MAX_ASSET_URL_LENGTH:
+        raise CatalogMutationError("Product asset URL is too long.")
+    if clean_value.startswith("/static/") and not clean_value.startswith("//"):
+        return clean_value
+    parsed = urlparse(clean_value)
+    if (
+        parsed.scheme != "https"
+        or not parsed.netloc
+        or parsed.username
+        or parsed.password
+        or parsed.fragment
+    ):
+        raise CatalogMutationError("Product asset URL must be HTTPS or a /static/ path.")
+    return clean_value
+
+
+def _features(value: Any) -> tuple[str, ...] | None:
+    if value is None:
+        return None
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
+        raise CatalogMutationError("Product features must be a list.")
+    clean_features = tuple(str(item).strip() for item in value if str(item).strip())
+    if len(clean_features) > MAX_FEATURES:
+        raise CatalogMutationError(f"Product supports at most {MAX_FEATURES} features.")
+    if any(len(item) > MAX_FEATURE_LENGTH for item in clean_features):
+        raise CatalogMutationError(
+            f"Each product feature must be at most {MAX_FEATURE_LENGTH} characters."
+        )
+    return clean_features or None
+
+
+def _subtitle(value: Any) -> str:
+    clean_value = str(value or "").strip()
+    if len(clean_value) > MAX_SUBTITLE_LENGTH:
+        raise CatalogMutationError(
+            f"Product subtitle must be at most {MAX_SUBTITLE_LENGTH} characters."
+        )
+    return clean_value
+
+
+def _validated_product_fields(values: Mapping[str, Any]) -> dict[str, Any]:
+    validated = dict(values)
+    if "title" in validated:
+        validated["title"] = _clean_required(
+            validated["title"],
+            "Product title",
+            min_length=2,
+            max_length=MAX_TITLE_LENGTH,
+        )
+    if "brand" in validated:
+        validated["brand"] = _clean_required(
+            validated["brand"],
+            "Product brand",
+            min_length=2,
+            max_length=MAX_BRAND_LENGTH,
+        )
+    if "subtitle" in validated:
+        validated["subtitle"] = _subtitle(validated["subtitle"])
+    if "asset_url" in validated:
+        validated["asset_url"] = _asset_url(validated["asset_url"])
+    if "category" in validated and validated["category"] not in CATALOG_CATEGORIES:
+        raise CatalogMutationError("Unsupported product category.")
+    if "features" in validated and not isinstance(validated["features"], str):
+        features = _features(validated["features"])
+        validated["features"] = (
+            json.dumps(features, ensure_ascii=False) if features else None
+        )
+    elif "features" in validated and isinstance(validated["features"], str):
+        parsed_features = parse_product_features(validated["features"])
+        if parsed_features is None and validated["features"].strip():
+            raise CatalogMutationError("Product features must be a JSON list.")
+        features = _features(parsed_features)
+        validated["features"] = (
+            json.dumps(features, ensure_ascii=False) if features else None
+        )
+    return validated
 
 
 def _mapping_boolean(
@@ -167,24 +283,22 @@ def product_mutation_from_mapping(payload: Mapping[str, Any]) -> ProductMutation
     if category not in CATALOG_CATEGORIES:
         raise CatalogMutationError(f"Unsupported product category '{category}'.")
 
-    raw_features = payload.get("features")
-    if raw_features is None:
-        features = None
-    elif isinstance(raw_features, Sequence) and not isinstance(raw_features, (str, bytes)):
-        features = tuple(str(item).strip() for item in raw_features if str(item).strip()) or None
-    else:
-        raise CatalogMutationError("Product features must be a list.")
+    features = _features(payload.get("features"))
 
     raw_variants = payload.get("variants")
     if not isinstance(raw_variants, Sequence) or isinstance(raw_variants, (str, bytes)):
         raise CatalogMutationError("Product variants must be a list.")
+    if not 1 <= len(raw_variants) <= MAX_VARIANTS_PER_PRODUCT:
+        raise CatalogMutationError(
+            f"Product must have between 1 and {MAX_VARIANTS_PER_PRODUCT} variants."
+        )
 
     variants: list[VariantMutation] = []
     seen_variant_ids: set[str] = set()
     for raw_variant in raw_variants:
         if not isinstance(raw_variant, Mapping):
             raise CatalogMutationError("Each product variant must be an object.")
-        variant_id = _clean_required(raw_variant.get("id"), "Variant id")
+        variant_id = _catalog_id(raw_variant.get("id"), "Variant id")
         if variant_id in seen_variant_ids:
             raise CatalogMutationError(f"Variant '{variant_id}' appears more than once.")
         seen_variant_ids.add(variant_id)
@@ -194,10 +308,18 @@ def product_mutation_from_mapping(payload: Mapping[str, Any]) -> ProductMutation
         if not isinstance(raw_credentials, Sequence) or isinstance(raw_credentials, (str, bytes)):
             raise CatalogMutationError("Variant credentials must be a list.")
         credentials = tuple(str(item).strip() for item in raw_credentials if str(item).strip())
+        if len(credentials) > MAX_INVENTORY_BATCH_SIZE:
+            raise CatalogMutationError("Inventory import batch is too large.")
+        if any(len(item) > MAX_CREDENTIAL_LENGTH for item in credentials):
+            raise CatalogMutationError("Inventory credential is too long.")
         variants.append(
             VariantMutation(
                 id=variant_id,
-                duration=_clean_required(raw_variant.get("duration"), "Variant duration"),
+                duration=_clean_required(
+                    raw_variant.get("duration"),
+                    "Variant duration",
+                    max_length=120,
+                ),
                 raw_price=price,
                 price_label=str(
                     raw_variant.get("price_label")
@@ -215,13 +337,27 @@ def product_mutation_from_mapping(payload: Mapping[str, Any]) -> ProductMutation
         )
 
     return ProductMutation(
-        id=_clean_required(payload.get("id"), "Product id"),
-        title=_clean_required(payload.get("title"), "Product title"),
-        brand=_clean_required(payload.get("brand"), "Product brand"),
-        subtitle=str(payload.get("subtitle") or "").strip(),
-        icon=str(payload.get("icon") or "Box").strip(),
-        asset_url=payload.get("asset_url", payload.get("assetUrl")),
-        gradient=str(payload.get("gradient") or "from-gray-700 to-black").strip(),
+        id=_catalog_id(payload.get("id"), "Product id"),
+        title=_clean_required(
+            payload.get("title"),
+            "Product title",
+            min_length=2,
+            max_length=MAX_TITLE_LENGTH,
+        ),
+        brand=_clean_required(
+            payload.get("brand"),
+            "Product brand",
+            min_length=2,
+            max_length=MAX_BRAND_LENGTH,
+        ),
+        subtitle=_subtitle(payload.get("subtitle")),
+        icon=_clean_required(payload.get("icon") or "Box", "Product icon", max_length=50),
+        asset_url=_asset_url(payload.get("asset_url", payload.get("assetUrl"))),
+        gradient=_clean_required(
+            payload.get("gradient") or "from-gray-700 to-black",
+            "Product gradient",
+            max_length=200,
+        ),
         category=category,
         features=features,
         is_active=_mapping_boolean(payload, "is_active", "isActive", default=True),
@@ -235,9 +371,20 @@ async def _insert_inventory_rows(
     variant_credentials: Iterable[tuple[str, str]],
 ) -> tuple[int, int]:
     submitted_rows: list[dict[str, Any]] = []
+    seen_rows: set[tuple[str, str]] = set()
+    submitted_count = 0
     for variant_id, credential in variant_credentials:
         clean_credential = credential.strip()
         if clean_credential:
+            submitted_count += 1
+            if submitted_count > MAX_INVENTORY_BATCH_SIZE:
+                raise CatalogMutationError("Inventory import batch is too large.")
+            if len(clean_credential) > MAX_CREDENTIAL_LENGTH:
+                raise CatalogMutationError("Inventory credential is too long.")
+            row_key = (variant_id, clean_credential)
+            if row_key in seen_rows:
+                continue
+            seen_rows.add(row_key)
             submitted_rows.append(
                 {
                     "product_id": product_id,
@@ -261,7 +408,7 @@ async def _insert_inventory_rows(
         )
         result = await db.execute(statement)
         inserted_count += len(result.scalars().all())
-    return inserted_count, len(submitted_rows) - inserted_count
+    return inserted_count, submitted_count - inserted_count
 
 
 async def commit_catalog_change(db: AsyncSession) -> bool:
@@ -460,6 +607,7 @@ async def patch_product_fields(
         raise CatalogMutationError(
             f"Unsupported product fields: {', '.join(sorted(unknown_fields))}."
         )
+    values = _validated_product_fields(values)
     product_result = await db.execute(
         select(Product).where(Product.id == product_id).with_for_update()
     )
@@ -481,6 +629,7 @@ async def patch_product(
     active: bool | None = None,
     raw_price: Decimal | None = None,
     variant_id: str | None = None,
+    commit: bool = True,
 ) -> CatalogMutationResult:
     values = values or {}
     allowed_fields = {
@@ -499,6 +648,7 @@ async def patch_product(
             f"Unsupported product fields: {', '.join(sorted(unknown_fields))}."
         )
 
+    values = _validated_product_fields(values)
     product_result = await db.execute(
         select(Product).where(Product.id == product_id).with_for_update()
     )
@@ -507,8 +657,6 @@ async def patch_product(
         raise CatalogMutationError("Product not found.")
 
     for field, value in values.items():
-        if field == "features" and value is not None and not isinstance(value, str):
-            value = json.dumps(value, ensure_ascii=False)
         setattr(product, field, value)
     if active is not None:
         product.is_active = active
@@ -520,8 +668,7 @@ async def patch_product(
     )
     variants = variants_result.scalars().all()
     if raw_price is not None:
-        if raw_price <= 0:
-            raise CatalogMutationError("Variant price must be positive.")
+        raw_price = _decimal_price(raw_price)
         matched_variants = [
             variant
             for variant in variants
@@ -549,7 +696,8 @@ async def patch_product(
             active_variant_count=active_variant_count,
         ),
     )
-    result.cache_invalidated = await commit_catalog_change(db)
+    if commit:
+        result.cache_invalidated = await commit_catalog_change(db)
     return result
 
 
@@ -560,8 +708,7 @@ async def set_active_variant_prices(
     *,
     commit: bool = True,
 ) -> int:
-    if raw_price <= 0:
-        raise CatalogMutationError("Variant price must be positive.")
+    raw_price = _decimal_price(raw_price)
     variants_result = await db.execute(
         select(ProductVariant)
         .where(
@@ -577,6 +724,58 @@ async def set_active_variant_prices(
     if commit:
         await commit_catalog_change(db)
     return len(variants)
+
+
+async def set_variant_price(
+    db: AsyncSession,
+    product_id: str,
+    variant_id: str,
+    raw_price: Decimal,
+    *,
+    commit: bool = True,
+) -> ProductVariant:
+    raw_price = _decimal_price(raw_price)
+    result = await db.execute(
+        select(ProductVariant)
+        .where(
+            ProductVariant.id == variant_id,
+            ProductVariant.product_id == product_id,
+        )
+        .with_for_update()
+    )
+    variant = result.scalars().first()
+    if variant is None:
+        raise CatalogMutationError("Product variant not found.")
+    variant.raw_price = raw_price
+    variant.price_label = f"{int(raw_price):,}"
+    if commit:
+        await commit_catalog_change(db)
+    return variant
+
+
+async def set_variant_active(
+    db: AsyncSession,
+    product_id: str,
+    variant_id: str,
+    active: bool,
+    *,
+    commit: bool = True,
+) -> ProductVariant:
+    result = await db.execute(
+        select(ProductVariant)
+        .where(
+            ProductVariant.id == variant_id,
+            ProductVariant.product_id == product_id,
+        )
+        .with_for_update()
+    )
+    variant = result.scalars().first()
+    if variant is None:
+        raise CatalogMutationError("Product variant not found.")
+    variant.is_active = active
+    if commit:
+        await commit_catalog_change(db)
+    return variant
 
 
 async def build_public_catalog(db: AsyncSession) -> list[dict[str, Any]]:

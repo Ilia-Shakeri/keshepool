@@ -5,6 +5,7 @@ import io
 import json
 import logging
 import re
+import tempfile
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
@@ -12,7 +13,13 @@ from typing import Any, Dict, List, Tuple
 from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.types import (
+    CallbackQuery,
+    ForceReply,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Message,
+)
 from redis.exceptions import RedisError
 from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.orm import selectinload
@@ -24,7 +31,7 @@ from app.core.database import AsyncSessionLocal
 from app.models import Product, InventoryItem, ItemStatus, utcnow
 from app.bot.locales.translations import get_text
 from app.bot.states import ProductAdminStates
-from app.services.admin_audit_service import add_admin_audit
+from app.services.admin_audit_service import add_admin_audit, record_admin_audit
 from app.services.cache_service import invalidate_catalog_cache, namespaced_key
 from app.services.catalog_service import (
     CatalogMutationError,
@@ -33,8 +40,9 @@ from app.services.catalog_service import (
     catalog_diagnostics,
     commit_catalog_change,
     patch_product_fields,
-    set_active_variant_prices,
     set_product_active,
+    set_variant_active,
+    set_variant_price,
     upsert_product,
 )
 
@@ -47,6 +55,53 @@ products_router.callback_query.filter(IsAdminFilter())
 ALLOWED_CATEGORIES = {"vpn", "music", "video", "ai", "social", "gaming", "tools", "edu", "finance"}
 SAFE_ID_RE = re.compile(r"^[a-zA-Z0-9_-]{2,120}$")
 MAX_FEATURES = 4
+
+
+def _force_reply() -> ForceReply:
+    return ForceReply(selective=True)
+
+
+def _store_logo_bytes(
+    product_id: str,
+    file_bytes: bytes,
+) -> tuple[str, Path, bytes | None]:
+    if len(file_bytes) > 2_000_000:
+        raise ValueError("logo_too_large")
+    signature = file_bytes[:16]
+    if signature[:8] == b"\x89PNG\r\n\x1a\n":
+        extension = ".png"
+    elif signature[:4] == b"RIFF" and signature[8:12] == b"WEBP":
+        extension = ".webp"
+    elif signature[:2] == b"\xff\xd8":
+        extension = ".jpg"
+    else:
+        raise ValueError("image_required")
+
+    safe_product_id = re.sub(r"[^a-zA-Z0-9_-]", "_", product_id)
+    asset_dir = Path(settings.ASSET_ROOT) / "product-assets"
+    asset_dir.mkdir(parents=True, exist_ok=True)
+    target_path = asset_dir / f"{safe_product_id}{extension}"
+    previous_bytes = target_path.read_bytes() if target_path.exists() else None
+    with tempfile.NamedTemporaryFile(
+        dir=asset_dir,
+        prefix=".logo-",
+        suffix=extension,
+        delete=False,
+    ) as temporary:
+        temporary.write(file_bytes)
+        temporary_path = Path(temporary.name)
+    temporary_path.replace(target_path)
+    asset_url = (
+        f"{settings.PUBLIC_ASSET_BASE_URL.rstrip('/')}/product-assets/{target_path.name}"
+    )
+    return asset_url, target_path, previous_bytes
+
+
+def _restore_logo(path: Path, previous_bytes: bytes | None) -> None:
+    if previous_bytes is None:
+        path.unlink(missing_ok=True)
+    else:
+        path.write_bytes(previous_bytes)
 
 
 async def _lang(user_id: int) -> str:
@@ -459,7 +514,11 @@ async def prompt_single_product(callback: CallbackQuery, state: FSMContext):
 @products_router.callback_query(F.data == "advanced_product_json")
 async def prompt_advanced_product_json(callback: CallbackQuery, state: FSMContext):
     lang = await _lang(callback.from_user.id)
-    await callback.message.answer(get_text(lang, "single_product_help"), reply_markup=_cancel_markup(lang), parse_mode="HTML")
+    await callback.message.answer(
+        get_text(lang, "single_product_help"),
+        reply_markup=_force_reply(),
+        parse_mode="HTML",
+    )
     await state.set_state(ProductAdminStates.awaiting_single_product_json)
     await callback.answer()
 
@@ -514,7 +573,7 @@ def _guided_after_variant_markup(lang: str) -> InlineKeyboardMarkup:
 
 
 async def _prompt_guided_title(target: Message, lang: str, state: FSMContext) -> None:
-    await target.answer(get_text(lang, "guided_title_prompt"), reply_markup=_cancel_markup(lang))
+    await target.answer(get_text(lang, "guided_title_prompt"), reply_markup=_force_reply())
     await state.set_state(ProductAdminStates.guided_title)
 
 
@@ -542,7 +601,7 @@ async def process_guided_title(message: Message, state: FSMContext):
         await message.answer(get_text(lang, "invalid_format"))
         return
     await state.update_data(guided_title=value)
-    await message.answer(get_text(lang, "guided_brand_prompt"), reply_markup=_cancel_markup(lang))
+    await message.answer(get_text(lang, "guided_brand_prompt"), reply_markup=_force_reply())
     await state.set_state(ProductAdminStates.guided_brand)
 
 
@@ -573,6 +632,10 @@ async def process_guided_category(callback: CallbackQuery, state: FSMContext):
         get_text(lang, "guided_subtitle_prompt"),
         reply_markup=_guided_optional_markup(lang, "guided_skip_subtitle"),
     )
+    await callback.message.answer(
+        "پاسخ این مرحله را اینجا بنویسید." if lang == "fa" else "Reply to this prompt.",
+        reply_markup=_force_reply(),
+    )
     await state.set_state(ProductAdminStates.guided_subtitle)
     await callback.answer()
 
@@ -581,6 +644,10 @@ async def _prompt_guided_features(target: Message, lang: str, state: FSMContext)
     await target.answer(
         get_text(lang, "guided_features_prompt"),
         reply_markup=_guided_optional_markup(lang, "guided_skip_features"),
+    )
+    await target.answer(
+        "پاسخ این مرحله را اینجا بنویسید." if lang == "fa" else "Reply to this prompt.",
+        reply_markup=_force_reply(),
     )
     await state.set_state(ProductAdminStates.guided_features)
 
@@ -616,10 +683,10 @@ async def _prompt_guided_logo(target: Message, lang: str, state: FSMContext) -> 
 async def process_guided_features(message: Message, state: FSMContext):
     lang = await _lang(message.from_user.id)
     features = [line.strip() for line in (message.text or "").splitlines() if line.strip()]
-    if not features:
+    if not features or len(features) > MAX_FEATURES:
         await message.answer(get_text(lang, "invalid_format"))
         return
-    await state.update_data(guided_features=features[:MAX_FEATURES])
+    await state.update_data(guided_features=features)
     await _prompt_guided_logo(message, lang, state)
 
 
@@ -632,7 +699,7 @@ async def skip_guided_features(callback: CallbackQuery, state: FSMContext):
 
 
 async def _prompt_guided_variant_duration(target: Message, lang: str, state: FSMContext) -> None:
-    await target.answer(get_text(lang, "guided_variant_duration_prompt"), reply_markup=_cancel_markup(lang))
+    await target.answer(get_text(lang, "guided_variant_duration_prompt"), reply_markup=_force_reply())
     await state.set_state(ProductAdminStates.guided_variant_duration)
 
 
@@ -641,8 +708,15 @@ async def process_guided_logo(message: Message, state: FSMContext):
     lang = await _lang(message.from_user.id)
     file_id = None
     if message.photo:
+        if message.photo[-1].file_size and message.photo[-1].file_size > 2_000_000:
+            await message.answer(get_text(lang, "logo_too_large"))
+            return
         file_id = message.photo[-1].file_id
-    elif message.document and (message.document.mime_type or "").startswith("image/"):
+    elif message.document and message.document.mime_type in {
+        "image/jpeg",
+        "image/png",
+        "image/webp",
+    }:
         if message.document.file_size and message.document.file_size > 2_000_000:
             await message.answer(get_text(lang, "logo_too_large"))
             return
@@ -670,7 +744,7 @@ async def process_guided_variant_duration(message: Message, state: FSMContext):
         await message.answer(get_text(lang, "invalid_format"))
         return
     await state.update_data(guided_variant_duration=duration)
-    await message.answer(get_text(lang, "guided_variant_price_prompt"), reply_markup=_cancel_markup(lang))
+    await message.answer(get_text(lang, "guided_variant_price_prompt"), reply_markup=_force_reply())
     await state.set_state(ProductAdminStates.guided_variant_price)
 
 
@@ -682,7 +756,7 @@ def _positive_whole_number(raw: str) -> int | None:
     if not cleaned.isdigit():
         return None
     value = int(cleaned)
-    return value if value > 0 else None
+    return value if 0 < value <= 999_999_999_999 else None
 
 
 @products_router.message(ProductAdminStates.guided_variant_price)
@@ -708,6 +782,10 @@ async def process_guided_variant_active(callback: CallbackQuery, state: FSMConte
     await callback.message.answer(
         get_text(lang, "guided_variant_stock_prompt"),
         reply_markup=_guided_optional_markup(lang, "guided_skip_stock"),
+    )
+    await callback.message.answer(
+        "موجودی را در پاسخ به این پیام بفرستید." if lang == "fa" else "Reply with inventory lines.",
+        reply_markup=_force_reply(),
     )
     await state.set_state(ProductAdminStates.guided_variant_stock)
     await callback.answer()
@@ -832,26 +910,14 @@ async def show_guided_preview(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-async def _store_guided_logo(bot, file_id: str, product_id: str) -> str:
+async def _store_guided_logo(
+    bot,
+    file_id: str,
+    product_id: str,
+) -> tuple[str, Path, bytes | None]:
     buffer = io.BytesIO()
     await bot.download(file_id, destination=buffer)
-    file_bytes = buffer.getvalue()
-    if len(file_bytes) > 2_000_000:
-        raise ValueError("logo_too_large")
-    sig = file_bytes[:16]
-    if sig[:8] == b"\x89PNG\r\n\x1a\n":
-        extension = ".png"
-    elif sig[:4] == b"RIFF" and sig[8:12] == b"WEBP":
-        extension = ".webp"
-    elif sig[:2] == b"\xff\xd8":
-        extension = ".jpg"
-    else:
-        raise ValueError("image_required")
-    asset_dir = Path(settings.ASSET_ROOT) / "product-assets"
-    asset_dir.mkdir(parents=True, exist_ok=True)
-    target_path = asset_dir / f"{product_id}{extension}"
-    target_path.write_bytes(file_bytes)
-    return f"{settings.PUBLIC_ASSET_BASE_URL.rstrip('/')}/product-assets/{target_path.name}"
+    return _store_logo_bytes(product_id, buffer.getvalue())
 
 
 @products_router.callback_query(F.data == "guided_confirm_save", ProductAdminStates.guided_preview)
@@ -863,9 +929,15 @@ async def confirm_guided_product(callback: CallbackQuery, state: FSMContext):
         return
     payload = _guided_payload(data)
     logo_file_id = data.get("guided_logo_file_id")
+    logo_path: Path | None = None
+    previous_logo_bytes: bytes | None = None
     if logo_file_id:
         try:
-            payload["assetUrl"] = await _store_guided_logo(callback.bot, logo_file_id, payload["id"])
+            (
+                payload["assetUrl"],
+                logo_path,
+                previous_logo_bytes,
+            ) = await _store_guided_logo(callback.bot, logo_file_id, payload["id"])
             payload["icon"] = "Image"
         except ValueError as exc:
             await callback.answer(get_text(lang, str(exc)), show_alert=True)
@@ -886,12 +958,16 @@ async def confirm_guided_product(callback: CallbackQuery, state: FSMContext):
                     "duplicate_stock_count": result.duplicate_stock_count,
                 },
             )
-            await commit_catalog_change(session)
+            result.cache_invalidated = await commit_catalog_change(session)
     except (CatalogMutationError, VariantOwnershipError) as exc:
+        if logo_path is not None:
+            _restore_logo(logo_path, previous_logo_bytes)
         logger.warning("Guided product rejected: %s", exc)
         await callback.answer(get_text(lang, "single_product_invalid"), show_alert=True)
         return
     except Exception as exc:
+        if logo_path is not None:
+            _restore_logo(logo_path, previous_logo_bytes)
         logger.error("Guided product save failed: %s", exc, exc_info=True)
         await callback.answer(get_text(lang, "db_error"), show_alert=True)
         return
@@ -899,7 +975,20 @@ async def confirm_guided_product(callback: CallbackQuery, state: FSMContext):
     await callback.message.edit_text(
         get_text(lang, "guided_saved")
         .replace("{inserted}", str(result.inserted_stock_count))
-        .replace("{duplicates}", str(result.duplicate_stock_count)),
+        .replace("{duplicates}", str(result.duplicate_stock_count))
+        .replace(
+            "{visibility}",
+            get_text(lang, f"catalog_reason_{result.catalog_visibility_reason}"),
+        )
+        .replace(
+            "{cache}",
+            get_text(
+                lang,
+                "catalog_cache_refreshed"
+                if result.cache_invalidated
+                else "catalog_cache_unavailable",
+            ),
+        ),
         reply_markup=_inventory_back_markup(lang),
     )
     await callback.answer()
@@ -1211,7 +1300,16 @@ async def toggle_product_active(callback: CallbackQuery, state: FSMContext):
                 await callback.answer(get_text(lang, "not_found"), show_alert=True)
                 return
             new_state = not product.is_active
-            await set_product_active(session, product_id, new_state)
+            await set_product_active(session, product_id, new_state, commit=False)
+            await add_admin_audit(
+                session,
+                actor_telegram_id=callback.from_user.id,
+                action="product.visibility_update",
+                target_type="product",
+                target_id=product_id,
+                details={"active": new_state},
+            )
+            await commit_catalog_change(session)
     except Exception as exc:
         logger.error("Toggle active error: %s", exc)
         await callback.answer(get_text(lang, "db_error"), show_alert=True)
@@ -1260,6 +1358,12 @@ async def show_catalog_diagnostics(callback: CallbackQuery, state: FSMContext):
 async def refresh_catalog_cache(callback: CallbackQuery):
     lang = await _lang(callback.from_user.id)
     cache_invalidated = await invalidate_catalog_cache()
+    await record_admin_audit(
+        actor_telegram_id=callback.from_user.id,
+        action="catalog.cache_refresh",
+        target_type="catalog",
+        details={"cache_invalidated": cache_invalidated},
+    )
     message_key = "catalog_cache_refreshed" if cache_invalidated else "catalog_cache_unavailable"
     await callback.answer(get_text(lang, message_key), show_alert=True)
 
@@ -1290,7 +1394,17 @@ async def soft_delete_product(callback: CallbackQuery, state: FSMContext):
                 product_id,
                 False,
                 deactivate_variants=True,
+                commit=False,
             )
+            await add_admin_audit(
+                session,
+                actor_telegram_id=callback.from_user.id,
+                action="product.soft_remove",
+                target_type="product",
+                target_id=product_id,
+                details={"active": False, "variants_deactivated": True},
+            )
+            await commit_catalog_change(session)
     except CatalogMutationError:
         await callback.answer(get_text(lang, "not_found"), show_alert=True)
         return
@@ -1309,7 +1423,7 @@ async def soft_delete_product(callback: CallbackQuery, state: FSMContext):
 @products_router.callback_query(F.data == "action_edit_name")
 async def prompt_new_name(callback: CallbackQuery, state: FSMContext):
     lang = await _lang(callback.from_user.id)
-    await callback.message.answer(get_text(lang, "enter_new_name"), reply_markup=_cancel_markup(lang))
+    await callback.message.answer(get_text(lang, "enter_new_name"), reply_markup=_force_reply())
     await state.set_state(ProductAdminStates.awaiting_new_name)
     await callback.answer()
 
@@ -1327,7 +1441,21 @@ async def process_new_name(message: Message, state: FSMContext):
 
     async with AsyncSessionLocal() as session:
         try:
-            await patch_product_fields(session, product_id, {"title": new_name})
+            await patch_product_fields(
+                session,
+                product_id,
+                {"title": new_name},
+                commit=False,
+            )
+            await add_admin_audit(
+                session,
+                actor_telegram_id=message.from_user.id,
+                action="product.title_update",
+                target_type="product",
+                target_id=product_id,
+                details={"title_length": len(new_name)},
+            )
+            await commit_catalog_change(session)
         except CatalogMutationError:
             await message.answer(get_text(lang, "not_found"))
             return
@@ -1346,7 +1474,7 @@ async def process_new_name(message: Message, state: FSMContext):
 @products_router.callback_query(F.data == "action_edit_subtitle")
 async def prompt_new_subtitle(callback: CallbackQuery, state: FSMContext):
     lang = await _lang(callback.from_user.id)
-    await callback.message.answer(get_text(lang, "enter_new_subtitle"), reply_markup=_cancel_markup(lang))
+    await callback.message.answer(get_text(lang, "enter_new_subtitle"), reply_markup=_force_reply())
     await state.set_state(ProductAdminStates.awaiting_new_subtitle)
     await callback.answer()
 
@@ -1364,7 +1492,21 @@ async def process_new_subtitle(message: Message, state: FSMContext):
 
     async with AsyncSessionLocal() as session:
         try:
-            await patch_product_fields(session, product_id, {"subtitle": new_subtitle})
+            await patch_product_fields(
+                session,
+                product_id,
+                {"subtitle": new_subtitle},
+                commit=False,
+            )
+            await add_admin_audit(
+                session,
+                actor_telegram_id=message.from_user.id,
+                action="product.subtitle_update",
+                target_type="product",
+                target_id=product_id,
+                details={"subtitle_length": len(new_subtitle)},
+            )
+            await commit_catalog_change(session)
         except CatalogMutationError:
             await message.answer(get_text(lang, "not_found"))
             return
@@ -1424,7 +1566,21 @@ async def process_new_features(message: Message, state: FSMContext):
 
     async with AsyncSessionLocal() as session:
         try:
-            await patch_product_fields(session, product_id, {"features": features_json})
+            await patch_product_fields(
+                session,
+                product_id,
+                {"features": features_json},
+                commit=False,
+            )
+            await add_admin_audit(
+                session,
+                actor_telegram_id=message.from_user.id,
+                action="product.features_update",
+                target_type="product",
+                target_id=product_id,
+                details={"feature_count": len(features)},
+            )
+            await commit_catalog_change(session)
         except CatalogMutationError:
             await message.answer(get_text(lang, "not_found"))
             return
@@ -1447,12 +1603,56 @@ async def process_new_features(message: Message, state: FSMContext):
 @products_router.callback_query(F.data == "action_edit_price")
 async def prompt_new_price(callback: CallbackQuery, state: FSMContext):
     lang = await _lang(callback.from_user.id)
-    await callback.message.answer(get_text(lang, "enter_new_price"), reply_markup=_cancel_markup(lang))
-    await state.set_state(ProductAdminStates.awaiting_new_price)
+    product_id = (await state.get_data()).get("target_product_id")
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            select(Product)
+            .options(selectinload(Product.variants))
+            .where(Product.id == product_id)
+        )
+        product = result.scalars().first()
+    if not product or not product.variants:
+        await callback.answer(get_text(lang, "not_found"), show_alert=True)
+        return
+    callback_map = _callback_value_map([variant.id for variant in product.variants])
+    keyboard = [
+        [
+            InlineKeyboardButton(
+                text=_button_label(f"{variant.duration} — {variant.price_label}"),
+                callback_data=f"price_variant_{_callback_token(variant.id)}",
+            )
+        ]
+        for variant in product.variants
+    ]
+    keyboard.append([InlineKeyboardButton(text=get_text(lang, "back"), callback_data="manage_inventory")])
+    await state.update_data(variant_callback_map=callback_map)
+    await state.set_state(ProductAdminStates.selecting_variant_for_price)
+    await callback.message.edit_text(
+        get_text(lang, "select_variant"),
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard),
+    )
     await callback.answer()
 
 
-@products_router.message(ProductAdminStates.awaiting_new_price)
+@products_router.callback_query(
+    F.data.startswith("price_variant_"),
+    ProductAdminStates.selecting_variant_for_price,
+)
+async def select_variant_for_price(callback: CallbackQuery, state: FSMContext):
+    lang = await _lang(callback.from_user.id)
+    token = callback.data.removeprefix("price_variant_")
+    data = await state.get_data()
+    variant_id = (data.get("variant_callback_map") or {}).get(token)
+    if variant_id is None:
+        await callback.answer(get_text(lang, "not_found"), show_alert=True)
+        return
+    await state.update_data(target_variant_id=variant_id)
+    await state.set_state(ProductAdminStates.awaiting_selected_variant_price)
+    await callback.message.answer(get_text(lang, "enter_new_price"), reply_markup=_force_reply())
+    await callback.answer()
+
+
+@products_router.message(ProductAdminStates.awaiting_selected_variant_price)
 async def process_new_price(message: Message, state: FSMContext):
     lang = await _lang(message.from_user.id)
     new_price = _positive_whole_number(message.text or "")
@@ -1462,10 +1662,26 @@ async def process_new_price(message: Message, state: FSMContext):
 
     data = await state.get_data()
     product_id = data.get("target_product_id")
+    variant_id = data.get("target_variant_id")
 
     async with AsyncSessionLocal() as session:
         try:
-            await set_active_variant_prices(session, product_id, Decimal(str(new_price)))
+            await set_variant_price(
+                session,
+                product_id,
+                variant_id,
+                Decimal(str(new_price)),
+                commit=False,
+            )
+            await add_admin_audit(
+                session,
+                actor_telegram_id=message.from_user.id,
+                action="product_variant.price_update",
+                target_type="product_variant",
+                target_id=variant_id,
+                details={"product_id": product_id, "price": new_price},
+            )
+            await commit_catalog_change(session)
         except CatalogMutationError:
             await message.answer(get_text(lang, "invalid_format"))
             return
@@ -1480,6 +1696,96 @@ async def process_new_price(message: Message, state: FSMContext):
         get_text(lang, "price_updated").replace("{price}", _price_label(Decimal(new_price))),
         reply_markup=_inventory_back_markup(lang),
     )
+
+
+@products_router.callback_query(F.data == "action_manage_variants")
+async def prompt_variant_visibility(callback: CallbackQuery, state: FSMContext):
+    lang = await _lang(callback.from_user.id)
+    product_id = (await state.get_data()).get("target_product_id")
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            select(Product)
+            .options(selectinload(Product.variants))
+            .where(Product.id == product_id)
+        )
+        product = result.scalars().first()
+    if not product or not product.variants:
+        await callback.answer(get_text(lang, "not_found"), show_alert=True)
+        return
+    callback_map = _callback_value_map([variant.id for variant in product.variants])
+    keyboard = [
+        [
+            InlineKeyboardButton(
+                text=_button_label(
+                    f"{'✅' if variant.is_active else '⛔'} {variant.duration} — {variant.price_label}"
+                ),
+                callback_data=f"toggle_variant_{_callback_token(variant.id)}",
+            )
+        ]
+        for variant in product.variants
+    ]
+    keyboard.append([InlineKeyboardButton(text=get_text(lang, "back"), callback_data="manage_inventory")])
+    await state.update_data(variant_callback_map=callback_map)
+    await state.set_state(ProductAdminStates.selecting_variant_for_toggle)
+    await callback.message.edit_text(
+        get_text(lang, "select_variant"),
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard),
+    )
+    await callback.answer()
+
+
+@products_router.callback_query(
+    F.data.startswith("toggle_variant_"),
+    ProductAdminStates.selecting_variant_for_toggle,
+)
+async def toggle_variant_visibility(callback: CallbackQuery, state: FSMContext):
+    lang = await _lang(callback.from_user.id)
+    token = callback.data.removeprefix("toggle_variant_")
+    data = await state.get_data()
+    product_id = data.get("target_product_id")
+    variant_id = (data.get("variant_callback_map") or {}).get(token)
+    if variant_id is None:
+        await callback.answer(get_text(lang, "not_found"), show_alert=True)
+        return
+    try:
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(
+                select(Product)
+                .options(selectinload(Product.variants))
+                .where(Product.id == product_id)
+            )
+            product = result.scalars().first()
+            variant = next(
+                (item for item in (product.variants if product else []) if item.id == variant_id),
+                None,
+            )
+            if variant is None:
+                raise CatalogMutationError("Product variant not found.")
+            active = not variant.is_active
+            await set_variant_active(
+                session,
+                product_id,
+                variant_id,
+                active,
+                commit=False,
+            )
+            await add_admin_audit(
+                session,
+                actor_telegram_id=callback.from_user.id,
+                action="product_variant.visibility_update",
+                target_type="product_variant",
+                target_id=variant_id,
+                details={"product_id": product_id, "active": active},
+            )
+            await commit_catalog_change(session)
+    except CatalogMutationError:
+        await callback.answer(get_text(lang, "not_found"), show_alert=True)
+        return
+    except Exception as exc:
+        logger.error("Variant visibility update failed: %s", exc, exc_info=True)
+        await callback.answer(get_text(lang, "db_error"), show_alert=True)
+        return
+    await prompt_variant_visibility(callback, state)
 
 
 # ── Add stock ─────────────────────────────────────────────────────────────────
@@ -1578,7 +1884,21 @@ async def process_stock_text(message: Message, state: FSMContext):
                 product_id=product_id,
                 variant_id=variant_id,
                 credentials=credentials,
+                commit=False,
             )
+            await add_admin_audit(
+                session,
+                actor_telegram_id=message.from_user.id,
+                action="inventory.stock_add",
+                target_type="product_variant",
+                target_id=variant_id,
+                details={
+                    "product_id": product_id,
+                    "inserted_count": result.inserted_stock_count,
+                    "duplicate_count": result.duplicate_stock_count,
+                },
+            )
+            await commit_catalog_change(session)
             inserted = result.inserted_stock_count
         except CatalogMutationError:
             await message.answer(get_text(lang, "not_found"))
@@ -1617,8 +1937,15 @@ async def process_logo_upload(message: Message, state: FSMContext):
 
     file_id = None
     if message.photo:
+        if message.photo[-1].file_size and message.photo[-1].file_size > 2_000_000:
+            await message.answer(get_text(lang, "logo_too_large"))
+            return
         file_id = message.photo[-1].file_id
-    elif message.document:
+    elif message.document and message.document.mime_type in {
+        "image/jpeg",
+        "image/png",
+        "image/webp",
+    }:
         if message.document.file_size and message.document.file_size > 2_000_000:
             await message.answer(get_text(lang, "logo_too_large"))
             return
@@ -1631,49 +1958,40 @@ async def process_logo_upload(message: Message, state: FSMContext):
     buffer = io.BytesIO()
     await message.bot.download(file_id, destination=buffer)
     file_bytes = buffer.getvalue()
-
-    # Detect MIME by inspecting the first 16 bytes (magic bytes), no external library needed
-    mime_type = "image/jpeg"
-    sig = file_bytes[:16]
-    if sig[:8] == b"\x89PNG\r\n\x1a\n":
-        mime_type = "image/png"
-    elif sig[:4] in (b"GIF8", b"GIF9"):
-        mime_type = "image/gif"
-    elif sig[:4] == b"RIFF" and sig[8:12] == b"WEBP":
-        mime_type = "image/webp"
-    elif sig[:2] not in (b"\xff\xd8",):
-        # Not JPEG signature — reject
-        await message.answer(get_text(lang, "image_required"))
+    try:
+        asset_url, target_path, previous_bytes = _store_logo_bytes(
+            product_id,
+            file_bytes,
+        )
+    except ValueError as exc:
+        await message.answer(get_text(lang, str(exc)))
         return
-
-    extension = {
-        "image/png": ".png",
-        "image/gif": ".gif",
-        "image/webp": ".webp",
-        "image/jpeg": ".jpg",
-    }.get(mime_type, ".jpg")
-    safe_product_id = re.sub(r"[^a-zA-Z0-9_-]", "_", product_id)
-
-    asset_dir = Path(settings.ASSET_ROOT) / "product-assets"
-    asset_dir.mkdir(parents=True, exist_ok=True)
-    target_path = asset_dir / f"{safe_product_id}{extension}"
-    target_path.write_bytes(file_bytes)
-
-    asset_url = f"{settings.PUBLIC_ASSET_BASE_URL.rstrip('/')}/product-assets/{target_path.name}"
 
     async with AsyncSessionLocal() as session:
         try:
             product = await session.get(Product, product_id)
             if not product:
+                _restore_logo(target_path, previous_bytes)
                 await message.answer(get_text(lang, "not_found"))
                 return
             await patch_product_fields(
                 session,
                 product_id,
                 {"asset_url": asset_url, "icon": "Image"},
+                commit=False,
             )
+            await add_admin_audit(
+                session,
+                actor_telegram_id=message.from_user.id,
+                action="product.logo_update",
+                target_type="product",
+                target_id=product_id,
+                details={"asset_type": target_path.suffix.lstrip(".")},
+            )
+            await commit_catalog_change(session)
         except Exception as exc:
             await session.rollback()
+            _restore_logo(target_path, previous_bytes)
             logger.error("Logo upload DB error: %s", exc)
             await message.answer(get_text(lang, "db_error"))
             return

@@ -409,22 +409,20 @@ export default function FinancePage() {
                   <DollarSign className="w-5 h-5 text-white" />
                 </div>
                 <div>
-                  <h2 className="text-sm font-bold">نقد کردن درآمد ارزی</h2>
-                  <p className="text-[11px] text-[#F5F5F5]/45 mt-0.5">
-                    درخواست ثبت کن — ادمین مستقیم در تلگرام باهات تماس می‌گیره.
+                  <h2 className="text-xl font-black tracking-tight">نقد کردن درآمد ارزی</h2>
+                  <p className="mt-1 text-xs text-[#F5F5F5]/50">
+                    اطلاعات درخواست را دقیق و بدون داده‌های محرمانه ثبت کنید.
                   </p>
                 </div>
               </div>
 
-              {/* Admin contact notice */}
               <div
                 className="flex items-start gap-2.5 p-3.5 rounded-2xl mb-4"
                 style={{ background: "rgba(230,57,70,0.07)", border: "1px solid rgba(230,57,70,0.15)" }}
               >
-                <span className="text-base leading-none mt-0.5">💬</span>
+                <span className="text-base leading-none mt-0.5">⚠️</span>
                 <p className="text-[11px] text-[#F5F5F5]/70 leading-relaxed">
-                  بعد از ثبت درخواست، یکی از ادمین‌های ما از طریق تلگرام با شما ارتباط می‌گیرد تا روند نقد کردن را راهنمایی کند.
-                  نیازی به ارائه شماره حساب یا کیف پول در اینجا نیست.
+                  رمز عبور، کد بازیابی، کلید خصوصی، کد ورود یا هر اطلاعات محرمانه دیگری را در این فرم وارد نکنید.
                 </p>
               </div>
 
@@ -435,7 +433,7 @@ export default function FinancePage() {
                     درخواست شما با موفقیت ثبت شد.
                   </p>
                   <p className="text-xs text-[#F5F5F5]/50 text-center">
-                    تیم ما به زودی با شما تماس خواهد گرفت.
+                    وضعیت درخواست از طریق اعلان‌های داخل برنامه در دسترس است.
                   </p>
                   <button
                     onClick={() => setCashoutSuccess(false)}
@@ -513,7 +511,7 @@ export default function FinancePage() {
                     <textarea
                       value={cashoutDetails}
                       onChange={(e) => setCashoutDetails(e.target.value)}
-                      placeholder="توضیح بده که چه مقدار درآمد ارزی داری و از کجا. ادمین بعداً با تو در تلگرام هماهنگ می‌کنه..."
+                      placeholder="مقدار، ارز، منبع درآمد و توضیحات لازم برای بررسی را بنویسید. اطلاعات محرمانه وارد نکنید."
                       rows={5}
                       maxLength={2000}
                       className="w-full rounded-xl px-4 py-3 text-sm focus:outline-none transition-all resize-none leading-relaxed"

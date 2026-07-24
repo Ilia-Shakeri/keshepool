@@ -1,10 +1,9 @@
 "use client";
 
-import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { Suspense, useCallback, useDeferredValue, useEffect, useMemo, useState } from "react";
+import dynamic from "next/dynamic";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Check, RotateCcw, Search, SlidersHorizontal, X } from "lucide-react";
-import ProductDetailModal from "@/features/products/components/ProductDetailModal";
-import CheckoutModal from "@/features/products/components/CheckoutModal";
 import ProductIcon from "@/features/products/components/ProductIcon";
 import PageHeader from "@/components/PageHeader";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
@@ -23,6 +22,15 @@ import {
   type ProductFilterState,
 } from "@/lib/product-filters";
 import { toPersianDigits } from "@/lib/utils";
+
+const ProductDetailModal = dynamic(
+  () => import("@/features/products/components/ProductDetailModal"),
+  { ssr: false },
+);
+const CheckoutModal = dynamic(
+  () => import("@/features/products/components/CheckoutModal"),
+  { ssr: false },
+);
 
 type CardVariant = ProductVariant & {
   sourceProductId: string;
@@ -84,6 +92,7 @@ function ProductsContent() {
   const [products, setProducts] = useState<Product[]>([]);
   const [activeCategory, setActiveCategory] = useState<ProductCategory | "all">(initialCategory);
   const [query, setQuery] = useState("");
+  const deferredQuery = useDeferredValue(query);
   const [selectedProduct, setSelectedProduct] = useState<ProductCardModel | null>(null);
   const [checkoutProduct, setCheckoutProduct] = useState<Product | null>(null);
   const [isDetailModalOpen, setIsDetailModalOpen] = useState(false);
@@ -193,9 +202,9 @@ function ProductsContent() {
     return filterAndSortProducts(groupedProducts, {
       ...filters,
       category: activeCategory,
-      query,
+      query: deferredQuery,
     });
-  }, [groupedProducts, activeCategory, filters, query]);
+  }, [groupedProducts, activeCategory, deferredQuery, filters]);
 
   const activeFilterCount = countActiveProductFilters(filters);
 
@@ -297,7 +306,10 @@ function ProductsContent() {
         <div className="relative mb-5">
           <Search className="absolute right-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-[#F5F5F5]/40 pointer-events-none" />
           <input
-            type="text"
+            type="search"
+            aria-label="جستجوی محصولات"
+            autoComplete="off"
+            enterKeyHint="search"
             placeholder="جستجو بین سرویس‌ها..."
             value={query}
             onChange={(event) => setQuery(event.target.value)}

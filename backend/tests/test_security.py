@@ -82,3 +82,23 @@ def test_expired_init_data_is_rejected_before_cache_lookup(monkeypatch):
     with pytest.raises(HTTPException, match="expired"):
         asyncio.run(security.validate_telegram_data(init_data))
     assert cache_called is False
+
+
+def test_init_data_rejects_invalid_signature():
+    init_data = _signed_init_data(int(time.time())).replace("test-query", "changed-query")
+    with pytest.raises(HTTPException, match="signature"):
+        asyncio.run(security.validate_telegram_data(init_data))
+
+
+def test_init_data_rejects_duplicate_fields_and_malformed_encoding():
+    with pytest.raises(HTTPException, match="Duplicate"):
+        security._parse_init_data("auth_date=1&auth_date=2&hash=" + "a" * 64)
+    with pytest.raises(HTTPException, match="Malformed"):
+        security._parse_init_data("auth_date=%ZZ&hash=" + "a" * 64)
+
+
+def test_init_data_rejects_oversized_input(monkeypatch):
+    monkeypatch.setattr(security.settings, "TELEGRAM_INIT_DATA_MAX_BYTES", 1024)
+    with pytest.raises(HTTPException) as raised:
+        security._parse_init_data("user=" + "x" * 1024 + "&hash=" + "a" * 64)
+    assert raised.value.status_code == 413

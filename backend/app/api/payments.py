@@ -118,6 +118,29 @@ def _verify_hmac_signature(secret: str, body: bytes, received_sig: str) -> bool:
     return hmac.compare_digest(expected, received_sig.lower())
 
 
+async def _read_bounded_webhook_body(request: Request) -> bytes:
+    content_length = request.headers.get("content-length")
+    if content_length:
+        try:
+            if int(content_length) > settings.TELEGRAM_WEBHOOK_MAX_BYTES:
+                raise HTTPException(status_code=413, detail="Webhook payload is too large.")
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="Invalid content length.") from exc
+    chunks: list[bytes] = []
+    size = 0
+    if not hasattr(request, "stream"):
+        body = await request.body()
+        if len(body) > settings.TELEGRAM_WEBHOOK_MAX_BYTES:
+            raise HTTPException(status_code=413, detail="Webhook payload is too large.")
+        return body
+    async for chunk in request.stream():
+        size += len(chunk)
+        if size > settings.TELEGRAM_WEBHOOK_MAX_BYTES:
+            raise HTTPException(status_code=413, detail="Webhook payload is too large.")
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
 def _usdt_trc20_deposit_address() -> str:
     """Return only an explicitly configured USDT TRC20 deposit address."""
     address = settings.CRYPTO_DEPOSIT_ADDRESS_USDT.strip()
@@ -281,6 +304,8 @@ async def create_tetra98_payment(
         limit=10,
         window_seconds=60,
     )
+    if not rate_limit.backend_available:
+        raise HTTPException(status_code=503, detail="Payment rate limiter is unavailable.")
     if not rate_limit.allowed:
         raise HTTPException(status_code=429, detail="Rate limit exceeded.")
 
@@ -484,7 +509,7 @@ async def tetra98_payment_callback(request: Request, db: AsyncSession = Depends(
     Payload: { authority, hashid, status }
     status == 100 means the user completed the payment flow; we then call /verify to confirm.
     """
-    raw_body = await request.body()
+    raw_body = await _read_bounded_webhook_body(request)
 
     # The vendor does not send a signature header. When an operator-configured
     # signature is present we enforce it, while server-to-server /verify remains
@@ -780,6 +805,8 @@ async def initiate_crypto_deposit(
         limit=10,
         window_seconds=60,
     )
+    if not rate_limit.backend_available:
+        raise HTTPException(status_code=503, detail="Payment rate limiter is unavailable.")
     if not rate_limit.allowed:
         raise HTTPException(status_code=429, detail="Rate limit exceeded.")
 
@@ -827,7 +854,7 @@ async def crypto_payment_callback(request: Request, db: AsyncSession = Depends(g
     Webhook called by the on-chain monitoring service upon USDT payment confirmation.
     Protected by HMAC-SHA256 on the raw request body.
     """
-    raw_body = await request.body()
+    raw_body = await _read_bounded_webhook_body(request)
 
     _require_production_webhook_secret(settings.CRYPTO_WEBHOOK_SECRET, "Crypto")
     if settings.CRYPTO_WEBHOOK_SECRET:

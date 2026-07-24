@@ -1,4 +1,5 @@
 import asyncio
+from decimal import Decimal
 from types import SimpleNamespace
 
 import pytest
@@ -149,3 +150,64 @@ def test_cache_outage_after_commit_does_not_turn_save_into_failure(monkeypatch):
     assert result is False
     assert session.committed is True
     assert session.rolled_back is False
+
+
+@pytest.mark.parametrize(
+    "value",
+    [float("nan"), float("inf"), Decimal("1000000000000"), Decimal("1.001")],
+)
+def test_product_mapping_rejects_unsafe_prices(value):
+    payload = {
+        "id": "product-one",
+        "title": "Product",
+        "brand": "Brand",
+        "category": "tools",
+        "variants": [{"id": "variant-one", "duration": "1 month", "rawPrice": value}],
+    }
+    with pytest.raises(catalog_service.CatalogMutationError):
+        catalog_service.product_mutation_from_mapping(payload)
+
+
+@pytest.mark.parametrize(
+    "asset_url",
+    ["javascript:alert(1)", "http://example.test/logo.png", "//example.test/logo.png"],
+)
+def test_product_mapping_rejects_unsafe_asset_urls(asset_url):
+    payload = {
+        "id": "product-one",
+        "title": "Product",
+        "brand": "Brand",
+        "category": "tools",
+        "assetUrl": asset_url,
+        "variants": [{"id": "variant-one", "duration": "1 month", "rawPrice": 100}],
+    }
+    with pytest.raises(catalog_service.CatalogMutationError):
+        catalog_service.product_mutation_from_mapping(payload)
+
+
+def test_product_mapping_rejects_unbounded_features_and_inventory():
+    base = {
+        "id": "product-one",
+        "title": "Product",
+        "brand": "Brand",
+        "category": "tools",
+        "variants": [{"id": "variant-one", "duration": "1 month", "rawPrice": 100}],
+    }
+    with pytest.raises(catalog_service.CatalogMutationError, match="at most 4"):
+        catalog_service.product_mutation_from_mapping(
+            {**base, "features": ["a", "b", "c", "d", "e"]}
+        )
+    with pytest.raises(catalog_service.CatalogMutationError, match="too long"):
+        catalog_service.product_mutation_from_mapping(
+            {
+                **base,
+                "variants": [
+                    {
+                        "id": "variant-one",
+                        "duration": "1 month",
+                        "rawPrice": 100,
+                        "credentials": ["x" * 4097],
+                    }
+                ],
+            }
+        )

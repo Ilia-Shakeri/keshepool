@@ -1,12 +1,14 @@
 import html
 import logging
-from datetime import datetime, timezone
+from datetime import date, datetime, time, timedelta, timezone
 
 from aiogram import Bot, F, Router
 from aiogram.filters import CommandStart, Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import (
     CallbackQuery,
+    BufferedInputFile,
+    ForceReply,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     KeyboardButton,
@@ -25,6 +27,10 @@ from app.core.redis import redis_client
 from app.services.admin_audit_service import add_admin_audit, record_admin_audit
 from app.services.cache_service import namespaced_key
 from app.services.rate_service import clear_usdt_rate_override, get_usdt_rate, set_usdt_rate
+from app.services.system_report_service import (
+    collect_system_report,
+    make_system_report_pdf,
+)
 from app.models import (
     CashoutRequest,
     CashoutRequestStatus,
@@ -92,7 +98,6 @@ def get_main_menu_markup(lang: str) -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text=get_text(lang, "stats_title"), callback_data="manage_stats")],
             [InlineKeyboardButton(text=get_text(lang, "report_btn"), callback_data="force_report")],
             [InlineKeyboardButton(text=get_text(lang, "broadcast_title"), callback_data="broadcast_msg")],
-            [InlineKeyboardButton(text=get_text(lang, "search_user_title"), callback_data="search_user")],
             [InlineKeyboardButton(text=get_text(lang, "rates_btn"), callback_data="manage_rates")],
             [InlineKeyboardButton(text=get_text(lang, "toggle_lang"), callback_data="toggle_language")],
         ]
@@ -185,10 +190,11 @@ async def cmd_start(message: Message, state: FSMContext):
         reply_markup=get_main_menu_markup(lang),
         parse_mode="HTML",
     )
-    await message.answer(
-        text=get_text(lang, "persistent_hint"),
-        reply_markup=get_persistent_menu(lang),
-    )
+    if getattr(getattr(message, "chat", None), "type", "private") == "private":
+        await message.answer(
+            text=get_text(lang, "persistent_hint"),
+            reply_markup=get_persistent_menu(lang),
+        )
 
 
 @admin_router.message(Command("cancel"))
@@ -229,12 +235,11 @@ async def shortcut_users(message: Message, state: FSMContext):
 @admin_router.message(F.text.func(lambda t: t and t.startswith("📊")))
 async def shortcut_report(message: Message, state: FSMContext):
     lang = await get_admin_lang(message.from_user.id)
-    try:
-        text = await build_report_text(lang)
-        await message.answer(text=text, parse_mode="HTML", reply_markup=_back_markup(lang))
-    except Exception as exc:
-        logger.error("Report shortcut failed: %s", exc)
-        await message.answer(get_text(lang, "db_error"))
+    await state.clear()
+    await message.answer(
+        get_text(lang, "system_report_choose"),
+        reply_markup=_system_report_range_markup(lang),
+    )
 
 
 # ── Language toggle ───────────────────────────────────────────────────────────
@@ -257,10 +262,11 @@ async def process_toggle_language(callback: CallbackQuery):
         reply_markup=get_main_menu_markup(new_lang),
         parse_mode="HTML",
     )
-    await callback.message.answer(
-        text=get_text(new_lang, "persistent_hint"),
-        reply_markup=get_persistent_menu(new_lang),
-    )
+    if getattr(callback.message.chat, "type", "") == "private":
+        await callback.message.answer(
+            text=get_text(new_lang, "persistent_hint"),
+            reply_markup=get_persistent_menu(new_lang),
+        )
     await callback.answer()
 
 
@@ -296,29 +302,144 @@ async def show_stats(callback: CallbackQuery):
 @admin_router.callback_query(F.data == "force_report")
 async def process_force_report(callback: CallbackQuery):
     lang = await get_admin_lang(callback.from_user.id)
-    try:
-        text = await build_report_text(lang)
-        # Send the full report directly to the admin who triggered it.
-        await callback.message.answer(
-            text=text,
-            parse_mode="HTML",
-            reply_markup=_back_markup(lang),
+    await callback.message.edit_text(
+        get_text(lang, "system_report_choose"),
+        reply_markup=_system_report_range_markup(lang),
+    )
+    await callback.answer()
+
+
+def _system_report_range_markup(lang: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=get_text(lang, "report_today_btn"), callback_data="system_report_range_today")],
+            [InlineKeyboardButton(text=get_text(lang, "report_7_days_btn"), callback_data="system_report_range_7d")],
+            [InlineKeyboardButton(text=get_text(lang, "report_30_days_btn"), callback_data="system_report_range_30d")],
+            [InlineKeyboardButton(text=get_text(lang, "report_all_time_btn"), callback_data="system_report_range_all")],
+            [InlineKeyboardButton(text=get_text(lang, "report_custom_btn"), callback_data="system_report_range_custom")],
+            [InlineKeyboardButton(text=get_text(lang, "back_to_menu"), callback_data="main_menu")],
+        ]
+    )
+
+
+def _system_report_period(preset: str) -> tuple[datetime, datetime]:
+    today = datetime.now(timezone.utc).date()
+    end = datetime.combine(today + timedelta(days=1), time.min, timezone.utc)
+    if preset == "today":
+        start_date = today
+    elif preset == "7d":
+        start_date = today - timedelta(days=6)
+    elif preset == "30d":
+        start_date = today - timedelta(days=29)
+    elif preset == "all":
+        return datetime(1970, 1, 1, tzinfo=timezone.utc), end
+    else:
+        raise ValueError("Unknown report period.")
+    return datetime.combine(start_date, time.min, timezone.utc), end
+
+
+def _parse_system_report_range(raw: str) -> tuple[datetime, datetime]:
+    parts = raw.split()
+    if len(parts) != 2:
+        raise ValueError("Two dates are required.")
+    start_date, end_date = (date.fromisoformat(value) for value in parts)
+    if start_date > end_date or (end_date - start_date).days > 3660:
+        raise ValueError("Invalid report range.")
+    return (
+        datetime.combine(start_date, time.min, timezone.utc),
+        datetime.combine(end_date + timedelta(days=1), time.min, timezone.utc),
+    )
+
+
+async def _send_system_report(
+    target: Message,
+    *,
+    actor_telegram_id: int,
+    lang: str,
+    start: datetime,
+    end: datetime,
+) -> None:
+    start_label = start.date().isoformat()
+    end_label = (end - timedelta(microseconds=1)).date().isoformat()
+    async with AsyncSessionLocal() as session:
+        report = await collect_system_report(session, start=start, end=end)
+        await add_admin_audit(
+            session,
+            actor_telegram_id=actor_telegram_id,
+            action="system_report.pdf",
+            target_type="report",
+            target_id=f"{start_label}:{end_label}",
+            details={"language": lang, "format": "pdf"},
         )
-        # Relay the instant report to the configured group when needed.
-        if settings.ADMIN_GROUP_CHAT_ID and str(callback.message.chat.id) != str(settings.ADMIN_GROUP_CHAT_ID):
-            try:
-                await callback.bot.send_message(
-                    chat_id=settings.ADMIN_GROUP_CHAT_ID,
-                    text=text,
-                    parse_mode="HTML",
-                )
-            except Exception as exc:
-                logger.warning("Force report relay failed: %s", exc)
+        await session.commit()
+    pdf = make_system_report_pdf(
+        report,
+        start_label=start_label,
+        end_label=end_label,
+        lang=lang,
+    )
+    await target.answer_document(
+        BufferedInputFile(
+            pdf,
+            filename=f"keshepool-report-{start_label}-{end_label}.pdf",
+        ),
+        caption=get_text(lang, "system_report_ready"),
+    )
+
+
+@admin_router.callback_query(F.data.startswith("system_report_range_"))
+async def system_report_range(callback: CallbackQuery, state: FSMContext):
+    lang = await get_admin_lang(callback.from_user.id)
+    preset = callback.data.removeprefix("system_report_range_")
+    if preset == "custom":
+        await state.set_state(AdminPanelStates.awaiting_system_report_range)
+        await callback.message.answer(
+            get_text(lang, "system_report_custom_prompt"),
+            reply_markup=ForceReply(selective=True),
+            parse_mode="HTML",
+        )
+        await callback.answer()
+        return
+    try:
+        start, end = _system_report_period(preset)
+        await _send_system_report(
+            callback.message,
+            actor_telegram_id=callback.from_user.id,
+            lang=lang,
+            start=start,
+            end=end,
+        )
     except Exception as exc:
-        logger.error("Force report failed: %s", exc)
-        await callback.answer(get_text(lang, "db_error"), show_alert=True)
+        logger.error("System PDF report failed: %s", exc, exc_info=True)
+        await callback.answer(get_text(lang, "system_report_failed"), show_alert=True)
         return
     await callback.answer()
+
+
+@admin_router.message(AdminPanelStates.awaiting_system_report_range)
+async def custom_system_report_range(message: Message, state: FSMContext):
+    lang = await get_admin_lang(message.from_user.id)
+    try:
+        start, end = _parse_system_report_range(message.text or "")
+    except ValueError:
+        await message.answer(
+            get_text(lang, "system_report_invalid_range"),
+            reply_markup=ForceReply(selective=True),
+        )
+        return
+    try:
+        await _send_system_report(
+            message,
+            actor_telegram_id=message.from_user.id,
+            lang=lang,
+            start=start,
+            end=end,
+        )
+    except Exception as exc:
+        logger.error("Custom system PDF report failed: %s", exc, exc_info=True)
+        await message.answer(get_text(lang, "system_report_failed"))
+        return
+    await state.clear()
 
 
 # ── User management ───────────────────────────────────────────────────────────
@@ -377,6 +498,9 @@ async def _send_users_page(target, lang: str, page: int, send_new: bool = False)
         nav.append(InlineKeyboardButton(text=get_text(lang, "next_page"), callback_data=f"manage_users_{page + 1}"))
     if nav:
         keyboard.append(nav)
+    keyboard.append(
+        [InlineKeyboardButton(text=get_text(lang, "search_user_title"), callback_data="search_user")]
+    )
     keyboard.append([InlineKeyboardButton(text=get_text(lang, "back_to_menu"), callback_data="main_menu")])
 
     markup = InlineKeyboardMarkup(inline_keyboard=keyboard)

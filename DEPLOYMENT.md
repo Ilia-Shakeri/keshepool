@@ -33,6 +33,8 @@ keshepool.example.com {
 
 The Caddy container must also join `caddy_gateway_net`. Replace the sample host in `.env` with the same HTTPS origin for `WEBHOOK_URL` and `WEB_APP_URL`.
 
+Set `TRUSTED_PROXY_IPS` to the exact Caddy container address or a reviewed proxy network range. Production rejects `*`; forwarded headers from other sources are ignored.
+
 ## Image and migration policy
 
 CI tests source first, upgrades both a fresh PostgreSQL database and a disposable legacy-uppercase-enum database, then publishes both images with one immutable commit tag:
@@ -87,7 +89,13 @@ The production job is manual and serialized. It copies only the revision's Compo
 
 ## Admin authorization
 
-`ADMIN_TELEGRAM_IDS` is the only user allowlist. It must contain numeric Telegram user IDs separated by commas. `ADMIN_GROUP_CHAT_ID` is optional. In that group, a sender must both appear in the user allowlist and currently hold Telegram administrator or creator status. Ordinary group members receive no admin access.
+`ADMIN_TELEGRAM_IDS` is the only user allowlist. It must contain numeric Telegram user IDs separated by commas. Private chat stays available to listed operators. `ADMIN_GROUP_CHAT_ID` is optional and, when set, is the only group accepted by the administrator bot. `ADMIN_REQUIRE_GROUP_ADMIN=false` allows listed ordinary group members. Set it to `true` only when each operator must also be a Telegram administrator or creator. Group role or username alone never grants access.
+
+The administrator bot can remain an ordinary group member. Add it to the configured group, keep privacy mode enabled if desired, and use `/start`, commands, inline buttons, and forced replies. Persistent private-chat keyboards are not shown in groups. Bot creation, privacy-mode settings, and group membership are external operator steps and cannot be changed by this repository.
+
+FSM state is stored in Redis with bot-aware keys and `ADMIN_FSM_TTL_SECONDS`. `CATALOG_CACHE_TTL_SECONDS` and `CATALOG_CACHE_LOCK_TTL_SECONDS` bound catalog cache and fill-lock lifetime.
+
+`ENABLE_INTERNAL_ADMIN_API=false` keeps `/api/admin` routes absent by default. If a trusted server-side integration needs them, enable the flag and set `ADMIN_API_KEY`. The frontend proxy always strips `X-Admin-Token`, so this key must never be sent by browser code.
 
 Tetra callbacks are authenticated through server-side payment verification using `TETRA98_API_KEY`; no undocumented signature header is assumed. A configured `CRYPTO_DEPOSIT_ADDRESS_USDT` requires `CRYPTO_WEBHOOK_SECRET`.
 
@@ -106,7 +114,7 @@ Set `USDT_TO_IRR_RATE` to a positive, operator-reviewed Toman fallback. It is us
 
 ## Rollback
 
-Before cutover, `deploy.sh` records the current backend and frontend image references. A failure before Alembic starts restores that pair. Once `alembic upgrade head` begins, the script never starts the old images automatically: migration 004 changes legacy enum labels to lowercase, and the old binary may not read or write those labels safely. Inspect with `docker compose run --rm --no-deps backend alembic current`, then recover with the same revision or a newer schema-compatible image.
+Before cutover, `deploy.sh` records the current backend and frontend image references. A failure before Alembic starts restores that pair. Once `alembic upgrade head` begins, the script never starts the old images automatically: migration 004 changes legacy enum labels to lowercase, and the old binary may not read or write those labels safely. Inspect with `docker compose run --rm --no-deps migrate alembic current`, then recover with the same revision or a newer schema-compatible image.
 
 Database migrations are never downgraded automatically because destructive rollback can lose data. This release therefore uses a short maintenance window for the one-time enum cutover instead of serving requests from incompatible binaries.
 
@@ -141,6 +149,8 @@ Send a probe with `redaction-probe` in each sensitive header. Confirm that marke
 ## Source export and secret scan
 
 Run `sh ./scripts/export-source.sh` to build a source archive from an explicit tracked-file allowlist. Its staging pass removes environment files, keys, certificates, backups, database dumps, token files, generated archives, build output, dependencies, and repository metadata. Static inventory seed data is not in the allowlist. CI scans Git history and the work tree with default secret rules plus narrow fake-value exceptions.
+
+Complete the mandatory response checklist in `SECURITY_INCIDENT.md` before any production release.
 
 ## Host Redis setting
 
