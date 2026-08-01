@@ -1,6 +1,7 @@
 import html
 import logging
 from datetime import date, datetime, time, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from aiogram import Bot, F, Router
 from aiogram.filters import CommandStart, Command
@@ -27,9 +28,9 @@ from app.core.redis import redis_client
 from app.services.admin_audit_service import add_admin_audit, record_admin_audit
 from app.services.cache_service import namespaced_key
 from app.services.rate_service import clear_usdt_rate_override, get_usdt_rate, set_usdt_rate
-from app.services.system_report_service import (
-    collect_system_report,
-    make_system_report_pdf,
+from app.bot.services.daily_report_settings import (
+    is_daily_report_enabled,
+    toggle_daily_report,
 )
 from app.models import (
     CashoutRequest,
@@ -97,6 +98,7 @@ def get_main_menu_markup(lang: str) -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text=get_text(lang, "transactions_title"), callback_data="manage_transactions")],
             [InlineKeyboardButton(text=get_text(lang, "stats_title"), callback_data="manage_stats")],
             [InlineKeyboardButton(text=get_text(lang, "report_btn"), callback_data="force_report")],
+            [InlineKeyboardButton(text=get_text(lang, "daily_report_btn"), callback_data="manage_daily_report")],
             [InlineKeyboardButton(text=get_text(lang, "broadcast_title"), callback_data="broadcast_msg")],
             [InlineKeyboardButton(text=get_text(lang, "rates_btn"), callback_data="manage_rates")],
             [InlineKeyboardButton(text=get_text(lang, "toggle_lang"), callback_data="toggle_language")],
@@ -114,9 +116,11 @@ def _back_markup(lang: str, callback_data: str = "main_menu") -> InlineKeyboardM
 
 async def build_report_text(lang: str) -> str:
     """Build a detailed operational report for the instant report workflow."""
+    report_timezone = ZoneInfo(settings.TZ)
+    now_local = datetime.now(report_timezone)
+    today_start = now_local.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
     async with AsyncSessionLocal() as session:
         total_users = await session.scalar(select(func.count(User.id))) or 0
-        today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
         new_today = await session.scalar(
             select(func.count(User.id)).where(User.created_at >= today_start)
         ) or 0
@@ -138,7 +142,7 @@ async def build_report_text(lang: str) -> str:
             logger.warning("cashout_requests query failed (migration pending?): %s", exc)
             pending_cashouts = "N/A"
 
-    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    now = now_local.strftime("%Y-%m-%d %H:%M %Z")
     return get_text(lang, "report_text").format(
         now=_h(now),
         total_users=f"{total_users:,}",
@@ -309,6 +313,61 @@ async def process_force_report(callback: CallbackQuery):
     await callback.answer()
 
 
+def _daily_report_markup(lang: str, enabled: bool) -> InlineKeyboardMarkup:
+    toggle_key = "daily_report_disable_btn" if enabled else "daily_report_enable_btn"
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=get_text(lang, toggle_key), callback_data="toggle_daily_report")],
+            [InlineKeyboardButton(text=get_text(lang, "back_to_menu"), callback_data="main_menu")],
+        ]
+    )
+
+
+async def _show_daily_report_settings(callback: CallbackQuery, lang: str) -> None:
+    enabled = await is_daily_report_enabled()
+    status_key = "daily_report_status_on" if enabled else "daily_report_status_off"
+    await callback.message.edit_text(
+        get_text(lang, "daily_report_settings").format(status=get_text(lang, status_key)),
+        reply_markup=_daily_report_markup(lang, enabled),
+        parse_mode="HTML",
+    )
+
+
+@admin_router.callback_query(F.data == "manage_daily_report")
+async def manage_daily_report(callback: CallbackQuery):
+    lang = await get_admin_lang(callback.from_user.id)
+    try:
+        await _show_daily_report_settings(callback, lang)
+    except RedisError as exc:
+        logger.warning("Daily report setting read failed: %s", type(exc).__name__)
+        await callback.answer(get_text(lang, "cache_unavailable"), show_alert=True)
+        return
+    await callback.answer()
+
+
+@admin_router.callback_query(F.data == "toggle_daily_report")
+async def process_toggle_daily_report(callback: CallbackQuery):
+    lang = await get_admin_lang(callback.from_user.id)
+    try:
+        enabled = await toggle_daily_report()
+        await _show_daily_report_settings(callback, lang)
+    except RedisError as exc:
+        logger.warning("Daily report setting write failed: %s", type(exc).__name__)
+        await callback.answer(get_text(lang, "cache_unavailable"), show_alert=True)
+        return
+    try:
+        await record_admin_audit(
+            actor_telegram_id=callback.from_user.id,
+            action="daily_report.toggle",
+            target_type="system_setting",
+            target_id="daily_report",
+            details={"enabled": enabled},
+        )
+    except Exception:
+        logger.exception("Daily report toggle audit failed.")
+    await callback.answer(get_text(lang, "daily_report_enabled" if enabled else "daily_report_disabled"))
+
+
 def _system_report_range_markup(lang: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
@@ -359,6 +418,11 @@ async def _send_system_report(
     start: datetime,
     end: datetime,
 ) -> None:
+    from app.services.system_report_service import (
+        collect_system_report,
+        make_system_report_pdf,
+    )
+
     start_label = start.date().isoformat()
     end_label = (end - timedelta(microseconds=1)).date().isoformat()
     async with AsyncSessionLocal() as session:

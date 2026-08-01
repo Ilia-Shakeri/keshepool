@@ -1,7 +1,7 @@
 import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from sqlalchemy import create_engine, insert
@@ -109,6 +109,7 @@ def configure_report_test(monkeypatch, report_text="report"):
     monkeypatch.setattr(admin_panel, "build_report_text", build_report)
     monkeypatch.setattr(scheduler, "AsyncSessionLocal", FakeSessionContext)
     monkeypatch.setattr(scheduler, "_check_low_stock", AsyncMock(return_value=[]))
+    monkeypatch.setattr(scheduler, "is_daily_report_enabled", AsyncMock(return_value=True))
     monkeypatch.setattr(scheduler.settings, "ADMIN_GROUP_CHAT_ID", "-100123")
     monkeypatch.setattr(scheduler.settings, "ADMIN_REPORT_LANGUAGE", "en")
     return build_report
@@ -117,7 +118,7 @@ def configure_report_test(monkeypatch, report_text="report"):
 def test_scheduler_passes_configured_report_language(monkeypatch):
     build_report = configure_report_test(monkeypatch)
     bot = AsyncMock()
-    asyncio.run(scheduler.send_hourly_report(bot))
+    asyncio.run(scheduler.send_daily_report(bot))
     build_report.assert_awaited_once_with("en")
 
 
@@ -125,7 +126,7 @@ def test_report_generation_failure_is_reraised(monkeypatch):
     build_report = configure_report_test(monkeypatch)
     build_report.side_effect = RuntimeError("report failed")
     with pytest.raises(RuntimeError, match="report failed"):
-        asyncio.run(scheduler.send_hourly_report(AsyncMock()))
+        asyncio.run(scheduler.send_daily_report(AsyncMock()))
 
 
 def test_telegram_delivery_failure_is_reraised(monkeypatch):
@@ -133,11 +134,38 @@ def test_telegram_delivery_failure_is_reraised(monkeypatch):
     bot = AsyncMock()
     bot.send_message.side_effect = RuntimeError("delivery failed")
     with pytest.raises(RuntimeError, match="delivery failed"):
-        asyncio.run(scheduler.send_hourly_report(bot))
+        asyncio.run(scheduler.send_daily_report(bot))
 
 
 def test_successful_delivery_logs_success(monkeypatch, caplog):
     configure_report_test(monkeypatch)
     with caplog.at_level(logging.INFO, logger=scheduler.__name__):
-        asyncio.run(scheduler.send_hourly_report(AsyncMock()))
-    assert "Hourly report dispatched successfully." in caplog.text
+        asyncio.run(scheduler.send_daily_report(AsyncMock()))
+    assert "Daily report dispatched successfully." in caplog.text
+
+
+def test_disabled_daily_report_sends_nothing(monkeypatch):
+    build_report = configure_report_test(monkeypatch)
+    monkeypatch.setattr(scheduler, "is_daily_report_enabled", AsyncMock(return_value=False))
+    bot = AsyncMock()
+
+    asyncio.run(scheduler.send_daily_report(bot))
+
+    build_report.assert_not_awaited()
+    bot.send_message.assert_not_awaited()
+
+
+def test_scheduler_runs_once_at_tehran_day_end(monkeypatch):
+    scheduler_instance = MagicMock()
+    monkeypatch.setattr(scheduler, "AsyncIOScheduler", lambda **kwargs: scheduler_instance)
+    monkeypatch.setattr(scheduler.settings, "TZ", "Asia/Tehran")
+
+    result = scheduler.start_scheduler(AsyncMock())
+
+    assert result is scheduler_instance
+    job = scheduler_instance.add_job.call_args
+    assert job.args == (scheduler.send_daily_report,)
+    assert job.kwargs["trigger"] == "cron"
+    assert job.kwargs["hour"] == 23
+    assert job.kwargs["minute"] == 59
+    assert str(job.kwargs["timezone"]) == "Asia/Tehran"

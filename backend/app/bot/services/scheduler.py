@@ -1,5 +1,6 @@
 import logging
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 from aiogram import Bot
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -8,6 +9,7 @@ from sqlalchemy import and_, func, select
 from app.core.config import settings
 from app.core.database import AsyncSessionLocal
 from app.models import InventoryItem, ItemStatus, ProductVariant
+from app.bot.services.daily_report_settings import is_daily_report_enabled
 
 logger = logging.getLogger(__name__)
 
@@ -43,11 +45,15 @@ async def _check_low_stock(session) -> list[str]:
     return [f"⚠️ {row.vid} / {row.dur}: {row.qty} remaining" for row in rows]
 
 
-async def send_hourly_report(bot: Bot):
+async def send_daily_report(bot: Bot):
     if not settings.ADMIN_GROUP_CHAT_ID:
         return
 
     try:
+        if not await is_daily_report_enabled():
+            logger.info("Daily report is disabled.")
+            return
+
         # Import here to avoid circular imports at module load time
         from app.bot.handlers.admin_panel import build_report_text
 
@@ -64,14 +70,26 @@ async def send_hourly_report(bot: Bot):
             text=report_text,
             parse_mode="HTML",
         )
-        logger.info("Hourly report dispatched successfully.")
+        logger.info("Daily report dispatched successfully.")
     except Exception:
-        logger.exception("Failed to dispatch hourly report.")
+        logger.exception("Failed to dispatch daily report.")
         raise
 
 
 def start_scheduler(bot: Bot) -> AsyncIOScheduler:
-    scheduler = AsyncIOScheduler()
-    scheduler.add_job(send_hourly_report, trigger="cron", minute=0, kwargs={"bot": bot})
+    report_timezone = ZoneInfo(settings.TZ)
+    scheduler = AsyncIOScheduler(timezone=report_timezone)
+    scheduler.add_job(
+        send_daily_report,
+        trigger="cron",
+        hour=23,
+        minute=59,
+        timezone=report_timezone,
+        kwargs={"bot": bot},
+        id="daily-admin-report",
+        replace_existing=True,
+        coalesce=True,
+        max_instances=1,
+    )
     scheduler.start()
     return scheduler
