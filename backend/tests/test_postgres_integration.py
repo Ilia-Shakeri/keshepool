@@ -29,6 +29,7 @@ from app.services.catalog_service import (
 )
 from app.services.inventory_service import fulfill_wallet_order
 from app.services.user_service import ensure_user_from_telegram_init
+from app.services.telegram_inbox_service import enqueue_update
 
 
 RUN_POSTGRES = os.environ.get("KESHEPOOL_RUN_POSTGRES_TESTS") == "1"
@@ -168,6 +169,32 @@ def test_real_postgres_concurrent_bootstrap_creates_one_user_and_wallet():
     assert user_count == 1
     assert wallet_count == 1
     assert len({user.id for user in users}) == 1
+
+
+def test_real_postgres_duplicate_telegram_update_is_inserted_once():
+    _assert_disposable_database()
+
+    async def scenario():
+        engine = create_async_engine(TEST_DATABASE_URL)
+        sessions = async_sessionmaker(engine, expire_on_commit=False)
+        try:
+            await _reset_database(engine)
+
+            async def enqueue_once():
+                async with sessions() as session:
+                    return await enqueue_update(
+                        session,
+                        bot_type="admin",
+                        update_id=778899,
+                        payload={"update_id": 778899},
+                    )
+
+            return await asyncio.gather(enqueue_once(), enqueue_once())
+        finally:
+            await engine.dispose()
+
+    results = asyncio.run(scenario())
+    assert sorted(results) == [False, True]
 
 
 def test_real_postgres_same_checkout_key_returns_one_order_and_one_sale():

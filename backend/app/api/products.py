@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.database import get_db
-from app.core.security import validate_telegram_data
+from app.core.security import validate_fresh_telegram_data, validate_telegram_data
 from app.models import Order, User
 from app.services.cache_service import check_rate_limit, invalidate_catalog_cache
 from app.services.catalog_service import get_public_catalog
@@ -18,6 +18,13 @@ router = APIRouter(prefix="/api", tags=["catalog"])
 
 async def current_user(
     telegram_data: Dict[str, Any] = Depends(validate_telegram_data),
+    db: AsyncSession = Depends(get_db),
+) -> User:
+    return await ensure_user_from_telegram_init(db, telegram_data)
+
+
+async def current_fresh_user(
+    telegram_data: Dict[str, Any] = Depends(validate_fresh_telegram_data),
     db: AsyncSession = Depends(get_db),
 ) -> User:
     return await ensure_user_from_telegram_init(db, telegram_data)
@@ -78,7 +85,7 @@ async def checkout_with_wallet(
         max_length=64,
         pattern=r"^[A-Za-z0-9._:-]+$",
     ),
-    user: User = Depends(current_user),
+    user: User = Depends(current_fresh_user),
     db: AsyncSession = Depends(get_db),
 ):
     rate_limit = await check_rate_limit(

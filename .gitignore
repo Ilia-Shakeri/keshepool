@@ -5,6 +5,7 @@
 # Environment Variables
 .env
 .env.*
+!.env.example
 .env.local
 .env.*.local
 
@@ -71,3 +72,4 @@ backups/*
 *.tar.gz
 *.tgz
 *.zip
+keshepool-source-*.tar.gz

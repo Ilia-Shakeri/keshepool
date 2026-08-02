@@ -3,6 +3,8 @@ from datetime import datetime, timezone
 
 from sqlalchemy import (
     Boolean,
+    BigInteger,
+    CheckConstraint,
     Column,
     DateTime,
     Enum,
@@ -272,3 +274,126 @@ class AdminAuditLog(Base):
         nullable=False,
     )
     created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+
+class TelegramUpdateInbox(Base):
+    __tablename__ = "telegram_update_inbox"
+    __table_args__ = (
+        UniqueConstraint("bot_type", "update_id", name="uq_telegram_update_bot_id"),
+        CheckConstraint("bot_type IN ('main', 'admin')", name="ck_telegram_update_bot_type"),
+        CheckConstraint(
+            "status IN ('pending', 'processing', 'retry', 'done', 'failed')",
+            name="ck_telegram_update_status",
+        ),
+        CheckConstraint("attempts >= 0", name="ck_telegram_update_attempts"),
+        Index("ix_telegram_update_claim", "status", "next_attempt_at", "id"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    bot_type = Column(String(10), nullable=False)
+    update_id = Column(BigInteger, nullable=False)
+    payload = Column(JSON, nullable=False)
+    status = Column(String(20), nullable=False, default="pending")
+    attempts = Column(Integer, nullable=False, default=0)
+    next_attempt_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    locked_at = Column(DateTime(timezone=True), nullable=True)
+    processed_at = Column(DateTime(timezone=True), nullable=True)
+    last_error = Column(String(200), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow)
+
+
+class AdminIdentity(Base):
+    __tablename__ = "admin_identities"
+    __table_args__ = (
+        CheckConstraint("char_length(telegram_id) BETWEEN 1 AND 20", name="ck_admin_identity_telegram_id_length"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    telegram_id = Column(String(20), nullable=False, unique=True)
+    display_name = Column(String(100), nullable=True)
+    is_active = Column(Boolean, nullable=False, default=True)
+    is_break_glass = Column(Boolean, nullable=False, default=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow)
+
+
+class AdminRoleGrant(Base):
+    __tablename__ = "admin_role_grants"
+    __table_args__ = (
+        CheckConstraint(
+            "role IN ('superadmin', 'finance', 'catalog', 'support', 'auditor')",
+            name="ck_admin_role_grant_role",
+        ),
+        Index(
+            "uq_admin_role_grant_active",
+            "admin_identity_id",
+            "role",
+            unique=True,
+            postgresql_where=text("revoked_at IS NULL"),
+        ),
+    )
+
+    id = Column(Integer, primary_key=True)
+    admin_identity_id = Column(Integer, ForeignKey("admin_identities.id"), nullable=False)
+    role = Column(String(20), nullable=False)
+    granted_by_telegram_id = Column(String(20), nullable=False)
+    revoked_by_telegram_id = Column(String(20), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    revoked_at = Column(DateTime(timezone=True), nullable=True)
+
+
+class AdminActionNonce(Base):
+    __tablename__ = "admin_action_nonces"
+    __table_args__ = (
+        UniqueConstraint("nonce_hash", name="uq_admin_action_nonce_hash"),
+        Index("ix_admin_action_nonce_expiry", "expires_at"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    nonce_hash = Column(String(64), nullable=False)
+    actor_telegram_id = Column(String(20), nullable=False)
+    chat_id = Column(String(24), nullable=False)
+    action = Column(String(100), nullable=False)
+    target_type = Column(String(50), nullable=False)
+    target_id = Column(String(180), nullable=False)
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+    used_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+
+class AdminApprovalRequest(Base):
+    __tablename__ = "admin_approval_requests"
+    __table_args__ = (
+        CheckConstraint("required_approvals >= 2", name="ck_admin_approval_required_count"),
+        CheckConstraint(
+            "status IN ('pending', 'approved', 'executed', 'expired', 'cancelled')",
+            name="ck_admin_approval_status",
+        ),
+        Index("ix_admin_approval_pending", "status", "expires_at", "id"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    action = Column(String(100), nullable=False)
+    target_type = Column(String(50), nullable=False)
+    target_id = Column(String(180), nullable=False)
+    payload_hash = Column(String(64), nullable=False)
+    requested_by_telegram_id = Column(String(20), nullable=False)
+    required_approvals = Column(Integer, nullable=False, default=2)
+    status = Column(String(20), nullable=False, default="pending")
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+    executed_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow)
+
+
+class AdminApprovalVote(Base):
+    __tablename__ = "admin_approval_votes"
+    __table_args__ = (
+        UniqueConstraint("approval_request_id", "actor_telegram_id", name="uq_admin_approval_actor"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    approval_request_id = Column(Integer, ForeignKey("admin_approval_requests.id"), nullable=False)
+    actor_telegram_id = Column(String(20), nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)

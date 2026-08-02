@@ -62,6 +62,7 @@ def test_auth_cache_ttl_uses_only_remaining_init_data_lifetime(monkeypatch):
 
     assert json.loads(result["user"])["id"] == 42
     assert len(writes) == 1
+    assert f"auth-session:{security.settings.AUTH_SESSION_EPOCH}:" in writes[0][0]
     ttl = writes[0][2]
     assert 1 <= ttl <= security.settings.TELEGRAM_AUTH_MAX_AGE_SECONDS - 119
 
@@ -102,3 +103,20 @@ def test_init_data_rejects_oversized_input(monkeypatch):
     with pytest.raises(HTTPException) as raised:
         security._parse_init_data("user=" + "x" * 1024 + "&hash=" + "a" * 64)
     assert raised.value.status_code == 413
+
+
+def test_financial_auth_rejects_data_older_than_five_minutes(monkeypatch):
+    init_data = _signed_init_data(
+        int(time.time()) - security.settings.TELEGRAM_FINANCIAL_AUTH_MAX_AGE_SECONDS - 1
+    )
+    cache_called = False
+
+    async def cache_read(key):
+        nonlocal cache_called
+        cache_called = True
+        return CacheRead(available=True, hit=True, value={"user": "{}"})
+
+    monkeypatch.setattr(security, "read_json", cache_read)
+    with pytest.raises(HTTPException, match="expired"):
+        asyncio.run(security.validate_fresh_telegram_data(init_data))
+    assert cache_called is False

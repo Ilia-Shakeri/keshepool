@@ -107,12 +107,14 @@ services:
       - TELEGRAM_BOT_MODE=webhook
       - WEBHOOK_URL=${WEBHOOK_URL}
       - WEB_APP_URL=${WEB_APP_URL}
-      - WEBHOOK_SECRET=${WEBHOOK_SECRET}
+      - MAIN_TELEGRAM_WEBHOOK_SECRET=${MAIN_TELEGRAM_WEBHOOK_SECRET:?Set a distinct main Telegram webhook secret}
+      - ADMIN_TELEGRAM_WEBHOOK_SECRET=${ADMIN_TELEGRAM_WEBHOOK_SECRET:?Set a distinct admin Telegram webhook secret}
       - ADMIN_TELEGRAM_IDS=${ADMIN_TELEGRAM_IDS}
       - ADMIN_API_KEY=${ADMIN_API_KEY:-}
       - ENVIRONMENT=${ENVIRONMENT:-production}
       - USDT_TO_IRR_RATE=${USDT_TO_IRR_RATE:?Set an operator-reviewed emergency USDT rate in .env}
       - TRUSTED_PROXY_IPS=${TRUSTED_PROXY_IPS:-127.0.0.1}
+      - CSP_REPORT_ONLY=${CSP_REPORT_ONLY:-true}
     depends_on:
       db:
         condition: service_healthy
@@ -128,14 +130,15 @@ services:
     restart: unless-stopped
     init: true
     stop_grace_period: 30s
-    environment:
+    environment: &backend-environment
       - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
       - REDIS_URL=redis://redis:6379/0
       - BOT_TOKEN=${BOT_TOKEN}
       - ADMIN_BOT_TOKEN=${ADMIN_BOT_TOKEN}
       - WEBHOOK_URL=${WEBHOOK_URL}
       - WEB_APP_URL=${WEB_APP_URL}
-      - WEBHOOK_SECRET=${WEBHOOK_SECRET}
+      - MAIN_TELEGRAM_WEBHOOK_SECRET=${MAIN_TELEGRAM_WEBHOOK_SECRET:?Set a distinct main Telegram webhook secret}
+      - ADMIN_TELEGRAM_WEBHOOK_SECRET=${ADMIN_TELEGRAM_WEBHOOK_SECRET:?Set a distinct admin Telegram webhook secret}
       - TETRA98_API_URL=${TETRA98_API_URL}
       - TETRA98_API_KEY=${TETRA98_API_KEY}
       - TETRA98_WEBHOOK_SECRET=${TETRA98_WEBHOOK_SECRET:-}
@@ -145,6 +148,7 @@ services:
       - ADMIN_TELEGRAM_IDS=${ADMIN_TELEGRAM_IDS}
       - ADMIN_GROUP_CHAT_ID=${ADMIN_GROUP_CHAT_ID:-}
       - ADMIN_REQUIRE_GROUP_ADMIN=${ADMIN_REQUIRE_GROUP_ADMIN:-false}
+      - ADMIN_RBAC_ENABLED=${ADMIN_RBAC_ENABLED:-false}
       - ADMIN_FSM_TTL_SECONDS=${ADMIN_FSM_TTL_SECONDS:-3600}
       - TZ=${TZ:-Asia/Tehran}
       - ADMIN_REPORT_LANGUAGE=${ADMIN_REPORT_LANGUAGE:-fa}
@@ -153,10 +157,17 @@ services:
       - PUBLIC_ASSET_BASE_URL=/static
       - SUPPORT_TELEGRAM_USERNAME=${SUPPORT_TELEGRAM_USERNAME:-}
       - ALLOW_INSECURE_DEV_AUTH=${ALLOW_INSECURE_DEV_AUTH:-false}
-      - TELEGRAM_AUTH_MAX_AGE_SECONDS=${TELEGRAM_AUTH_MAX_AGE_SECONDS:-86400}
+      - TELEGRAM_AUTH_MAX_AGE_SECONDS=${TELEGRAM_AUTH_MAX_AGE_SECONDS:-3600}
+      - TELEGRAM_FINANCIAL_AUTH_MAX_AGE_SECONDS=${TELEGRAM_FINANCIAL_AUTH_MAX_AGE_SECONDS:-300}
+      - AUTH_SESSION_EPOCH=${AUTH_SESSION_EPOCH:-1}
       - TELEGRAM_AUTH_FUTURE_SKEW_SECONDS=${TELEGRAM_AUTH_FUTURE_SKEW_SECONDS:-60}
       - TELEGRAM_INIT_DATA_MAX_BYTES=${TELEGRAM_INIT_DATA_MAX_BYTES:-8192}
       - TELEGRAM_WEBHOOK_MAX_BYTES=${TELEGRAM_WEBHOOK_MAX_BYTES:-1048576}
+      - TELEGRAM_INBOX_BATCH_SIZE=${TELEGRAM_INBOX_BATCH_SIZE:-20}
+      - TELEGRAM_INBOX_POLL_SECONDS=${TELEGRAM_INBOX_POLL_SECONDS:-0.5}
+      - TELEGRAM_INBOX_STALE_SECONDS=${TELEGRAM_INBOX_STALE_SECONDS:-300}
+      - TELEGRAM_INBOX_MAX_ATTEMPTS=${TELEGRAM_INBOX_MAX_ATTEMPTS:-8}
+      - TELEGRAM_INBOX_RETRY_SECONDS=${TELEGRAM_INBOX_RETRY_SECONDS:-10}
       - USER_LAST_SEEN_WRITE_INTERVAL_SECONDS=${USER_LAST_SEEN_WRITE_INTERVAL_SECONDS:-300}
       - CACHE_NAMESPACE=${CACHE_NAMESPACE:-keshepool}
       - CATALOG_CACHE_TTL_SECONDS=${CATALOG_CACHE_TTL_SECONDS:-30}
@@ -166,6 +177,7 @@ services:
       - ADMIN_API_KEY=${ADMIN_API_KEY}
       - ENABLE_INTERNAL_ADMIN_API=${ENABLE_INTERNAL_ADMIN_API:-false}
       - TRUSTED_PROXY_IPS=${TRUSTED_PROXY_IPS:-127.0.0.1}
+      - CSP_REPORT_ONLY=${CSP_REPORT_ONLY:-true}
       - ENVIRONMENT=${ENVIRONMENT:-production}
     volumes:
       - ./static:/app/static
@@ -184,6 +196,48 @@ services:
       timeout: 5s
       retries: 12
       start_period: 20s
+    networks:
+      - keshepool_internal_net
+      - caddy_gateway_net
+    logging: *default-logging
+
+  telegram-worker:
+    image: ${BACKEND_IMAGE:-keshepool-backend:local}
+    build:
+      context: ./backend
+    container_name: keshepool-telegram-worker
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 30s
+    command: ["python", "-m", "app.workers.telegram_inbox"]
+    environment: *backend-environment
+    volumes:
+      - ./static:/app/static
+    depends_on:
+      static-init:
+        condition: service_completed_successfully
+      migrate:
+        condition: service_completed_successfully
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    networks:
+      - keshepool_internal_net
+      - caddy_gateway_net
+    logging: *default-logging
+
+  telegram-configure:
+    image: ${BACKEND_IMAGE:-keshepool-backend:local}
+    build:
+      context: ./backend
+    profiles: ["ops"]
+    restart: "no"
+    command: ["python", "/app/scripts/configure_telegram.py"]
+    environment: *backend-environment
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
     networks:
       - keshepool_internal_net
       - caddy_gateway_net

@@ -1,13 +1,14 @@
+import re
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.database import get_db
-from app.core.security import validate_telegram_data
+from app.core.security import validate_fresh_telegram_data, validate_telegram_data
 from app.models import Notification, Order, OrderStatus, Transaction, User, Wallet
 from app.services.user_service import ensure_user_from_telegram_init
 
@@ -15,7 +16,15 @@ router = APIRouter(prefix="/api", tags=["users"])
 
 
 class BootstrapRequest(BaseModel):
-    referrerTelegramId: Optional[str] = None
+    referrerTelegramId: Optional[str] = Field(default=None, max_length=64)
+
+
+def signed_referrer_telegram_id(telegram_data: Dict[str, Any]) -> Optional[str]:
+    start_param = telegram_data.get("start_param")
+    if not isinstance(start_param, str):
+        return None
+    match = re.fullmatch(r"ref_([1-9][0-9]{0,19})", start_param)
+    return match.group(1) if match else None
 
 
 async def current_user(
@@ -25,16 +34,23 @@ async def current_user(
     return await ensure_user_from_telegram_init(db, telegram_data)
 
 
+async def current_fresh_user(
+    telegram_data: Dict[str, Any] = Depends(validate_fresh_telegram_data),
+    db: AsyncSession = Depends(get_db),
+) -> User:
+    return await ensure_user_from_telegram_init(db, telegram_data)
+
+
 @router.post("/me/bootstrap")
 async def bootstrap_user(
-    payload: BootstrapRequest,
+    _payload: BootstrapRequest,
     telegram_data: Dict[str, Any] = Depends(validate_telegram_data),
     db: AsyncSession = Depends(get_db),
 ):
     user = await ensure_user_from_telegram_init(
         db=db,
         telegram_data=telegram_data,
-        referrer_telegram_id=payload.referrerTelegramId,
+        referrer_telegram_id=signed_referrer_telegram_id(telegram_data),
     )
     return await get_profile_payload(user, db)
 

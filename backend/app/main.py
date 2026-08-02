@@ -30,6 +30,7 @@ from app.core.config import settings
 from app.core.database import AsyncSessionLocal, engine, init_db
 from app.core.redis import redis_client
 from app.services.cache_service import redis_health
+from app.services.telegram_inbox_service import enqueue_update
 
 # Configure structured JSON logging
 logger = logging.getLogger()
@@ -59,43 +60,6 @@ def _safe_webhook_info(bot_type: str, expected_url: str, info: object) -> dict[s
         "last_error_date": last_error_date,
         "has_last_error": bool(getattr(info, "last_error_message", None)),
     }
-
-
-async def _log_webhook_info(target_bot: Bot, bot_type: str, expected_url: str) -> None:
-    info = await target_bot.get_webhook_info()
-    module_logger.info(
-        "Telegram webhook status checked.",
-        extra=_safe_webhook_info(bot_type, expected_url, info),
-    )
-
-
-async def _log_admin_group_status() -> None:
-    if not settings.ADMIN_GROUP_CHAT_ID:
-        module_logger.info("Admin group is not configured.")
-        return
-    try:
-        bot_user = await admin_bot.get_me()
-        member = await admin_bot.get_chat_member(
-            chat_id=int(settings.ADMIN_GROUP_CHAT_ID),
-            user_id=bot_user.id,
-        )
-        module_logger.info(
-            "Admin group membership checked.",
-            extra={
-                "group_configured": True,
-                "group_reachable": True,
-                "bot_member_status": str(member.status),
-            },
-        )
-    except Exception as exc:
-        module_logger.warning(
-            "Admin group membership check failed.",
-            extra={
-                "group_configured": True,
-                "group_reachable": False,
-                "exception_class": type(exc).__name__,
-            },
-        )
 
 
 def _webhook_request_fields(
@@ -151,22 +115,7 @@ async def lifespan(app: FastAPI):
             scheduler = start_scheduler(admin_bot)
 
         if settings.TELEGRAM_BOT_MODE == "webhook":
-            full_webhook_url = settings.WEBHOOK_URL.rstrip('/')
-            module_logger.info("Setting Telegram webhooks and bot configurations...")
-            main_webhook_url = f"{full_webhook_url}{WEBHOOK_PATH}/main"
-            await bot.set_webhook(
-                url=main_webhook_url,
-                drop_pending_updates=False,
-                secret_token=settings.WEBHOOK_SECRET,
-            )
-            await _log_webhook_info(bot, "main", main_webhook_url)
-            admin_webhook_url = f"{full_webhook_url}{WEBHOOK_PATH}/admin"
-            await admin_bot.set_webhook(
-                url=admin_webhook_url,
-                drop_pending_updates=False,
-                secret_token=settings.WEBHOOK_SECRET,
-            )
-            await _log_webhook_info(admin_bot, "admin", admin_webhook_url)
+            module_logger.info("Telegram webhook transport enabled; configuration is managed separately.")
         elif settings.TELEGRAM_BOT_MODE == "polling":
             module_logger.info("Starting Telegram polling for local development.")
             await bot.delete_webhook(drop_pending_updates=False)
@@ -178,21 +127,6 @@ async def lifespan(app: FastAPI):
         else:
             module_logger.info("Telegram bot transport disabled.")
 
-        if settings.TELEGRAM_BOT_MODE != "disabled":
-            await _log_admin_group_status()
-            await bot.set_my_commands([
-                types.BotCommand(command="start", description="Open Keshepool")
-            ])
-            await bot.set_chat_menu_button(
-                menu_button=types.MenuButtonWebApp(
-                    text="Open Keshepool",
-                    web_app=types.WebAppInfo(url=settings.WEB_APP_URL),
-                )
-            )
-            await admin_bot.set_my_commands([
-                types.BotCommand(command="start", description="Open Admin Panel")
-            ])
-            await admin_bot.set_chat_menu_button(menu_button=types.MenuButtonCommands())
         yield
     finally:
         if polling_tasks:
@@ -244,6 +178,28 @@ async def add_correlation_id(request: Request, call_next):
     request.state.request_id = request_id
     response = await call_next(request)
     response.headers["X-Request-ID"] = request_id
+    response.headers["Referrer-Policy"] = "no-referrer"
+    response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    csp_header = (
+        "Content-Security-Policy-Report-Only"
+        if settings.CSP_REPORT_ONLY
+        else "Content-Security-Policy"
+    )
+    response.headers[csp_header] = (
+        "default-src 'self'; "
+        "base-uri 'self'; "
+        "connect-src 'self'; "
+        "font-src 'self' data:; "
+        "form-action 'self'; "
+        "frame-ancestors 'self' https://web.telegram.org https://*.telegram.org; "
+        "img-src 'self' data: https:; "
+        "object-src 'none'; "
+        "script-src 'self' https://telegram.org; "
+        "style-src 'self' 'unsafe-inline'"
+    )
+    if production:
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
     return response
 
 # Restrict CORS to the configured frontend origin only
@@ -297,10 +253,14 @@ async def bot_webhook(
     request: Request, 
     x_telegram_bot_api_secret_token: str = Header(None, alias="X-Telegram-Bot-Api-Secret-Token")
 ):
-    # Enforce webhook authenticity using the secret token
+    expected_secret = (
+        settings.admin_telegram_webhook_secret
+        if bot_type == "admin"
+        else settings.main_telegram_webhook_secret
+    )
     if not hmac.compare_digest(
         x_telegram_bot_api_secret_token or "",
-        settings.WEBHOOK_SECRET,
+        expected_secret,
     ):
         module_logger.warning(
             "Telegram webhook request rejected.",
@@ -308,12 +268,19 @@ async def bot_webhook(
         )
         raise HTTPException(status_code=401, detail="Invalid secret token.")
 
+    content_type = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+    if content_type != "application/json":
+        raise HTTPException(status_code=415, detail="Webhook content type must be application/json.")
+
     update_id = None
     try:
         content_length = request.headers.get("content-length")
         if content_length:
             try:
-                if int(content_length) > settings.TELEGRAM_WEBHOOK_MAX_BYTES:
+                parsed_content_length = int(content_length)
+                if parsed_content_length < 0:
+                    raise HTTPException(status_code=400, detail="Invalid content length.")
+                if parsed_content_length > settings.TELEGRAM_WEBHOOK_MAX_BYTES:
                     raise HTTPException(status_code=413, detail="Webhook payload is too large.")
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail="Invalid content length.") from exc
@@ -325,6 +292,8 @@ async def bot_webhook(
                 raise HTTPException(status_code=413, detail="Webhook payload is too large.")
             chunks.append(chunk)
         update_data = json.loads(b"".join(chunks))
+        if not isinstance(update_data, dict):
+            raise HTTPException(status_code=400, detail="Webhook JSON body must be an object.")
         telegram_update = types.Update(**update_data)
         update_id = telegram_update.update_id
     except (json.JSONDecodeError, ValidationError, TypeError, ValueError) as exc:
@@ -340,13 +309,16 @@ async def bot_webhook(
         return {"status": "ignored"}
 
     try:
-        if bot_type == "admin":
-            await admin_dp.feed_update(bot=admin_bot, update=telegram_update)
-        else:
-            await dp.feed_update(bot=bot, update=telegram_update)
+        async with AsyncSessionLocal() as session:
+            inserted = await enqueue_update(
+                session,
+                bot_type=bot_type,
+                update_id=telegram_update.update_id,
+                payload=update_data,
+            )
     except Exception as exc:
         module_logger.error(
-            "Webhook handler failed and may be retried.",
+            "Webhook inbox write failed.",
             extra=_webhook_request_fields(
                 request,
                 bot_type,
@@ -355,12 +327,17 @@ async def bot_webhook(
                 type(exc).__name__,
             ),
         )
-        raise HTTPException(status_code=503, detail="Webhook handling failed.") from exc
+        raise HTTPException(status_code=503, detail="Webhook inbox is unavailable.") from exc
     module_logger.info(
         "Telegram webhook request accepted.",
-        extra=_webhook_request_fields(request, bot_type, "accepted", update_id),
+        extra=_webhook_request_fields(
+            request,
+            bot_type,
+            "queued" if inserted else "duplicate",
+            update_id,
+        ),
     )
-    return {"status": "ok"}
+    return {"status": "queued" if inserted else "duplicate"}
 
 @app.get("/health")
 @app.get("/health/live")

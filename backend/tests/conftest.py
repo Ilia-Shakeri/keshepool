@@ -14,6 +14,8 @@ TEST_ENV = {
     "ADMIN_BOT_TOKEN": "123457:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
     "WEBHOOK_URL": "https://example.test",
     "WEBHOOK_SECRET": "test-webhook-secret",
+    "MAIN_TELEGRAM_WEBHOOK_SECRET": "test-main-webhook-secret",
+    "ADMIN_TELEGRAM_WEBHOOK_SECRET": "test-admin-webhook-secret",
     "WEB_APP_URL": "https://example.test",
     "ADMIN_API_KEY": "test-admin-key",
     "ADMIN_TELEGRAM_IDS": "123456",

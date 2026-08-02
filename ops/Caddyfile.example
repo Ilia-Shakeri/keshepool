@@ -14,6 +14,14 @@
 }
 
 keshepool.example.com {
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        Referrer-Policy "no-referrer"
+        Permissions-Policy "camera=(), microphone=(), geolocation=()"
+        X-Content-Type-Options "nosniff"
+        Content-Security-Policy-Report-Only "default-src 'self'; base-uri 'self'; connect-src 'self'; font-src 'self' data:; form-action 'self'; frame-ancestors 'self' https://web.telegram.org https://*.telegram.org; img-src 'self' data: https:; object-src 'none'; script-src 'self' https://telegram.org; style-src 'self' 'unsafe-inline'"
+    }
+
     log {
         output stdout
         format filter {
@@ -29,6 +37,22 @@ keshepool.example.com {
     }
 
     handle /health/ready {
+        reverse_proxy keshepool-backend:8000
+    }
+
+    handle /webhook/* {
+        reverse_proxy keshepool-backend:8000
+    }
+
+    handle /api/pay/tetra98/callback {
+        reverse_proxy keshepool-backend:8000
+    }
+
+    handle /api/pay/crypto/callback {
+        reverse_proxy keshepool-backend:8000
+    }
+
+    handle /static/* {
         reverse_proxy keshepool-backend:8000
     }
 

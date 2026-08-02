@@ -32,6 +32,12 @@ from app.models import Product, InventoryItem, ItemStatus, utcnow
 from app.bot.locales.translations import get_text
 from app.bot.states import ProductAdminStates
 from app.services.admin_audit_service import add_admin_audit, record_admin_audit
+from app.services.admin_authorization_service import (
+    AdminAuthorizationError,
+    consume_action_nonce,
+    issue_action_nonce,
+    require_action_role,
+)
 from app.services.cache_service import invalidate_catalog_cache, namespaced_key
 from app.services.catalog_service import (
     CatalogMutationError,
@@ -433,6 +439,19 @@ async def confirm_remove_one_product(callback: CallbackQuery, state: FSMContext)
 @products_router.callback_query(F.data == "remove_all_products")
 async def prompt_remove_all_products(callback: CallbackQuery, state: FSMContext):
     lang = await _lang(callback.from_user.id)
+    async with AsyncSessionLocal() as session:
+        if settings.ADMIN_RBAC_ENABLED:
+            await require_action_role(session, callback.from_user.id, "catalog.mass_remove")
+        nonce = await issue_action_nonce(
+            session,
+            actor_telegram_id=callback.from_user.id,
+            chat_id=callback.message.chat.id,
+            action="catalog.mass_remove",
+            target_type="catalog",
+            target_id="active",
+        )
+        await session.commit()
+    await state.update_data(admin_action_nonce=nonce)
     await state.set_state(ProductAdminStates.awaiting_all_products_confirmation)
     markup = InlineKeyboardMarkup(
         inline_keyboard=[
@@ -457,6 +476,18 @@ async def confirm_remove_all_products(message: Message, state: FSMContext):
 
     try:
         async with AsyncSessionLocal() as session:
+            data = await state.get_data()
+            if settings.ADMIN_RBAC_ENABLED:
+                await require_action_role(session, message.from_user.id, "catalog.mass_remove")
+            await consume_action_nonce(
+                session,
+                nonce=str(data.get("admin_action_nonce", "")),
+                actor_telegram_id=message.from_user.id,
+                chat_id=message.chat.id,
+                action="catalog.mass_remove",
+                target_type="catalog",
+                target_id="active",
+            )
             result = await session.execute(
                 select(Product.id).where(Product.is_active.is_(True)).with_for_update()
             )
@@ -477,6 +508,9 @@ async def confirm_remove_all_products(message: Message, state: FSMContext):
                 details={"product_count": len(product_ids)},
             )
             await commit_catalog_change(session)
+    except AdminAuthorizationError:
+        await message.answer(get_text(lang, "remove_all_phrase_wrong"), reply_markup=_cancel_markup(lang))
+        return
     except Exception as exc:
         logger.error("Remove all products failed: %s", exc, exc_info=True)
         await message.answer(get_text(lang, "db_error"), reply_markup=_cancel_markup(lang))

@@ -4,7 +4,12 @@ from pathlib import Path
 from sqlalchemy.dialects import postgresql
 
 from app.models import (
+    AdminActionNonce,
+    AdminApprovalRequest,
+    AdminApprovalVote,
     AdminAuditLog,
+    AdminIdentity,
+    AdminRoleGrant,
     CashoutRequest,
     CashoutRequestStatus,
     InventoryItem,
@@ -14,6 +19,7 @@ from app.models import (
     Transaction,
     TransactionStatus,
     TransactionType,
+    TelegramUpdateInbox,
 )
 
 
@@ -79,6 +85,32 @@ def test_admin_audit_json_default_matches_migration():
     server_default = AdminAuditLog.__table__.c.details.server_default
     assert server_default is not None
     assert str(server_default.arg) == "'{}'::json"
+
+
+def test_telegram_inbox_has_database_replay_and_claim_guards():
+    constraints = {constraint.name for constraint in TelegramUpdateInbox.__table__.constraints}
+    indexes = {index.name for index in TelegramUpdateInbox.__table__.indexes}
+    assert "uq_telegram_update_bot_id" in constraints
+    assert "ck_telegram_update_bot_type" in constraints
+    assert "ck_telegram_update_status" in constraints
+    assert "ix_telegram_update_claim" in indexes
+
+
+def test_admin_security_tables_have_database_guards():
+    assert AdminIdentity.__table__.c.telegram_id.unique is True
+    assert {constraint.name for constraint in AdminRoleGrant.__table__.constraints} >= {
+        "ck_admin_role_grant_role"
+    }
+    assert {constraint.name for constraint in AdminActionNonce.__table__.constraints} >= {
+        "uq_admin_action_nonce_hash"
+    }
+    assert {constraint.name for constraint in AdminApprovalRequest.__table__.constraints} >= {
+        "ck_admin_approval_required_count",
+        "ck_admin_approval_status",
+    }
+    assert {constraint.name for constraint in AdminApprovalVote.__table__.constraints} >= {
+        "uq_admin_approval_actor"
+    }
 
 
 def test_migration_uses_literal_enum_ddl_and_never_rebuilds_types():

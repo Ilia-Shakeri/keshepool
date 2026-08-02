@@ -1,6 +1,7 @@
 import asyncio
 import unittest
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
 from aiogram.enums import ChatMemberStatus
 from pydantic import ValidationError
@@ -17,6 +18,8 @@ def settings_values(**overrides):
         "ADMIN_BOT_TOKEN": "123457:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
         "WEBHOOK_URL": "https://example.test",
         "WEBHOOK_SECRET": "test-webhook-secret",
+        "MAIN_TELEGRAM_WEBHOOK_SECRET": "test-main-webhook-secret",
+        "ADMIN_TELEGRAM_WEBHOOK_SECRET": "test-admin-webhook-secret",
         "WEB_APP_URL": "https://example.test",
         "ADMIN_API_KEY": "test-admin-key",
         "ADMIN_TELEGRAM_IDS": "123456",
@@ -82,8 +85,32 @@ class AdminSettingsTests(unittest.TestCase):
             Settings(**values)
 
     def test_production_requires_telegram_webhook_secret(self):
-        with self.assertRaisesRegex(ValidationError, "WEBHOOK_SECRET"):
-            Settings(**settings_values(ENVIRONMENT="production", WEBHOOK_SECRET=""))
+        with self.assertRaisesRegex(ValidationError, "MAIN_TELEGRAM_WEBHOOK_SECRET"):
+            Settings(
+                **settings_values(
+                    ENVIRONMENT="production",
+                    MAIN_TELEGRAM_WEBHOOK_SECRET="",
+                )
+            )
+        with self.assertRaisesRegex(ValidationError, "must differ"):
+            Settings(
+                **settings_values(
+                    ENVIRONMENT="production",
+                    MAIN_TELEGRAM_WEBHOOK_SECRET="same-secret",
+                    ADMIN_TELEGRAM_WEBHOOK_SECRET="same-secret",
+                )
+            )
+
+    def test_legacy_webhook_secret_fallback_is_non_production_only(self):
+        configured = Settings(
+            **settings_values(
+                MAIN_TELEGRAM_WEBHOOK_SECRET="",
+                ADMIN_TELEGRAM_WEBHOOK_SECRET="",
+                WEBHOOK_SECRET="legacy-test-secret",
+            )
+        )
+        self.assertEqual(configured.main_telegram_webhook_secret, "legacy-test-secret")
+        self.assertEqual(configured.admin_telegram_webhook_secret, "legacy-test-secret")
 
     def test_production_rejects_insecure_development_auth(self):
         with self.assertRaisesRegex(ValidationError, "ALLOW_INSECURE_DEV_AUTH"):
@@ -113,17 +140,23 @@ class AdminFilterTests(unittest.TestCase):
         self.previous_admin_ids = settings.__dict__.get("admin_ids")
         self.previous_group_id = settings.ADMIN_GROUP_CHAT_ID
         self.previous_require_group_admin = settings.ADMIN_REQUIRE_GROUP_ADMIN
+        self.previous_rbac_enabled = settings.ADMIN_RBAC_ENABLED
         settings.__dict__["admin_ids"] = {"42"}
         settings.ADMIN_GROUP_CHAT_ID = "-100123"
         settings.ADMIN_REQUIRE_GROUP_ADMIN = False
+        settings.ADMIN_RBAC_ENABLED = False
+        self.role_patch = patch("app.bot.filters._has_durable_role", AsyncMock(return_value=False))
+        self.role_patch.start()
 
     def tearDown(self):
+        self.role_patch.stop()
         if self.previous_admin_ids is None:
             settings.__dict__.pop("admin_ids", None)
         else:
             settings.__dict__["admin_ids"] = self.previous_admin_ids
         settings.ADMIN_GROUP_CHAT_ID = self.previous_group_id
         settings.ADMIN_REQUIRE_GROUP_ADMIN = self.previous_require_group_admin
+        settings.ADMIN_RBAC_ENABLED = self.previous_rbac_enabled
 
     def event(self, user_id, chat_id, chat_type, status):
         return SimpleNamespace(
@@ -144,6 +177,12 @@ class AdminFilterTests(unittest.TestCase):
         event = self.event(99, 99, "private", ChatMemberStatus.MEMBER)
         self.assertFalse(self.authorize(event))
         self.assertEqual(event.bot.calls, [])
+
+    def test_durable_role_can_use_private_chat(self):
+        settings.ADMIN_RBAC_ENABLED = True
+        with patch("app.bot.filters._has_durable_role", AsyncMock(return_value=True)):
+            event = self.event(99, 99, "private", ChatMemberStatus.MEMBER)
+            self.assertTrue(self.authorize(event))
 
     def test_ordinary_group_member_is_allowed_by_default(self):
         event = self.event(42, -100123, "supergroup", ChatMemberStatus.MEMBER)

@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.users import current_user
+from app.api.users import current_fresh_user, current_user
 from app.core.config import settings
 from app.core.database import get_db
 from app.models import CashoutRequest, CashoutRequestStatus, Notification, User
@@ -115,7 +115,7 @@ async def _notify_admins(
 @router.post("")
 async def create_cashout_request(
     payload: CashoutRequestCreate,
-    user: User = Depends(current_user),
+    user: User = Depends(current_fresh_user),
     db: AsyncSession = Depends(get_db),
 ):
     # Rate limit: 5 cashout submissions per user per hour

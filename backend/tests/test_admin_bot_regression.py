@@ -14,7 +14,7 @@ from app.bot.handlers import admin_panel, products_admin
 from app.bot.locales.translations import get_text
 
 
-def make_request(payload) -> Request:
+def make_request(payload, content_type="application/json") -> Request:
     body = payload if isinstance(payload, bytes) else json.dumps(payload).encode()
     sent = False
 
@@ -30,7 +30,7 @@ def make_request(payload) -> Request:
             "type": "http",
             "method": "POST",
             "path": "/webhook/admin",
-            "headers": [],
+            "headers": [(b"content-type", content_type.encode("ascii"))],
             "state": {"request_id": "request-1234"},
         },
         receive,
@@ -104,19 +104,24 @@ def test_webhook_status_fields_do_not_expose_url_or_secret():
     assert "secret" not in fields
 
 
-@pytest.mark.parametrize("bot_type, dispatcher_name", [("admin", "admin_dp"), ("main", "dp")])
-def test_valid_webhook_update_uses_matching_dispatcher(monkeypatch, bot_type, dispatcher_name):
-    dispatcher = AsyncMock()
-    monkeypatch.setattr(main, dispatcher_name, dispatcher)
+@pytest.mark.parametrize("bot_type", ["admin", "main"])
+def test_valid_webhook_update_is_queued(monkeypatch, bot_type):
+    enqueue = AsyncMock(return_value=True)
+    monkeypatch.setattr(main, "enqueue_update", enqueue)
     response = asyncio.run(
         main.bot_webhook(
             bot_type,
             make_request({"update_id": 1001}),
-            main.settings.WEBHOOK_SECRET,
+            (
+                main.settings.admin_telegram_webhook_secret
+                if bot_type == "admin"
+                else main.settings.main_telegram_webhook_secret
+            ),
         )
     )
-    assert response == {"status": "ok"}
-    dispatcher.feed_update.assert_awaited_once()
+    assert response == {"status": "queued"}
+    assert enqueue.await_args.kwargs["bot_type"] == bot_type
+    assert enqueue.await_args.kwargs["update_id"] == 1001
 
 
 @pytest.mark.parametrize("secret", [None, "wrong-secret"])
@@ -126,9 +131,35 @@ def test_missing_or_incorrect_webhook_secret_returns_401(secret):
     assert raised.value.status_code == 401
 
 
+def test_webhook_requires_json_content_type_and_object_body():
+    with pytest.raises(HTTPException) as wrong_type:
+        asyncio.run(
+            main.bot_webhook(
+                "admin",
+                make_request({"update_id": 1}, "text/plain"),
+                main.settings.admin_telegram_webhook_secret,
+            )
+        )
+    assert wrong_type.value.status_code == 415
+
+    with pytest.raises(HTTPException) as wrong_shape:
+        asyncio.run(
+            main.bot_webhook(
+                "admin",
+                make_request([]),
+                main.settings.admin_telegram_webhook_secret,
+            )
+        )
+    assert wrong_shape.value.status_code == 400
+
+
 def test_malformed_webhook_payload_is_safely_ignored():
     response = asyncio.run(
-        main.bot_webhook("admin", make_request(b"not-json"), main.settings.WEBHOOK_SECRET)
+        main.bot_webhook(
+            "admin",
+            make_request(b"not-json"),
+            main.settings.admin_telegram_webhook_secret,
+        )
     )
     assert response == {"status": "ignored"}
 
@@ -140,22 +171,48 @@ def test_oversized_webhook_payload_returns_413(monkeypatch):
             main.bot_webhook(
                 "admin",
                 make_request(b"x" * 33),
-                main.settings.WEBHOOK_SECRET,
+                main.settings.admin_telegram_webhook_secret,
             )
         )
     assert raised.value.status_code == 413
 
 
-def test_webhook_handler_failure_returns_503(monkeypatch):
-    dispatcher = AsyncMock()
-    dispatcher.feed_update.side_effect = RuntimeError("handler failed")
-    monkeypatch.setattr(main, "admin_dp", dispatcher)
+def test_webhook_inbox_failure_returns_503(monkeypatch):
+    monkeypatch.setattr(
+        main,
+        "enqueue_update",
+        AsyncMock(side_effect=RuntimeError("database unavailable")),
+    )
     with pytest.raises(HTTPException) as raised:
         asyncio.run(
             main.bot_webhook(
                 "admin",
                 make_request({"update_id": 1002}),
-                main.settings.WEBHOOK_SECRET,
+                main.settings.admin_telegram_webhook_secret,
             )
         )
     assert raised.value.status_code == 503
+
+
+def test_duplicate_webhook_update_is_acknowledged(monkeypatch):
+    monkeypatch.setattr(main, "enqueue_update", AsyncMock(return_value=False))
+    response = asyncio.run(
+        main.bot_webhook(
+            "admin",
+            make_request({"update_id": 1004}),
+            main.settings.admin_telegram_webhook_secret,
+        )
+    )
+    assert response == {"status": "duplicate"}
+
+
+def test_main_webhook_secret_cannot_reach_admin_dispatcher():
+    with pytest.raises(HTTPException) as raised:
+        asyncio.run(
+            main.bot_webhook(
+                "admin",
+                make_request({"update_id": 1003}),
+                main.settings.main_telegram_webhook_secret,
+            )
+        )
+    assert raised.value.status_code == 401

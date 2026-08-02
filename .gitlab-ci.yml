@@ -39,6 +39,19 @@ secret_scan:
     - gitleaks git . --config .gitleaks.toml --redact --verbose
     - gitleaks dir . --config .gitleaks.toml --redact --verbose
 
+source_export:
+  stage: validate
+  image:
+    name: ghcr.io/gitleaks/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f
+    entrypoint: [""]
+  script:
+    - sh scripts/export-source.sh keshepool-source.tar.gz
+  artifacts:
+    name: "keshepool-source-$CI_COMMIT_SHA"
+    paths:
+      - keshepool-source.tar.gz
+    expire_in: 1 day
+
 backend_tests:
   stage: test
   image: python:3.11-slim
@@ -68,6 +81,7 @@ backend_tests:
     - pip install --no-cache-dir -r backend/requirements-dev.txt
     - mkdir -p "$ASSET_ROOT"
   script:
+    - python scripts/check_repository_hygiene.py
     - cd backend
     - python -m compileall app tests
     - python -m pyflakes app alembic tests scripts
@@ -92,6 +106,20 @@ frontend_checks:
     - ./node_modules/.bin/eslint .
     - npm run build
 
+clean_export_build:
+  stage: test
+  image: docker:27-cli
+  services:
+    - name: docker:27-dind
+      alias: docker
+  needs:
+    - source_export
+  script:
+    - mkdir clean-source
+    - tar -xzf keshepool-source.tar.gz -C clean-source
+    - docker build --pull -t keshepool/backend:clean-export clean-source/backend
+    - docker build --pull --build-arg BACKEND_INTERNAL_URL=http://backend:8000 --build-arg NEXT_PUBLIC_API_URL=/api --build-arg DEPLOYMENT_VERSION="$CI_COMMIT_SHA" -t keshepool/frontend:clean-export clean-source/frontend
+
 publish_images:
   stage: publish
   image: docker:27-cli
@@ -103,6 +131,7 @@ publish_images:
     - secret_scan
     - backend_tests
     - frontend_checks
+    - clean_export_build
   before_script:
     - printf '%s' "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
   script:

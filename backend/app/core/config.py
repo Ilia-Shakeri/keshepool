@@ -1,9 +1,14 @@
+import hmac
+import logging
 from functools import cached_property
 from typing import Literal, Set
 from urllib.parse import urlparse
 
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+logger = logging.getLogger(__name__)
 
 
 class Settings(BaseSettings):
@@ -15,6 +20,8 @@ class Settings(BaseSettings):
     TELEGRAM_BOT_MODE: Literal["webhook", "polling", "disabled"] = "webhook"
     WEBHOOK_URL: str = ""
     WEBHOOK_SECRET: str = ""
+    MAIN_TELEGRAM_WEBHOOK_SECRET: str = ""
+    ADMIN_TELEGRAM_WEBHOOK_SECRET: str = ""
     WEB_APP_URL: str
     BOT_USERNAME: str = Field(default="keshepoolbot")
     TETRA98_API_URL: str = ""
@@ -25,6 +32,7 @@ class Settings(BaseSettings):
     ADMIN_TELEGRAM_IDS: str = ""
     ADMIN_GROUP_CHAT_ID: str = ""
     ADMIN_REQUIRE_GROUP_ADMIN: bool = Field(default=False)
+    ADMIN_RBAC_ENABLED: bool = Field(default=False)
     ADMIN_REPORT_LANGUAGE: Literal["fa", "en"] = "fa"
     ADMIN_FSM_TTL_SECONDS: int = Field(default=3600, ge=300, le=86400)
     TZ: str = "Asia/Tehran"
@@ -34,10 +42,17 @@ class Settings(BaseSettings):
     PUBLIC_ASSET_BASE_URL: str = "/static"
     SUPPORT_TELEGRAM_USERNAME: str = ""
     ALLOW_INSECURE_DEV_AUTH: bool = Field(default=False)
-    TELEGRAM_AUTH_MAX_AGE_SECONDS: int = Field(default=86400, ge=60)
+    TELEGRAM_AUTH_MAX_AGE_SECONDS: int = Field(default=3600, ge=300, le=86400)
+    TELEGRAM_FINANCIAL_AUTH_MAX_AGE_SECONDS: int = Field(default=300, ge=60, le=900)
+    AUTH_SESSION_EPOCH: str = Field(default="1", min_length=1, max_length=64, pattern=r"^[A-Za-z0-9._-]+$")
     TELEGRAM_AUTH_FUTURE_SKEW_SECONDS: int = Field(default=60, ge=0)
     TELEGRAM_INIT_DATA_MAX_BYTES: int = Field(default=8192, ge=1024, le=65536)
     TELEGRAM_WEBHOOK_MAX_BYTES: int = Field(default=1_048_576, ge=1024, le=10_485_760)
+    TELEGRAM_INBOX_BATCH_SIZE: int = Field(default=20, ge=1, le=100)
+    TELEGRAM_INBOX_POLL_SECONDS: float = Field(default=0.5, ge=0.1, le=10)
+    TELEGRAM_INBOX_STALE_SECONDS: int = Field(default=300, ge=30, le=3600)
+    TELEGRAM_INBOX_MAX_ATTEMPTS: int = Field(default=8, ge=1, le=50)
+    TELEGRAM_INBOX_RETRY_SECONDS: int = Field(default=10, ge=1, le=600)
     USER_LAST_SEEN_WRITE_INTERVAL_SECONDS: int = Field(default=300, ge=60)
     CACHE_NAMESPACE: str = Field(default="keshepool", min_length=1)
     CATALOG_CACHE_TTL_SECONDS: int = Field(default=30, ge=5, le=300)
@@ -45,6 +60,7 @@ class Settings(BaseSettings):
     REDIS_CONNECT_TIMEOUT_SECONDS: float = Field(default=2.0, gt=0)
     REDIS_SOCKET_TIMEOUT_SECONDS: float = Field(default=2.0, gt=0)
     TRUSTED_PROXY_IPS: str = Field(default="127.0.0.1")
+    CSP_REPORT_ONLY: bool = Field(default=True)
     USDT_TO_IRR_RATE: int = Field(default=85000, description="USDT to تومان exchange rate (تومان per 1 USDT)")
     TETRA98_SIG_HEADER: str = Field(default="X-Tetra98-Signature", description="Header name Tetra98 uses for HMAC signature")
 
@@ -60,8 +76,15 @@ class Settings(BaseSettings):
             if self.ALLOW_INSECURE_DEV_AUTH:
                 raise ValueError("ALLOW_INSECURE_DEV_AUTH cannot be enabled in production.")
 
-            if not self.WEBHOOK_SECRET:
-                raise ValueError("WEBHOOK_SECRET must be configured in production.")
+            if not self.MAIN_TELEGRAM_WEBHOOK_SECRET.strip():
+                raise ValueError("MAIN_TELEGRAM_WEBHOOK_SECRET must be configured in production.")
+            if not self.ADMIN_TELEGRAM_WEBHOOK_SECRET.strip():
+                raise ValueError("ADMIN_TELEGRAM_WEBHOOK_SECRET must be configured in production.")
+            if hmac.compare_digest(
+                self.MAIN_TELEGRAM_WEBHOOK_SECRET.strip(),
+                self.ADMIN_TELEGRAM_WEBHOOK_SECRET.strip(),
+            ):
+                raise ValueError("Main and admin Telegram webhook secrets must differ in production.")
 
             webhook_url = urlparse(self.WEBHOOK_URL.strip())
             if webhook_url.scheme != "https" or not webhook_url.netloc:
@@ -122,8 +145,22 @@ class Settings(BaseSettings):
         if self.TELEGRAM_BOT_MODE == "webhook":
             if not self.WEBHOOK_URL.strip():
                 raise ValueError("WEBHOOK_URL is required in webhook mode.")
-            if not self.WEBHOOK_SECRET.strip():
-                raise ValueError("WEBHOOK_SECRET is required in webhook mode.")
+            if not self.main_telegram_webhook_secret:
+                raise ValueError("Main Telegram webhook secret is required in webhook mode.")
+            if not self.admin_telegram_webhook_secret:
+                raise ValueError("Admin Telegram webhook secret is required in webhook mode.")
+
+        if (
+            self.ENVIRONMENT.lower() != "production"
+            and self.WEBHOOK_SECRET.strip()
+            and (
+                not self.MAIN_TELEGRAM_WEBHOOK_SECRET.strip()
+                or not self.ADMIN_TELEGRAM_WEBHOOK_SECRET.strip()
+            )
+        ):
+            logger.warning(
+                "WEBHOOK_SECRET compatibility fallback is deprecated; configure separate main and admin secrets."
+            )
 
         return self
 
@@ -143,6 +180,20 @@ class Settings(BaseSettings):
     @property
     def tetra98_callback_url(self) -> str:
         return f"{self.WEBHOOK_URL.rstrip('/')}/api/pay/tetra98/callback"
+
+    @property
+    def main_telegram_webhook_secret(self) -> str:
+        configured = self.MAIN_TELEGRAM_WEBHOOK_SECRET.strip()
+        if configured:
+            return configured
+        return self.WEBHOOK_SECRET.strip() if self.ENVIRONMENT.lower() != "production" else ""
+
+    @property
+    def admin_telegram_webhook_secret(self) -> str:
+        configured = self.ADMIN_TELEGRAM_WEBHOOK_SECRET.strip()
+        if configured:
+            return configured
+        return self.WEBHOOK_SECRET.strip() if self.ENVIRONMENT.lower() != "production" else ""
 
     @property
     def web_app_origin(self) -> str:

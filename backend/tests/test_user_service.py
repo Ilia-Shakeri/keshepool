@@ -1,6 +1,9 @@
 import asyncio
 from datetime import datetime, timezone
 
+import pytest
+from fastapi import HTTPException
+
 from app.models import User, Wallet
 from app.services.user_service import ensure_user_from_telegram_init, parse_telegram_user
 
@@ -120,6 +123,12 @@ class FakeBootstrapSession:
 def test_development_user_id_zero_is_valid():
     parsed = parse_telegram_user({"user": {"id": 0, "first_name": "Development"}})
     assert parsed["id"] == 0
+
+
+@pytest.mark.parametrize("user_id", [True, -1, "01", "9" * 21, "not-a-number"])
+def test_telegram_user_id_has_bounded_numeric_shape(user_id):
+    with pytest.raises(HTTPException, match="invalid"):
+        parse_telegram_user({"user": {"id": user_id}})
 
 
 def test_twelve_concurrent_bootstraps_create_one_user_and_wallet():

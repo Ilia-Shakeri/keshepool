@@ -19,10 +19,7 @@ export default function TelegramBootstrap() {
     webApp.expand();
     webApp.ready();
 
-    const startParam = webApp.initDataUnsafe?.start_param || "";
-    const referrerTelegramId = startParam.startsWith("ref_") ? startParam.slice(4) : null;
-
-    return bootstrapUser(referrerTelegramId)
+    return bootstrapUser()
       .then(() => undefined)
       .catch((error: unknown) => {
         setErrorMessage(error instanceof Error ? error.message : "نشست کاربری آماده نشد. دوباره تلاش کنید.");

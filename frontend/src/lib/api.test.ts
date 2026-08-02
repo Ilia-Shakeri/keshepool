@@ -8,14 +8,15 @@ test("concurrent reads share one bootstrap and one matching read", async (contex
   let bootstrapCalls = 0;
   let productCalls = 0;
   let checkoutCalls = 0;
+  let bootstrapBody: Record<string, unknown> | null = null;
   let checkoutHeader = "";
   let checkoutBody: Record<string, unknown> | null = null;
 
-  const webApp = {
+  const webAppState = {
     initData: "signed-init-data",
-    initDataUnsafe: { start_param: "ref_42" },
     showAlert: () => undefined,
-  } as unknown as TelegramWebApp;
+  };
+  const webApp = webAppState as unknown as TelegramWebApp;
 
   Object.defineProperty(globalThis, "window", {
     configurable: true,
@@ -26,6 +27,7 @@ test("concurrent reads share one bootstrap and one matching read", async (contex
     const url = String(input);
     if (url.endsWith("/me/bootstrap")) {
       bootstrapCalls += 1;
+      bootstrapBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
       return new Response(JSON.stringify({ user: {}, walletBalance: 0, orderCount: 0, activeOrderCount: 0 }), {
         status: 200,
         headers: { "Content-Type": "application/json" },
@@ -65,9 +67,12 @@ test("concurrent reads share one bootstrap and one matching read", async (contex
   await Promise.all(Array.from({ length: 10 }, () => getProducts()));
   await checkoutWithWallet("product-1", "variant-1", "checkout-key-123");
   await getProducts();
+  webAppState.initData = "signed-init-data-for-next-user";
+  await getProducts();
 
-  assert.equal(bootstrapCalls, 1);
-  assert.equal(productCalls, 2);
+  assert.equal(bootstrapCalls, 2);
+  assert.deepEqual(bootstrapBody, {});
+  assert.equal(productCalls, 3);
   assert.equal(checkoutCalls, 1);
   assert.equal(checkoutHeader, "checkout-key-123");
   assert.deepEqual(checkoutBody, {

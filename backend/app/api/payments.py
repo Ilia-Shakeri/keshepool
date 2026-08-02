@@ -14,7 +14,7 @@ from redis.exceptions import RedisError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.users import current_user
+from app.api.users import current_fresh_user, current_user
 from app.core.config import settings
 from app.core.database import get_db
 from app.core.redis import redis_client
@@ -295,7 +295,7 @@ class Tetra98PaymentRequest(BaseModel):
 @router.post("/tetra98")
 async def create_tetra98_payment(
     payload: Tetra98PaymentRequest,
-    user: User = Depends(current_user),
+    user: User = Depends(current_fresh_user),
     db: AsyncSession = Depends(get_db),
 ):
     rate_limit = await check_rate_limit(
@@ -796,7 +796,7 @@ async def get_crypto_deposit_address(user: User = Depends(current_user)):
 @router.post("/crypto/initiate")
 async def initiate_crypto_deposit(
     payload: CryptoDepositRequest,
-    user: User = Depends(current_user),
+    user: User = Depends(current_fresh_user),
     db: AsyncSession = Depends(get_db),
 ):
     rate_limit = await check_rate_limit(

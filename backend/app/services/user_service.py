@@ -1,4 +1,5 @@
 import json
+import re
 from datetime import timezone
 from typing import Any, Dict, Optional
 
@@ -26,6 +27,12 @@ def parse_telegram_user(telegram_data: Dict[str, Any]) -> Dict[str, Any]:
 
     if "id" not in user or user["id"] in (None, ""):
         raise HTTPException(status_code=401, detail="Telegram user id is missing.")
+    raw_user_id = user["id"]
+    if isinstance(raw_user_id, bool) or not re.fullmatch(
+        r"(?:0|[1-9][0-9]{0,19})",
+        str(raw_user_id),
+    ):
+        raise HTTPException(status_code=401, detail="Telegram user id is invalid.")
     return user
 
 

@@ -55,6 +55,8 @@ const REQUEST_TIMEOUT_MS = 12_000;
 const pendingReads = new Map<string, Promise<unknown>>();
 const cachedReads = new Map<string, { expiresAt: number; value: unknown }>();
 let bootstrapPromise: Promise<BootstrapProfile> | null = null;
+let activeSessionFingerprint = "";
+let cacheGeneration = 0;
 const READ_TTL_MS: Record<string, number> = {
   "/config": 300_000,
   "/products": 10_000,
@@ -68,8 +70,33 @@ const READ_TTL_MS: Record<string, number> = {
   "/pay/crypto/deposit-address": 300_000,
 };
 
+function fingerprintSession(initData: string): string {
+  let hash = 2166136261;
+  for (let index = 0; index < initData.length; index += 1) {
+    hash ^= initData.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return `${initData.length}:${(hash >>> 0).toString(36)}`;
+}
+
+function ensureSessionScope(): number {
+  const nextFingerprint = fingerprintSession(getTelegramInitData());
+  if (nextFingerprint !== activeSessionFingerprint) {
+    activeSessionFingerprint = nextFingerprint;
+    cacheGeneration += 1;
+    pendingReads.clear();
+    cachedReads.clear();
+    bootstrapPromise = null;
+  }
+  return cacheGeneration;
+}
+
+function scopedCacheKey(path: string): string {
+  return `${activeSessionFingerprint}:${path}`;
+}
+
 function clearCachedPaths(paths: string[]): void {
-  for (const path of paths) cachedReads.delete(path);
+  for (const path of paths) cachedReads.delete(scopedCacheKey(path));
 }
 
 function invalidateAfterWrite(path: string): void {
@@ -101,11 +128,6 @@ export function getTelegramUserId(): string | null {
   return id ? String(id) : null;
 }
 
-function getReferrerTelegramId(): string | null {
-  const startParam = window.Telegram?.WebApp?.initDataUnsafe?.start_param || "";
-  return startParam.startsWith("ref_") ? startParam.slice(4) : null;
-}
-
 function mapApiError(status: number, detail?: unknown): string {
   if (typeof detail === "string" && /[\u0600-\u06ff]/.test(detail)) return detail;
 
@@ -129,6 +151,7 @@ function mapApiError(status: number, detail?: unknown): string {
 }
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+  ensureSessionScope();
   const initData = getTelegramInitData();
 
   const controller = new AbortController();
@@ -180,12 +203,13 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   return response.json() as Promise<T>;
 }
 
-export function startBootstrap(referrerTelegramId?: string | null): Promise<BootstrapProfile> {
+export function startBootstrap(): Promise<BootstrapProfile> {
+  ensureSessionScope();
   if (bootstrapPromise) return bootstrapPromise;
 
   const currentPromise = request<BootstrapProfile>("/me/bootstrap", {
     method: "POST",
-    body: JSON.stringify({ referrerTelegramId: referrerTelegramId || null }),
+    body: JSON.stringify({}),
   });
   bootstrapPromise = currentPromise;
   void currentPromise.catch(() => {
@@ -194,12 +218,13 @@ export function startBootstrap(referrerTelegramId?: string | null): Promise<Boot
   return currentPromise;
 }
 
-export function bootstrapUser(referrerTelegramId?: string | null) {
-  return startBootstrap(referrerTelegramId);
+export function bootstrapUser() {
+  return startBootstrap();
 }
 
 export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
-  await startBootstrap(getReferrerTelegramId());
+  await startBootstrap();
+  const requestGeneration = ensureSessionScope();
 
   const method = (init.method || "GET").toUpperCase();
   if (method !== "GET") {
@@ -208,21 +233,24 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
     return result;
   }
 
-  const cached = cachedReads.get(path);
+  const cacheKey = scopedCacheKey(path);
+  const cached = cachedReads.get(cacheKey);
   if (cached && cached.expiresAt > Date.now()) return cached.value as T;
-  if (cached) cachedReads.delete(path);
+  if (cached) cachedReads.delete(cacheKey);
 
-  const existing = pendingReads.get(path) as Promise<T> | undefined;
+  const existing = pendingReads.get(cacheKey) as Promise<T> | undefined;
   if (existing) return existing;
 
   const current = request<T>(path, init).then((value) => {
     const ttl = READ_TTL_MS[path] || 0;
-    if (ttl > 0) cachedReads.set(path, { expiresAt: Date.now() + ttl, value });
+    if (ttl > 0 && requestGeneration === cacheGeneration) {
+      cachedReads.set(cacheKey, { expiresAt: Date.now() + ttl, value });
+    }
     return value;
   });
-  pendingReads.set(path, current);
+  pendingReads.set(cacheKey, current);
   const removePending = () => {
-    if (pendingReads.get(path) === current) pendingReads.delete(path);
+    if (pendingReads.get(cacheKey) === current) pendingReads.delete(cacheKey);
   };
   void current.then(removePending, removePending);
   return current;

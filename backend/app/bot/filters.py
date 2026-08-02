@@ -6,12 +6,19 @@ from aiogram.filters import BaseFilter
 from aiogram.types import CallbackQuery, Message
 
 from app.core.config import settings
+from app.core.database import AsyncSessionLocal
+from app.services.admin_authorization_service import effective_roles
 
 logger = logging.getLogger(__name__)
 
 
 def _log_rejection(reason: str) -> None:
     logger.info("Admin authorization rejected.", extra={"rejection_reason": reason})
+
+
+async def _has_durable_role(telegram_id: int) -> bool:
+    async with AsyncSessionLocal() as session:
+        return bool(await effective_roles(session, telegram_id))
 
 
 class IsAdminFilter(BaseFilter):
@@ -28,10 +35,21 @@ class IsAdminFilter(BaseFilter):
         chat_id = str(getattr(chat, "id", ""))
         chat_type = getattr(chat, "type", "")
 
-        # Every admin action requires an explicit user allowlist entry.
         if str(user.id) not in settings.admin_ids:
-            _log_rejection("user_not_allowlisted")
-            return False
+            if not settings.ADMIN_RBAC_ENABLED:
+                _log_rejection("user_not_allowlisted")
+                return False
+            try:
+                has_role = await _has_durable_role(user.id)
+            except Exception as exc:
+                logger.warning(
+                    "Durable admin authorization failed closed.",
+                    extra={"exception_class": type(exc).__name__},
+                )
+                has_role = False
+            if not has_role:
+                _log_rejection("user_has_no_active_role")
+                return False
 
         if chat_type == "private":
             return True

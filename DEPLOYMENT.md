@@ -89,7 +89,7 @@ The production job is manual and serialized. It copies only the revision's Compo
 
 ## Admin authorization
 
-`ADMIN_TELEGRAM_IDS` is the only user allowlist. It must contain numeric Telegram user IDs separated by commas. Private chat stays available to listed operators. `ADMIN_GROUP_CHAT_ID` is optional and, when set, is the only group accepted by the administrator bot. `ADMIN_REQUIRE_GROUP_ADMIN=false` allows listed ordinary group members. Set it to `true` only when each operator must also be a Telegram administrator or creator. Group role or username alone never grants access.
+`ADMIN_TELEGRAM_IDS` bootstraps break-glass superadmins and must contain numeric Telegram user IDs separated by commas. Durable role grants remain disabled until migration `008` is applied and reviewed. Keep `ADMIN_RBAC_ENABLED=false` during the expand release; a later cutover may enable active database grants. Private chat stays available to authorized operators. `ADMIN_GROUP_CHAT_ID` is optional and, when set, is the only group accepted by the administrator bot. `ADMIN_REQUIRE_GROUP_ADMIN=false` allows authorized ordinary group members. Set it to `true` only when each operator must also be a Telegram administrator or creator. Group role or username alone never grants access.
 
 The administrator bot can remain an ordinary group member. Add it to the configured group, keep privacy mode enabled if desired, and use `/start`, commands, inline buttons, and forced replies. Persistent private-chat keyboards are not shown in groups. Bot creation, privacy-mode settings, and group membership are external operator steps and cannot be changed by this repository.
 
@@ -98,6 +98,16 @@ FSM state is stored in Redis with bot-aware keys and `ADMIN_FSM_TTL_SECONDS`. `C
 `ENABLE_INTERNAL_ADMIN_API=false` keeps `/api/admin` routes absent by default. If a trusted server-side integration needs them, enable the flag and set `ADMIN_API_KEY`. The frontend proxy always strips `X-Admin-Token`, so this key must never be sent by browser code.
 
 Tetra callbacks are authenticated through server-side payment verification using `TETRA98_API_KEY`; no undocumented signature header is assumed. A configured `CRYPTO_DEPOSIT_ADDRESS_USDT` requires `CRYPTO_WEBHOOK_SECRET`.
+
+Main and admin bot webhooks require distinct `MAIN_TELEGRAM_WEBHOOK_SECRET` and `ADMIN_TELEGRAM_WEBHOOK_SECRET` values in production. The old `WEBHOOK_SECRET` setting is accepted only outside production for a short compatibility window. Increase `AUTH_SESSION_EPOCH` after bot-token rotation or incident response to invalidate cached signed sessions. General sessions last one hour by default; checkout, deposits, and cashout creation require init data no older than five minutes, so users may need to close and reopen the Mini App before a money action.
+
+API startup does not call Telegram. After a deploy or webhook-setting change, run the explicit idempotent configuration job:
+
+```sh
+docker compose --profile ops run --rm telegram-configure
+```
+
+The `telegram-worker` service drains the PostgreSQL inbox. Do not route production webhook traffic until the worker is healthy and revision `007` is applied.
 
 Set `USDT_TO_IRR_RATE` to a positive, operator-reviewed Toman fallback. It is used only when the manual override, cached live rate, and both live market sources are unavailable.
 
