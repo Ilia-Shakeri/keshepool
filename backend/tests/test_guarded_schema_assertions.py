@@ -83,3 +83,25 @@ def test_predicate_normalization_is_stable():
     assert migration._normalize_predicate('(("idempotency_key" IS NOT NULL))') == (
         "idempotency_key is not null"
     )
+
+
+def test_constraint_kind_is_compared_as_text_for_asyncpg():
+    migration = load_migration()
+    captured = {}
+
+    class Result:
+        def mappings(self):
+            return ()
+
+    class Connection:
+        def execute(self, statement, parameters):
+            captured["sql"] = str(statement)
+            captured["parameters"] = parameters
+            return Result()
+
+    assert migration._constraint_shape(Connection(), "cashout_requests", "p") == set()
+    assert "con.contype::text = :kind" in captured["sql"]
+    assert captured["parameters"] == {
+        "table_name": "cashout_requests",
+        "kind": "p",
+    }

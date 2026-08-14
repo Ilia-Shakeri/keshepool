@@ -128,7 +128,7 @@ def _constraint_shape(conn, table_name: str, kind: str):
             "JOIN pg_namespace ns ON ns.oid = rel.relnamespace "
             "LEFT JOIN pg_class ref ON ref.oid = con.confrelid "
             "WHERE ns.nspname = 'public' AND rel.relname = :table_name "
-            "AND con.contype = :kind"
+            "AND con.contype::text = :kind"
         ),
         {"table_name": table_name, "kind": kind},
     ).mappings()
