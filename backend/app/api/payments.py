@@ -4,22 +4,26 @@ import json
 import logging
 import re
 import secrets
+from typing import Annotated
 from decimal import Decimal, InvalidOperation
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, parse_qsl, urlparse
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Request, UploadFile, status
 from pydantic import BaseModel, Field
 from redis.exceptions import RedisError
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.users import current_fresh_user, current_user
 from app.core.config import settings
 from app.core.database import get_db
 from app.core.redis import redis_client
+from app.core.money import DecimalValidationError, quantized_decimal
 from app.services.rate_service import get_usdt_rate
 from app.models import (
+    CardTransferReceipt,
     Transaction,
     TransactionStatus,
     TransactionType,
@@ -29,6 +33,12 @@ from app.models import (
 from app.services.inventory_service import fulfill_wallet_order
 from app.services.cache_service import check_rate_limit, invalidate_catalog_cache, namespaced_key
 from app.services.wallet_service import to_decimal
+from app.services.card_transfer_service import (
+    CardTransferReceiptError,
+    dispatch_card_transfer_notifications,
+    queue_card_transfer_admin_deliveries,
+    sanitize_card_transfer_receipt,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +48,39 @@ PURCHASE_INTENT_TTL = 1800  # 30 minutes
 CRYPTO_WEBHOOK_LOCK_TTL = 120
 CRYPTO_WEBHOOK_PROCESSED_TTL = 7 * 24 * 60 * 60
 USDT_QUANTUM = Decimal("0.000001")
+MAX_USDT_DEPOSIT = Decimal("1000000")
+
+
+def _parse_callback_object(
+    raw_body: bytes,
+    content_type: str,
+    *,
+    allow_form: bool,
+) -> dict[str, object]:
+    media_type = content_type.partition(";")[0].strip().lower()
+    if media_type == "application/json":
+        try:
+            value = json.loads(raw_body)
+        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+            raise HTTPException(status_code=400, detail="Invalid JSON payload.") from exc
+        if not isinstance(value, dict):
+            raise HTTPException(status_code=400, detail="Callback payload must be an object.")
+        return value
+    if allow_form and media_type == "application/x-www-form-urlencoded":
+        try:
+            decoded = raw_body.decode("utf-8", errors="strict")
+            pairs = parse_qsl(
+                decoded,
+                keep_blank_values=True,
+                strict_parsing=True,
+                max_num_fields=32,
+            )
+        except (UnicodeDecodeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail="Unreadable callback payload.") from exc
+        if len({key for key, _ in pairs}) != len(pairs):
+            raise HTTPException(status_code=400, detail="Duplicate callback field.")
+        return dict(pairs)
+    raise HTTPException(status_code=415, detail="Unsupported callback content type.")
 
 
 def _purchase_intent_key(tx_id: int) -> str:
@@ -159,8 +202,13 @@ def _require_production_webhook_secret(secret: str, gateway: str) -> None:
 
 def _usdt_amount(value: object) -> Decimal:
     try:
-        return Decimal(str(value)).quantize(USDT_QUANTUM)
-    except (InvalidOperation, TypeError, ValueError) as exc:
+        return quantized_decimal(
+            value,
+            USDT_QUANTUM,
+            minimum=USDT_QUANTUM,
+            maximum=MAX_USDT_DEPOSIT,
+        )
+    except DecimalValidationError as exc:
         raise HTTPException(status_code=400, detail="Invalid USDT amount.") from exc
 
 
@@ -298,6 +346,9 @@ async def create_tetra98_payment(
     user: User = Depends(current_fresh_user),
     db: AsyncSession = Depends(get_db),
 ):
+    if not settings.TETRA98_ENABLED:
+        raise HTTPException(status_code=503, detail="Tetra98 payment initiation is disabled.")
+
     rate_limit = await check_rate_limit(
         "payment-tetra98",
         user.telegram_id,
@@ -417,6 +468,90 @@ async def create_tetra98_payment(
     }
 
 
+@router.post("/card-transfer", status_code=status.HTTP_201_CREATED)
+async def create_card_transfer_deposit(
+    amount: Annotated[int, Form(ge=10_000, le=50_000_000)],
+    receipt: Annotated[UploadFile, File()],
+    background_tasks: BackgroundTasks,
+    user: User = Depends(current_fresh_user),
+    db: AsyncSession = Depends(get_db),
+):
+    if not settings.card_to_card_ready:
+        raise HTTPException(status_code=503, detail="Card transfer is not configured.")
+
+    rate_limit = await check_rate_limit(
+        "payment-card-transfer",
+        user.telegram_id,
+        limit=5,
+        window_seconds=300,
+    )
+    if not rate_limit.backend_available:
+        raise HTTPException(status_code=503, detail="Payment rate limiter is unavailable.")
+    if not rate_limit.allowed:
+        raise HTTPException(status_code=429, detail="Rate limit exceeded.")
+
+    try:
+        raw_receipt = await receipt.read(settings.CARD_TRANSFER_MAX_RECEIPT_BYTES + 1)
+    finally:
+        await receipt.close()
+    try:
+        sanitized = sanitize_card_transfer_receipt(raw_receipt)
+    except CardTransferReceiptError as exc:
+        detail = (
+            "Receipt image is too large."
+            if str(exc) in {"receipt_size", "image_dimensions"}
+            else "Receipt must be one valid JPEG, PNG, or WebP image."
+        )
+        raise HTTPException(status_code=422, detail=detail) from exc
+
+    wallet = (
+        await db.execute(select(Wallet).where(Wallet.user_id == user.id))
+    ).scalars().first()
+    if wallet is None:
+        raise HTTPException(status_code=404, detail="Wallet not found.")
+
+    receipt_digest = hashlib.sha256(sanitized.image_bytes).hexdigest()
+    transaction = Transaction(
+        wallet_id=wallet.id,
+        amount=to_decimal(amount),
+        currency="IRR",
+        gateway="card_to_card",
+        type=TransactionType.DEPOSIT_IRR,
+        status=TransactionStatus.PENDING,
+        reference_id=f"receipt:{receipt_digest[:16]}",
+        description="Card transfer receipt submitted — awaiting administrator review",
+    )
+    db.add(transaction)
+    try:
+        await db.flush()
+        stored_receipt = CardTransferReceipt(
+            transaction_id=transaction.id,
+            image_bytes=sanitized.image_bytes,
+            mime_type=sanitized.mime_type,
+            receipt_sha256=receipt_digest,
+        )
+        queue_card_transfer_admin_deliveries(stored_receipt)
+        db.add(stored_receipt)
+        await db.commit()
+    except IntegrityError as exc:
+        await db.rollback()
+        raise HTTPException(status_code=409, detail="This receipt was already submitted.") from exc
+
+    background_tasks.add_task(
+        dispatch_card_transfer_notifications,
+        transaction.id,
+    )
+
+    return {
+        "status": "pending_review",
+        "transactionId": transaction.id,
+        "amount": amount,
+        "currency": "IRR",
+        "adminDelivery": "queued",
+        "message": "Receipt stored and queued for administrator review.",
+    }
+
+
 async def _credit_tetra98_transaction(
     db: AsyncSession,
     tx_id: int,
@@ -523,17 +658,11 @@ async def tetra98_payment_callback(request: Request, db: AsyncSession = Depends(
     if not settings.TETRA98_API_KEY:
         raise HTTPException(status_code=503, detail="Payment gateway is not configured.")
 
-    # Parse JSON body; Tetra98 sends application/json
-    try:
-        data = json.loads(raw_body)
-    except (json.JSONDecodeError, UnicodeDecodeError):
-        # Fallback: some gateways send form-encoded data
-        try:
-            form_data = await request.form()
-            data = dict(form_data)
-        except Exception as exc:
-            logger.warning("Tetra98 callback: unreadable body")
-            raise HTTPException(status_code=400, detail="Unreadable callback payload.") from exc
+    data = _parse_callback_object(
+        raw_body,
+        request.headers.get("content-type", ""),
+        allow_form=True,
+    )
 
     authority = _validated_tetra98_authority(
         data.get("authority") or data.get("Authority")
@@ -769,6 +898,7 @@ async def _process_crypto_confirmation(
 class CryptoDepositRequest(BaseModel):
     amount_usdt: Decimal = Field(
         gt=Decimal("0"),
+        le=MAX_USDT_DEPOSIT,
         max_digits=24,
         decimal_places=6,
         description="Expected USDT amount",
@@ -863,10 +993,11 @@ async def crypto_payment_callback(request: Request, db: AsyncSession = Depends(g
             logger.warning("Crypto webhook signature validation failed.")
             raise HTTPException(status_code=403, detail="Invalid webhook signature.")
 
-    try:
-        data = json.loads(raw_body)
-    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
-        raise HTTPException(status_code=400, detail="Invalid JSON payload.") from exc
+    data = _parse_callback_object(
+        raw_body,
+        request.headers.get("content-type", ""),
+        allow_form=False,
+    )
 
     tx_id = data.get("transaction_id")
     tx_hash = str(data.get("tx_hash", "")).strip()

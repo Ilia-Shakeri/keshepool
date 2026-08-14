@@ -1,9 +1,9 @@
 # syntax=docker/dockerfile:1
 FROM node:22-alpine AS deps
 WORKDIR /app
-COPY package.json package-lock.json* yarn.lock* pnpm-lock.yaml* ./
+COPY package.json package-lock.json ./
 RUN --mount=type=cache,target=/root/.npm \
-    if [ -f package-lock.json ]; then npm ci --legacy-peer-deps; else npm install --legacy-peer-deps; fi
+    npm ci --legacy-peer-deps
 
 FROM node:22-alpine AS builder
 WORKDIR /app

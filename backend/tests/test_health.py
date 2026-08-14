@@ -1,6 +1,7 @@
 import asyncio
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 from app import main
 from starlette.requests import Request
@@ -29,19 +30,28 @@ def test_liveness_and_readiness_routes_are_distinct():
     assert "/health" in paths
 
 
-def test_readiness_documents_database_fallback_when_redis_is_down(monkeypatch):
+def test_readiness_fails_when_required_redis_is_down(monkeypatch):
     monkeypatch.setattr(main, "AsyncSessionLocal", FakeSession)
+
+    async def schema_ok(_session):
+        return SimpleNamespace(
+            ready=True,
+            current_revisions=("test",),
+            expected_revisions=("test",),
+            missing_tables=(),
+        )
 
     async def redis_down():
         return False, "ConnectionError"
 
     monkeypatch.setattr(main, "redis_health", redis_down)
+    monkeypatch.setattr(main, "check_schema_compatibility", schema_ok)
     response = asyncio.run(main.readiness_check())
     payload = json.loads(response.body)
-    assert response.status_code == 200
-    assert payload["status"] == "degraded"
-    assert payload["ready"] is True
-    assert payload["checks"]["redis"]["fallback"] == "database"
+    assert response.status_code == 503
+    assert payload["status"] == "not_ready"
+    assert payload["ready"] is False
+    assert payload["checks"]["redis"]["required"] is True
 
 
 def test_public_support_config_returns_only_safe_telegram_links(monkeypatch):
@@ -76,8 +86,7 @@ def test_edge_headers_and_direct_sensitive_routes_are_declared():
     caddyfile = (
         Path(__file__).resolve().parents[2] / "ops" / "Caddyfile.example"
     ).read_text(encoding="utf-8")
-    assert "Content-Security-Policy-Report-Only" in caddyfile
-    assert "frame-ancestors 'self' https://web.telegram.org https://*.telegram.org" in caddyfile
+    assert "Content-Security-Policy" not in caddyfile
     assert "X-Frame-Options" not in caddyfile
     assert "handle /webhook/*" in caddyfile
     assert "handle /api/pay/tetra98/callback" in caddyfile

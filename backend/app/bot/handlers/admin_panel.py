@@ -1,5 +1,8 @@
 import html
+import hashlib
+import json
 import logging
+from decimal import Decimal
 from datetime import date, datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
@@ -20,19 +23,36 @@ from redis.exceptions import RedisError
 from sqlalchemy import func, insert, literal, select
 from sqlalchemy.orm import selectinload
 
-from app.bot.filters import IsAdminFilter
+from app.bot.filters import HasAdminRoleFilter, IsAdminFilter
 from app.bot.states import AdminPanelStates
 from app.core.config import settings
 from app.core.database import AsyncSessionLocal
 from app.core.redis import redis_client
 from app.services.admin_audit_service import add_admin_audit, record_admin_audit
+from app.services.admin_authorization_service import (
+    AdminAuthorizationError,
+    approve_request,
+    consume_action_nonce,
+    consume_approved_request,
+    create_approval_request,
+    effective_roles,
+    issue_action_nonce,
+    require_action_role,
+)
 from app.services.cache_service import namespaced_key
-from app.services.rate_service import clear_usdt_rate_override, get_usdt_rate, set_usdt_rate
+from app.services.rate_service import (
+    apply_usdt_rate_override_in_session,
+    cache_usdt_rate_override,
+    clear_usdt_rate_override,
+    get_usdt_rate,
+    set_usdt_rate,
+)
 from app.bot.services.daily_report_settings import (
     is_daily_report_enabled,
     toggle_daily_report,
 )
 from app.models import (
+    AdminApprovalRequest,
     CashoutRequest,
     CashoutRequestStatus,
     Notification,
@@ -41,6 +61,7 @@ from app.models import (
     Transaction,
     TransactionStatus,
     User,
+    UsdtRateOverride,
     utcnow,
 )
 from app.bot.locales.translations import get_text
@@ -74,6 +95,20 @@ async def get_admin_lang(user_id: int) -> str:
 def _h(text: object) -> str:
     """Escape arbitrary values for Telegram HTML parse mode."""
     return html.escape(str(text) if text is not None else "")
+
+
+def _bounded_admin_message(raw_text: str | None) -> tuple[str, str] | None:
+    lines = (raw_text or "").strip().splitlines()
+    title = lines[0].strip() if lines else ""
+    body = "\n".join(lines[1:]).strip() if len(lines) > 1 else title
+    if (
+        not title
+        or len(title) > 100
+        or len(body) > 3500
+        or any(ord(char) < 32 and char not in {"\n", "\t"} for char in f"{title}{body}")
+    ):
+        return None
+    return title, body or title
 
 
 def get_persistent_menu(lang: str) -> ReplyKeyboardMarkup:
@@ -130,7 +165,7 @@ async def build_report_text(lang: str) -> str:
         total_revenue = await session.scalar(
             select(func.sum(Order.total_amount)).where(Order.status == OrderStatus.ACTIVE)
         )
-        total_revenue = float(total_revenue) if total_revenue is not None else 0.0
+        total_revenue = Decimal(total_revenue) if total_revenue is not None else Decimal("0")
         pending_tx = await session.scalar(
             select(func.count(Transaction.id)).where(Transaction.status == TransactionStatus.PENDING)
         ) or 0
@@ -221,7 +256,7 @@ async def shortcut_home(message: Message, state: FSMContext):
     )
 
 
-@admin_router.message(F.text.func(lambda t: t and t.startswith("📦")))
+@admin_router.message(F.text.func(lambda t: t and t.startswith("📦")), HasAdminRoleFilter("catalog"))
 async def shortcut_inventory(message: Message, state: FSMContext):
     from app.bot.handlers.products_admin import show_product_management_menu
     lang = await get_admin_lang(message.from_user.id)
@@ -229,14 +264,14 @@ async def shortcut_inventory(message: Message, state: FSMContext):
     await show_product_management_menu(message, lang, state, send_new=True)
 
 
-@admin_router.message(F.text.func(lambda t: t and t.startswith("👥")))
+@admin_router.message(F.text.func(lambda t: t and t.startswith("👥")), HasAdminRoleFilter("support"))
 async def shortcut_users(message: Message, state: FSMContext):
     lang = await get_admin_lang(message.from_user.id)
     await state.clear()
     await _send_users_page(message, lang, page=0, send_new=True)
 
 
-@admin_router.message(F.text.func(lambda t: t and t.startswith("📊")))
+@admin_router.message(F.text.func(lambda t: t and t.startswith("📊")), HasAdminRoleFilter("auditor", "finance"))
 async def shortcut_report(message: Message, state: FSMContext):
     lang = await get_admin_lang(message.from_user.id)
     await state.clear()
@@ -288,7 +323,7 @@ async def process_main_menu(callback: CallbackQuery, state: FSMContext):
 
 # ── Statistics ────────────────────────────────────────────────────────────────
 
-@admin_router.callback_query(F.data == "manage_stats")
+@admin_router.callback_query(F.data == "manage_stats", HasAdminRoleFilter("auditor", "finance"))
 async def show_stats(callback: CallbackQuery):
     lang = await get_admin_lang(callback.from_user.id)
     try:
@@ -303,7 +338,7 @@ async def show_stats(callback: CallbackQuery):
     await callback.answer()
 
 
-@admin_router.callback_query(F.data == "force_report")
+@admin_router.callback_query(F.data == "force_report", HasAdminRoleFilter("auditor", "finance"))
 async def process_force_report(callback: CallbackQuery):
     lang = await get_admin_lang(callback.from_user.id)
     await callback.message.edit_text(
@@ -333,7 +368,7 @@ async def _show_daily_report_settings(callback: CallbackQuery, lang: str) -> Non
     )
 
 
-@admin_router.callback_query(F.data == "manage_daily_report")
+@admin_router.callback_query(F.data == "manage_daily_report", HasAdminRoleFilter("auditor", "finance"))
 async def manage_daily_report(callback: CallbackQuery):
     lang = await get_admin_lang(callback.from_user.id)
     try:
@@ -345,7 +380,7 @@ async def manage_daily_report(callback: CallbackQuery):
     await callback.answer()
 
 
-@admin_router.callback_query(F.data == "toggle_daily_report")
+@admin_router.callback_query(F.data == "toggle_daily_report", HasAdminRoleFilter("superadmin"))
 async def process_toggle_daily_report(callback: CallbackQuery):
     lang = await get_admin_lang(callback.from_user.id)
     try:
@@ -451,7 +486,7 @@ async def _send_system_report(
     )
 
 
-@admin_router.callback_query(F.data.startswith("system_report_range_"))
+@admin_router.callback_query(F.data.startswith("system_report_range_"), HasAdminRoleFilter("auditor", "finance"))
 async def system_report_range(callback: CallbackQuery, state: FSMContext):
     lang = await get_admin_lang(callback.from_user.id)
     preset = callback.data.removeprefix("system_report_range_")
@@ -480,7 +515,7 @@ async def system_report_range(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@admin_router.message(AdminPanelStates.awaiting_system_report_range)
+@admin_router.message(AdminPanelStates.awaiting_system_report_range, HasAdminRoleFilter("auditor", "finance"))
 async def custom_system_report_range(message: Message, state: FSMContext):
     lang = await get_admin_lang(message.from_user.id)
     try:
@@ -538,7 +573,7 @@ async def _send_users_page(target, lang: str, page: int, send_new: bool = False)
     user_buttons: list[InlineKeyboardButton] = []
 
     for u in users:
-        balance = float(u.wallet.balance) if u.wallet else 0.0
+        balance = Decimal(u.wallet.balance) if u.wallet else Decimal("0")
         uname = _h(u.username or "—")
         fname = _h(u.first_name or "")
         access_icon = "🚫" if u.is_banned else "✅"
@@ -575,7 +610,7 @@ async def _send_users_page(target, lang: str, page: int, send_new: bool = False)
         await target.message.edit_text(text=text, reply_markup=markup, parse_mode="HTML")
 
 
-@admin_router.callback_query(F.data.startswith("manage_users_"))
+@admin_router.callback_query(F.data.startswith("manage_users_"), HasAdminRoleFilter("support"))
 async def process_manage_users(callback: CallbackQuery):
     lang = await get_admin_lang(callback.from_user.id)
     parts = callback.data.split("_")
@@ -584,7 +619,7 @@ async def process_manage_users(callback: CallbackQuery):
     await callback.answer()
 
 
-@admin_router.callback_query(F.data.startswith("user_detail_"))
+@admin_router.callback_query(F.data.startswith("user_detail_"), HasAdminRoleFilter("support"))
 async def view_user_detail(callback: CallbackQuery):
     lang = await get_admin_lang(callback.from_user.id)
     user_id = int(callback.data.removeprefix("user_detail_"))
@@ -606,7 +641,7 @@ async def view_user_detail(callback: CallbackQuery):
         await callback.answer(get_text(lang, "db_error"), show_alert=True)
         return
 
-    balance = float(user.wallet.balance) if user.wallet else 0.0
+    balance = Decimal(user.wallet.balance) if user.wallet else Decimal("0")
     created = user.created_at.strftime("%Y-%m-%d") if user.created_at else "?"
     last_seen = user.last_seen_at.strftime("%Y-%m-%d %H:%M") if user.last_seen_at else "?"
 
@@ -637,13 +672,14 @@ async def view_user_detail(callback: CallbackQuery):
     await callback.answer()
 
 
-@admin_router.callback_query(F.data.startswith("user_access_prompt_"))
+@admin_router.callback_query(F.data.startswith("user_access_prompt_"), HasAdminRoleFilter("support"))
 async def prompt_user_access_change(callback: CallbackQuery):
     lang = await get_admin_lang(callback.from_user.id)
     user_id = int(callback.data.removeprefix("user_access_prompt_"))
     try:
         async with AsyncSessionLocal() as session:
             user = await session.get(User, user_id)
+            target_roles = await effective_roles(session, user.telegram_id) if user is not None else frozenset()
     except Exception as exc:
         logger.error("User access prompt failed: %s", exc, exc_info=True)
         await callback.answer(get_text(lang, "db_error"), show_alert=True)
@@ -651,16 +687,28 @@ async def prompt_user_access_change(callback: CallbackQuery):
     if user is None:
         await callback.answer(get_text(lang, "not_found"), show_alert=True)
         return
-    if user.telegram_id in settings.admin_ids and not user.is_banned:
+    if target_roles and not user.is_banned:
         await callback.answer(get_text(lang, "cannot_ban_admin"), show_alert=True)
         return
 
-    action = "unban" if user.is_banned else "ban"
     text_key = "confirm_unban_user" if user.is_banned else "confirm_ban_user"
     button_key = "confirm_unban_user_btn" if user.is_banned else "confirm_ban_user_btn"
+    async with AsyncSessionLocal() as session:
+        if settings.ADMIN_RBAC_ENABLED:
+            await require_action_role(session, callback.from_user.id, "user.access_change")
+        nonce = await issue_action_nonce(
+            session,
+            actor_telegram_id=callback.from_user.id,
+            chat_id=callback.message.chat.id,
+            action="user.access_change",
+            target_type="user",
+            target_id=user.id,
+        )
+        await session.commit()
+    callback_prefix = "usrub" if user.is_banned else "usrbn"
     markup = InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text=get_text(lang, button_key), callback_data=f"user_{action}_confirm_{user.id}")],
+            [InlineKeyboardButton(text=get_text(lang, button_key), callback_data=f"{callback_prefix}:{user.id}:{nonce}")],
             [InlineKeyboardButton(text=get_text(lang, "back"), callback_data=f"user_detail_{user.id}")],
         ]
     )
@@ -672,10 +720,21 @@ async def prompt_user_access_change(callback: CallbackQuery):
     await callback.answer()
 
 
-async def _set_user_ban(callback: CallbackQuery, user_id: int, banned: bool) -> None:
+async def _set_user_ban(callback: CallbackQuery, user_id: int, banned: bool, nonce: str) -> None:
     lang = await get_admin_lang(callback.from_user.id)
     try:
         async with AsyncSessionLocal() as session:
+            if settings.ADMIN_RBAC_ENABLED:
+                await require_action_role(session, callback.from_user.id, "user.access_change")
+            await consume_action_nonce(
+                session,
+                nonce=nonce,
+                actor_telegram_id=callback.from_user.id,
+                chat_id=callback.message.chat.id,
+                action="user.access_change",
+                target_type="user",
+                target_id=user_id,
+            )
             result = await session.execute(
                 select(User).where(User.id == user_id).with_for_update()
             )
@@ -683,7 +742,7 @@ async def _set_user_ban(callback: CallbackQuery, user_id: int, banned: bool) -> 
             if user is None:
                 await callback.answer(get_text(lang, "not_found"), show_alert=True)
                 return
-            if banned and user.telegram_id in settings.admin_ids:
+            if banned and await effective_roles(session, user.telegram_id):
                 await callback.answer(get_text(lang, "cannot_ban_admin"), show_alert=True)
                 return
             user.is_banned = banned
@@ -698,6 +757,9 @@ async def _set_user_ban(callback: CallbackQuery, user_id: int, banned: bool) -> 
                 details={"telegram_id": user.telegram_id},
             )
             await session.commit()
+    except AdminAuthorizationError:
+        await callback.answer(get_text(lang, "cannot_ban_admin"), show_alert=True)
+        return
     except Exception as exc:
         logger.error("User access update failed: %s", exc, exc_info=True)
         await callback.answer(get_text(lang, "db_error"), show_alert=True)
@@ -710,17 +772,31 @@ async def _set_user_ban(callback: CallbackQuery, user_id: int, banned: bool) -> 
     await callback.answer()
 
 
-@admin_router.callback_query(F.data.startswith("user_ban_confirm_"))
+@admin_router.callback_query(F.data.startswith("usrbn:"), HasAdminRoleFilter("support"))
 async def confirm_user_ban(callback: CallbackQuery):
-    await _set_user_ban(callback, int(callback.data.removeprefix("user_ban_confirm_")), True)
+    lang = await get_admin_lang(callback.from_user.id)
+    try:
+        _, raw_user_id, nonce = callback.data.split(":", 2)
+        user_id = int(raw_user_id)
+    except (AttributeError, ValueError):
+        await callback.answer(get_text(lang, "invalid_format"), show_alert=True)
+        return
+    await _set_user_ban(callback, user_id, True, nonce)
 
 
-@admin_router.callback_query(F.data.startswith("user_unban_confirm_"))
+@admin_router.callback_query(F.data.startswith("usrub:"), HasAdminRoleFilter("support"))
 async def confirm_user_unban(callback: CallbackQuery):
-    await _set_user_ban(callback, int(callback.data.removeprefix("user_unban_confirm_")), False)
+    lang = await get_admin_lang(callback.from_user.id)
+    try:
+        _, raw_user_id, nonce = callback.data.split(":", 2)
+        user_id = int(raw_user_id)
+    except (AttributeError, ValueError):
+        await callback.answer(get_text(lang, "invalid_format"), show_alert=True)
+        return
+    await _set_user_ban(callback, user_id, False, nonce)
 
 
-@admin_router.callback_query(F.data.startswith("user_orders_"))
+@admin_router.callback_query(F.data.startswith("user_orders_"), HasAdminRoleFilter("support"))
 async def view_user_orders(callback: CallbackQuery):
     lang = await get_admin_lang(callback.from_user.id)
     user_id = int(callback.data.removeprefix("user_orders_"))
@@ -747,7 +823,7 @@ async def view_user_orders(callback: CallbackQuery):
         for o in orders:
             product_name = _h(o.product.brand if o.product else "?")
             duration = _h(o.variant.duration if o.variant else "?")
-            amount = float(o.total_amount)
+            amount = Decimal(o.total_amount)
             date = o.created_at.strftime("%m/%d") if o.created_at else "?"
             icon = "✅" if o.status.value == "active" else "⛔"
             lines.append(
@@ -763,7 +839,7 @@ async def view_user_orders(callback: CallbackQuery):
     await callback.answer()
 
 
-@admin_router.callback_query(F.data.startswith("notify_user_"))
+@admin_router.callback_query(F.data.startswith("notify_user_"), HasAdminRoleFilter("support"))
 async def prompt_user_notification(callback: CallbackQuery, state: FSMContext):
     lang = await get_admin_lang(callback.from_user.id)
     user_id = int(callback.data.removeprefix("notify_user_"))
@@ -777,16 +853,14 @@ async def prompt_user_notification(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@admin_router.message(AdminPanelStates.awaiting_notification_text)
+@admin_router.message(AdminPanelStates.awaiting_notification_text, HasAdminRoleFilter("support"))
 async def process_user_notification(message: Message, state: FSMContext):
     lang = await get_admin_lang(message.from_user.id)
-    lines = message.text.strip().splitlines()
-    title = lines[0].strip() if lines else ""
-    body = "\n".join(lines[1:]).strip() if len(lines) > 1 else title
-
-    if not title:
-        await message.answer(get_text(lang, "empty_message"))
+    parsed_message = _bounded_admin_message(message.text)
+    if parsed_message is None:
+        await message.answer(get_text(lang, "admin_message_invalid"))
         return
+    title, body = parsed_message
 
     data = await state.get_data()
     target_id = data.get("notify_target_user_id")
@@ -814,7 +888,7 @@ async def process_user_notification(message: Message, state: FSMContext):
 
 # ── Search user ───────────────────────────────────────────────────────────────
 
-@admin_router.callback_query(F.data == "search_user")
+@admin_router.callback_query(F.data == "search_user", HasAdminRoleFilter("support"))
 async def prompt_search(callback: CallbackQuery, state: FSMContext):
     lang = await get_admin_lang(callback.from_user.id)
     await callback.message.answer(
@@ -825,7 +899,7 @@ async def prompt_search(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@admin_router.message(AdminPanelStates.awaiting_search_query)
+@admin_router.message(AdminPanelStates.awaiting_search_query, HasAdminRoleFilter("support"))
 async def process_search(message: Message, state: FSMContext):
     lang = await get_admin_lang(message.from_user.id)
     query = message.text.strip().lstrip("@")
@@ -855,7 +929,7 @@ async def process_search(message: Message, state: FSMContext):
         return
 
     for user in users:
-        balance = float(user.wallet.balance) if user.wallet else 0.0
+        balance = Decimal(user.wallet.balance) if user.wallet else Decimal("0")
         text = get_text(lang, "search_result_text").format(
             name=f"{_h(user.first_name)} {_h(user.last_name or '')}".strip(),
             telegram_id=_h(user.telegram_id),
@@ -875,7 +949,7 @@ async def process_search(message: Message, state: FSMContext):
 
 # ── Broadcast ─────────────────────────────────────────────────────────────────
 
-@admin_router.callback_query(F.data == "broadcast_msg")
+@admin_router.callback_query(F.data == "broadcast_msg", HasAdminRoleFilter("support"))
 async def prompt_broadcast(callback: CallbackQuery, state: FSMContext):
     lang = await get_admin_lang(callback.from_user.id)
     await callback.message.answer(get_text(lang, "broadcast_prompt"), reply_markup=_back_markup(lang))
@@ -883,26 +957,46 @@ async def prompt_broadcast(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@admin_router.message(AdminPanelStates.awaiting_broadcast_message)
+@admin_router.message(AdminPanelStates.awaiting_broadcast_message, HasAdminRoleFilter("support"))
 async def process_broadcast(message: Message, state: FSMContext):
     lang = await get_admin_lang(message.from_user.id)
-    lines = (message.text or "").strip().splitlines()
-    title = lines[0].strip() if lines else ""
-    body = "\n".join(lines[1:]).strip() if len(lines) > 1 else title
-
-    if not title:
-        await message.answer(get_text(lang, "empty_message"))
+    parsed_message = _bounded_admin_message(message.text)
+    if parsed_message is None:
+        await message.answer(get_text(lang, "admin_message_invalid"))
         return
+    title, body = parsed_message
 
     try:
         async with AsyncSessionLocal() as session:
             count = int(await session.scalar(select(func.count(User.id))) or 0)
+            digest = hashlib.sha256(
+                json.dumps(
+                    {"body": body or title, "title": title},
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                    sort_keys=True,
+                ).encode("utf-8")
+            ).hexdigest()
+            nonce = await issue_action_nonce(
+                session,
+                actor_telegram_id=message.from_user.id,
+                chat_id=message.chat.id,
+                action="broadcast.send",
+                target_type="user_segment",
+                target_id=digest,
+            )
+            await session.commit()
     except Exception as exc:
         logger.error("Broadcast preview failed: %s", exc)
         await message.answer(get_text(lang, "db_error"))
         return
 
-    await state.update_data(broadcast_title=title, broadcast_body=body or title)
+    await state.update_data(
+        broadcast_title=title,
+        broadcast_body=body or title,
+        broadcast_digest=digest,
+        broadcast_nonce=nonce,
+    )
     await state.set_state(AdminPanelStates.awaiting_broadcast_confirmation)
     preview = get_text(lang, "broadcast_preview").format(
         title=_h(title),
@@ -918,7 +1012,7 @@ async def process_broadcast(message: Message, state: FSMContext):
     await message.answer(preview, reply_markup=markup, parse_mode="HTML")
 
 
-@admin_router.callback_query(F.data == "broadcast_cancel")
+@admin_router.callback_query(F.data == "broadcast_cancel", HasAdminRoleFilter("support"))
 async def cancel_broadcast(callback: CallbackQuery, state: FSMContext):
     lang = await get_admin_lang(callback.from_user.id)
     await state.clear()
@@ -926,12 +1020,20 @@ async def cancel_broadcast(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@admin_router.callback_query(F.data == "broadcast_confirm")
+@admin_router.callback_query(F.data == "broadcast_confirm", HasAdminRoleFilter("support"))
 async def confirm_broadcast(callback: CallbackQuery, state: FSMContext):
     lang = await get_admin_lang(callback.from_user.id)
     data = await state.get_data()
     title = str(data.get("broadcast_title") or "").strip()
     body = str(data.get("broadcast_body") or "").strip()
+    digest = hashlib.sha256(
+        json.dumps(
+            {"body": body or title, "title": title},
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+    ).hexdigest()
     if not title:
         await state.clear()
         await callback.answer(get_text(lang, "target_user_lost"), show_alert=True)
@@ -939,6 +1041,19 @@ async def confirm_broadcast(callback: CallbackQuery, state: FSMContext):
 
     try:
         async with AsyncSessionLocal() as session:
+            if digest != data.get("broadcast_digest"):
+                raise AdminAuthorizationError("Broadcast payload changed.")
+            if settings.ADMIN_RBAC_ENABLED:
+                await require_action_role(session, callback.from_user.id, "broadcast.send")
+            await consume_action_nonce(
+                session,
+                nonce=str(data.get("broadcast_nonce", "")),
+                actor_telegram_id=callback.from_user.id,
+                chat_id=callback.message.chat.id,
+                action="broadcast.send",
+                target_type="user_segment",
+                target_id=digest,
+            )
             count = int(await session.scalar(select(func.count(User.id))) or 0)
             if count:
                 created_at = utcnow()
@@ -960,8 +1075,12 @@ async def confirm_broadcast(callback: CallbackQuery, state: FSMContext):
                 target_type="user_segment",
                 target_id="all",
                 details={"recipient_count": count},
+                new_values={"title_length": len(title), "body_length": len(body or title)},
             )
             await session.commit()
+    except AdminAuthorizationError:
+        await callback.answer(get_text(lang, "operation_cancelled"), show_alert=True)
+        return
     except Exception as exc:
         logger.error("Broadcast failed: %s", exc)
         await callback.answer(get_text(lang, "db_error"), show_alert=True)
@@ -1044,7 +1163,7 @@ async def _send_cashouts_page(target, lang: str, page: int, send_new: bool = Fal
         await target.message.edit_text(text=text, reply_markup=markup, parse_mode="HTML")
 
 
-@admin_router.callback_query(F.data.startswith("manage_cashouts_"))
+@admin_router.callback_query(F.data.startswith("manage_cashouts_"), HasAdminRoleFilter("finance", "support"))
 async def process_manage_cashouts(callback: CallbackQuery):
     lang = await get_admin_lang(callback.from_user.id)
     parts = callback.data.split("_")
@@ -1054,17 +1173,19 @@ async def process_manage_cashouts(callback: CallbackQuery):
 
 
 # Legacy alias: old "tickets" button routes to cashouts
-@admin_router.callback_query(F.data.startswith("manage_tickets"))
+@admin_router.callback_query(F.data.startswith("manage_tickets"), HasAdminRoleFilter("finance", "support"))
 async def process_manage_tickets(callback: CallbackQuery):
     lang = await get_admin_lang(callback.from_user.id)
     await _send_cashouts_page(callback, lang, page=0)
     await callback.answer()
 
 
-@admin_router.callback_query(F.data.startswith("cashout_view_"))
+@admin_router.callback_query(F.data.startswith("cashout_view_"), HasAdminRoleFilter("finance", "support"))
 async def view_cashout_detail(callback: CallbackQuery):
     lang = await get_admin_lang(callback.from_user.id)
     cashout_id = int(callback.data.removeprefix("cashout_view_"))
+    complete_nonce = ""
+    review_nonce = ""
 
     try:
         async with AsyncSessionLocal() as session:
@@ -1074,6 +1195,24 @@ async def view_cashout_detail(callback: CallbackQuery):
                 .where(CashoutRequest.id == cashout_id)
             )
             c = result.scalars().first()
+            if c is not None:
+                complete_nonce = await issue_action_nonce(
+                    session,
+                    actor_telegram_id=callback.from_user.id,
+                    chat_id=callback.message.chat.id,
+                    action="cashout.status_change",
+                    target_type="cashout_request",
+                    target_id=f"{cashout_id}:completed",
+                )
+                review_nonce = await issue_action_nonce(
+                    session,
+                    actor_telegram_id=callback.from_user.id,
+                    chat_id=callback.message.chat.id,
+                    action="cashout.status_change",
+                    target_type="cashout_request",
+                    target_id=f"{cashout_id}:reviewed",
+                )
+                await session.commit()
     except Exception as exc:
         logger.error("DB error in cashout_view: %s", exc)
         await callback.answer(get_text(lang, "db_error"), show_alert=True)
@@ -1112,8 +1251,8 @@ async def view_cashout_detail(callback: CallbackQuery):
     markup = InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text=get_text(lang, "cashout_private_btn"), callback_data=f"cashout_dm_{cashout_id}")],
-            [InlineKeyboardButton(text=get_text(lang, "mark_done_btn"), callback_data=f"cashout_done_{cashout_id}")],
-            [InlineKeyboardButton(text=get_text(lang, "mark_reviewed_btn"), callback_data=f"cashout_review_{cashout_id}")],
+            [InlineKeyboardButton(text=get_text(lang, "mark_done_btn"), callback_data=f"cashst:{cashout_id}:completed:{complete_nonce}")],
+            [InlineKeyboardButton(text=get_text(lang, "mark_reviewed_btn"), callback_data=f"cashst:{cashout_id}:reviewed:{review_nonce}")],
             [InlineKeyboardButton(text=get_text(lang, "back"), callback_data="manage_cashouts_0")],
         ]
     )
@@ -1121,7 +1260,7 @@ async def view_cashout_detail(callback: CallbackQuery):
     await callback.answer()
 
 
-@admin_router.callback_query(F.data.startswith("cashout_dm_"))
+@admin_router.callback_query(F.data.startswith("cashout_dm_"), HasAdminRoleFilter("finance", "support"))
 async def prompt_cashout_private_message(callback: CallbackQuery, state: FSMContext):
     lang = await get_admin_lang(callback.from_user.id)
     cashout_id = int(callback.data.removeprefix("cashout_dm_"))
@@ -1152,7 +1291,7 @@ async def prompt_cashout_private_message(callback: CallbackQuery, state: FSMCont
     await callback.answer()
 
 
-@admin_router.message(AdminPanelStates.awaiting_cashout_private_message)
+@admin_router.message(AdminPanelStates.awaiting_cashout_private_message, HasAdminRoleFilter("finance", "support"))
 async def process_cashout_private_message(message: Message, state: FSMContext):
     lang = await get_admin_lang(message.from_user.id)
     data = await state.get_data()
@@ -1183,25 +1322,41 @@ async def process_cashout_private_message(message: Message, state: FSMContext):
     )
 
 
-@admin_router.callback_query(F.data.startswith("cashout_done_"))
-async def cashout_mark_done(callback: CallbackQuery):
+@admin_router.callback_query(F.data.startswith("cashst:"), HasAdminRoleFilter("finance"))
+async def change_cashout_status(callback: CallbackQuery):
     lang = await get_admin_lang(callback.from_user.id)
-    cashout_id = int(callback.data.removeprefix("cashout_done_"))
-    await _update_cashout_status(callback, lang, cashout_id, CashoutRequestStatus.COMPLETED)
-
-
-@admin_router.callback_query(F.data.startswith("cashout_review_"))
-async def cashout_mark_reviewed(callback: CallbackQuery):
-    lang = await get_admin_lang(callback.from_user.id)
-    cashout_id = int(callback.data.removeprefix("cashout_review_"))
-    await _update_cashout_status(callback, lang, cashout_id, CashoutRequestStatus.REVIEWED)
+    try:
+        _, raw_cashout_id, raw_status, nonce = callback.data.split(":", 3)
+        cashout_id = int(raw_cashout_id)
+        new_status = CashoutRequestStatus(raw_status)
+        if new_status not in {CashoutRequestStatus.REVIEWED, CashoutRequestStatus.COMPLETED}:
+            raise ValueError
+    except (AttributeError, ValueError):
+        await callback.answer(get_text(lang, "cashout_status_invalid"), show_alert=True)
+        return
+    await _update_cashout_status(callback, lang, cashout_id, new_status, nonce)
 
 
 async def _update_cashout_status(
-    callback: CallbackQuery, lang: str, cashout_id: int, new_status: CashoutRequestStatus
+    callback: CallbackQuery,
+    lang: str,
+    cashout_id: int,
+    new_status: CashoutRequestStatus,
+    nonce: str,
 ) -> None:
     try:
         async with AsyncSessionLocal() as session:
+            if settings.ADMIN_RBAC_ENABLED:
+                await require_action_role(session, callback.from_user.id, "cashout.status_change")
+            await consume_action_nonce(
+                session,
+                nonce=nonce,
+                actor_telegram_id=callback.from_user.id,
+                chat_id=callback.message.chat.id,
+                action="cashout.status_change",
+                target_type="cashout_request",
+                target_id=f"{cashout_id}:{new_status.value}",
+            )
             result = await session.execute(
                 select(CashoutRequest)
                 .where(CashoutRequest.id == cashout_id)
@@ -1248,8 +1403,13 @@ async def _update_cashout_status(
                 target_type="cashout_request",
                 target_id=cashout_id,
                 details={"from_status": old_status.value, "to_status": new_status.value},
+                old_values={"status": old_status.value},
+                new_values={"status": new_status.value},
             )
             await session.commit()
+    except AdminAuthorizationError:
+        await callback.answer(get_text(lang, "cashout_status_invalid"), show_alert=True)
+        return
     except Exception as exc:
         logger.error("Cashout status update failed: %s", exc)
         await callback.answer(get_text(lang, "db_error"), show_alert=True)
@@ -1291,7 +1451,7 @@ def _rates_markup(lang: str) -> InlineKeyboardMarkup:
     )
 
 
-@admin_router.callback_query(F.data == "manage_rates")
+@admin_router.callback_query(F.data == "manage_rates", HasAdminRoleFilter("finance"))
 async def show_rates(callback: CallbackQuery):
     lang = await get_admin_lang(callback.from_user.id)
     rate = await get_usdt_rate()
@@ -1300,9 +1460,22 @@ async def show_rates(callback: CallbackQuery):
     await callback.answer()
 
 
-@admin_router.callback_query(F.data == "set_usdt_rate")
+@admin_router.callback_query(F.data == "set_usdt_rate", HasAdminRoleFilter("finance"))
 async def prompt_usdt_rate(callback: CallbackQuery, state: FSMContext):
     lang = await get_admin_lang(callback.from_user.id)
+    async with AsyncSessionLocal() as session:
+        if settings.ADMIN_RBAC_ENABLED:
+            await require_action_role(session, callback.from_user.id, "rate.override")
+        nonce = await issue_action_nonce(
+            session,
+            actor_telegram_id=callback.from_user.id,
+            chat_id=callback.message.chat.id,
+            action="rate.override",
+            target_type="exchange_rate",
+            target_id="USDT_IRR",
+        )
+        await session.commit()
+    await state.update_data(rate_action_nonce=nonce)
     await callback.message.answer(
         get_text(lang, "enter_usdt_rate"),
         parse_mode="HTML",
@@ -1312,18 +1485,158 @@ async def prompt_usdt_rate(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@admin_router.callback_query(F.data == "clear_usdt_rate")
-async def clear_manual_usdt_rate(callback: CallbackQuery):
+@admin_router.callback_query(F.data == "clear_usdt_rate", HasAdminRoleFilter("finance"))
+async def prompt_clear_manual_usdt_rate(callback: CallbackQuery):
     lang = await get_admin_lang(callback.from_user.id)
-    try:
-        await clear_usdt_rate_override()
-        await record_admin_audit(
+    async with AsyncSessionLocal() as session:
+        if settings.ADMIN_RBAC_ENABLED:
+            await require_action_role(session, callback.from_user.id, "rate.override")
+        nonce = await issue_action_nonce(
+            session,
             actor_telegram_id=callback.from_user.id,
-            action="exchange_rate.return_to_live",
+            chat_id=callback.message.chat.id,
+            action="rate.override",
             target_type="exchange_rate",
             target_id="USDT_IRR",
-            details={},
         )
+        await session.commit()
+    await callback.message.edit_text(
+        get_text(lang, "rate_clear_confirm"),
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(
+                    text=get_text(lang, "rate_clear_confirm_btn"),
+                    callback_data=f"rateclr:{nonce}",
+                )],
+                [InlineKeyboardButton(text=get_text(lang, "back"), callback_data="manage_rates")],
+            ]
+        ),
+    )
+    await callback.answer()
+
+
+def _rate_approval_snapshot(
+    old_rate: int,
+    new_rate: int | None,
+    expected_version: int,
+) -> str:
+    return json.dumps(
+        {"expected_version": expected_version, "new": new_rate, "old": old_rate},
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+
+
+def _rate_change_needs_dual_approval(
+    current_rate: int,
+    new_rate: int,
+    threshold_percent: int,
+) -> bool:
+    if current_rate <= 0 or new_rate <= 0 or threshold_percent <= 0:
+        raise ValueError("Rate approval inputs must be positive.")
+    deviation = (
+        abs(Decimal(new_rate) - Decimal(current_rate)) * Decimal(100)
+    ) / Decimal(current_rate)
+    return deviation >= Decimal(threshold_percent)
+
+
+async def _create_rate_approval(
+    session,
+    *,
+    actor_id: int,
+    old_rate: int,
+    new_rate: int | None,
+) -> AdminApprovalRequest:
+    current_state = await session.get(
+        UsdtRateOverride,
+        1,
+        with_for_update=True,
+    )
+    expected_version = int(current_state.version) if current_state is not None else 0
+    snapshot = _rate_approval_snapshot(old_rate, new_rate, expected_version)
+    request = await create_approval_request(
+        session,
+        actor_telegram_id=actor_id,
+        action="rate.override",
+        target_type="exchange_rate",
+        target_id=snapshot,
+        payload=snapshot.encode("ascii"),
+    )
+    await add_admin_audit(
+        session,
+        actor_telegram_id=actor_id,
+        action="exchange_rate.approval_requested",
+        target_type="exchange_rate",
+        target_id="USDT_IRR",
+        outcome="requested",
+        old_values={"rate": old_rate},
+        new_values={"rate": new_rate},
+        details={"approval_request_id": request.id},
+    )
+    return request
+
+
+async def _send_rate_approval_notice(bot: Bot, lang: str, request: AdminApprovalRequest) -> None:
+    snapshot = json.loads(request.target_id)
+    new_label = f"{snapshot['new']:,}" if snapshot["new"] is not None else get_text(lang, "rate_live_btn")
+    await bot.send_message(
+        chat_id=int(settings.ADMIN_GROUP_CHAT_ID),
+        text=get_text(lang, "rate_dual_group_notice").format(old=snapshot["old"], new=new_label),
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[[InlineKeyboardButton(
+                text=get_text(lang, "rate_dual_approve_btn"),
+                callback_data=f"ratedual:{request.id}",
+            )]]
+        ),
+        parse_mode="HTML",
+    )
+
+
+@admin_router.callback_query(F.data.startswith("rateclr:"), HasAdminRoleFilter("finance"))
+async def clear_manual_usdt_rate(callback: CallbackQuery):
+    lang = await get_admin_lang(callback.from_user.id)
+    nonce = callback.data.removeprefix("rateclr:")
+    try:
+        current_rate = int(await get_usdt_rate())
+        async with AsyncSessionLocal() as session:
+            if settings.ADMIN_RBAC_ENABLED:
+                await require_action_role(session, callback.from_user.id, "rate.override")
+            await consume_action_nonce(
+                session,
+                nonce=nonce,
+                actor_telegram_id=callback.from_user.id,
+                chat_id=callback.message.chat.id,
+                action="rate.override",
+                target_type="exchange_rate",
+                target_id="USDT_IRR",
+            )
+            request = None
+            if settings.ADMIN_DUAL_APPROVAL_ENABLED:
+                request = await _create_rate_approval(
+                    session,
+                    actor_id=callback.from_user.id,
+                    old_rate=current_rate,
+                    new_rate=None,
+                )
+            await session.commit()
+        if request is not None:
+            await _send_rate_approval_notice(callback.bot, lang, request)
+            await callback.message.edit_text(get_text(lang, "rate_dual_pending"))
+            await callback.answer()
+            return
+        await clear_usdt_rate_override(
+            actor_telegram_id=callback.from_user.id,
+            change_source="admin_bot",
+        )
+        if not settings.OPERATIONS_RATE_DB_ENABLED:
+            await record_admin_audit(
+                actor_telegram_id=callback.from_user.id,
+                action="exchange_rate.return_to_live",
+                target_type="exchange_rate",
+                target_id="USDT_IRR",
+                details={},
+            )
     except Exception as exc:
         logger.error("Manual rate clear failed: %s", exc)
         await callback.answer(get_text(lang, "db_error"), show_alert=True)
@@ -1336,7 +1649,7 @@ async def clear_manual_usdt_rate(callback: CallbackQuery):
     await callback.answer()
 
 
-@admin_router.message(AdminPanelStates.awaiting_usdt_rate)
+@admin_router.message(AdminPanelStates.awaiting_usdt_rate, HasAdminRoleFilter("finance"))
 async def process_usdt_rate(message: Message, state: FSMContext):
     lang = await get_admin_lang(message.from_user.id)
     raw = (message.text or "").strip().replace(",", "").replace("٬", "")
@@ -1347,14 +1660,54 @@ async def process_usdt_rate(message: Message, state: FSMContext):
 
     new_rate = int(raw)
     try:
-        await set_usdt_rate(new_rate)
-        await record_admin_audit(
+        current_rate = int(await get_usdt_rate())
+        data = await state.get_data()
+        async with AsyncSessionLocal() as session:
+            if settings.ADMIN_RBAC_ENABLED:
+                await require_action_role(session, message.from_user.id, "rate.override")
+            await consume_action_nonce(
+                session,
+                nonce=str(data.get("rate_action_nonce", "")),
+                actor_telegram_id=message.from_user.id,
+                chat_id=message.chat.id,
+                action="rate.override",
+                target_type="exchange_rate",
+                target_id="USDT_IRR",
+            )
+            request = None
+            if (
+                settings.ADMIN_DUAL_APPROVAL_ENABLED
+                and _rate_change_needs_dual_approval(
+                    current_rate,
+                    new_rate,
+                    settings.ADMIN_DUAL_APPROVAL_RATE_DEVIATION_PERCENT,
+                )
+            ):
+                request = await _create_rate_approval(
+                    session,
+                    actor_id=message.from_user.id,
+                    old_rate=current_rate,
+                    new_rate=new_rate,
+                )
+            await session.commit()
+        if request is not None:
+            await state.clear()
+            await _send_rate_approval_notice(message.bot, lang, request)
+            await message.answer(get_text(lang, "rate_dual_pending"))
+            return
+        await set_usdt_rate(
+            new_rate,
             actor_telegram_id=message.from_user.id,
-            action="exchange_rate.manual_override",
-            target_type="exchange_rate",
-            target_id="USDT_IRR",
-            details={"rate": new_rate},
+            change_source="admin_bot",
         )
+        if not settings.OPERATIONS_RATE_DB_ENABLED:
+            await record_admin_audit(
+                actor_telegram_id=message.from_user.id,
+                action="exchange_rate.manual_override",
+                target_type="exchange_rate",
+                target_id="USDT_IRR",
+                details={"rate": new_rate},
+            )
     except Exception as exc:
         logger.error("Manual rate update failed: %s", exc)
         await message.answer(get_text(lang, "db_error"))
@@ -1367,3 +1720,81 @@ async def process_usdt_rate(message: Message, state: FSMContext):
         reply_markup=_rates_markup(lang),
         parse_mode="HTML",
     )
+
+
+@admin_router.callback_query(F.data.startswith("ratedual:"), HasAdminRoleFilter("finance"))
+async def approve_rate_change(callback: CallbackQuery):
+    lang = await get_admin_lang(callback.from_user.id)
+    if str(callback.message.chat.id) != str(settings.ADMIN_GROUP_CHAT_ID):
+        await callback.answer(get_text(lang, "rate_invalid"), show_alert=True)
+        return
+    raw_request_id = callback.data.removeprefix("ratedual:")
+    try:
+        request_id = int(raw_request_id)
+        async with AsyncSessionLocal() as session:
+            request = await session.get(AdminApprovalRequest, request_id)
+            if (
+                request is None
+                or request.action != "rate.override"
+                or request.target_type != "exchange_rate"
+            ):
+                raise AdminAuthorizationError("Approval request rejected.")
+            snapshot = json.loads(request.target_id)
+            old_rate = int(snapshot["old"])
+            new_rate = int(snapshot["new"]) if snapshot["new"] is not None else None
+            expected_version = int(snapshot["expected_version"])
+            if (
+                old_rate <= 0
+                or expected_version < 0
+                or (new_rate is not None and new_rate <= 0)
+            ):
+                raise AdminAuthorizationError("Rate approval payload rejected.")
+            current_state = await session.get(
+                UsdtRateOverride,
+                1,
+                with_for_update=True,
+            )
+            current_version = int(current_state.version) if current_state is not None else 0
+            if current_version != expected_version:
+                raise AdminAuthorizationError("Rate changed before approval.")
+            approved = await approve_request(
+                session,
+                approval_request_id=request_id,
+                actor_telegram_id=callback.from_user.id,
+                payload=request.target_id.encode("ascii"),
+            )
+            if not approved:
+                raise AdminAuthorizationError("Second approval required.")
+            await consume_approved_request(
+                session,
+                approval_request_id=request_id,
+                action="rate.override",
+                target_type="exchange_rate",
+                target_id=request.target_id,
+                payload=request.target_id.encode("ascii"),
+            )
+            state = await apply_usdt_rate_override_in_session(
+                session,
+                rate=new_rate,
+                actor_telegram_id=callback.from_user.id,
+                change_source="dual_approval",
+            )
+            await session.commit()
+        await cache_usdt_rate_override(state)
+    except (AdminAuthorizationError, KeyError, TypeError, ValueError, json.JSONDecodeError):
+        await record_admin_audit(
+            actor_telegram_id=callback.from_user.id,
+            action="exchange_rate.approval_rejected",
+            target_type="approval_request",
+            target_id=raw_request_id[:20],
+            outcome="rejected",
+            reason="invalid_or_replayed_approval",
+        )
+        await callback.answer(get_text(lang, "rate_invalid"), show_alert=True)
+        return
+    message_key = "rate_updated" if new_rate is not None else "rate_live_restored"
+    message = get_text(lang, message_key)
+    if new_rate is not None:
+        message = message.format(rate=new_rate)
+    await callback.message.edit_text(message, reply_markup=_rates_markup(lang), parse_mode="HTML")
+    await callback.answer()

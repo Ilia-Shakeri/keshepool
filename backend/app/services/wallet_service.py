@@ -6,10 +6,19 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Transaction, TransactionStatus, TransactionType, Wallet
+from app.core.money import quantized_decimal
+
+
+_WALLET_LIMIT = Decimal("9999999999999999.99")
 
 
 def to_decimal(value) -> Decimal:
-    return Decimal(str(value)).quantize(Decimal("0.01"))
+    return quantized_decimal(
+        value,
+        Decimal("0.01"),
+        minimum=-_WALLET_LIMIT,
+        maximum=_WALLET_LIMIT,
+    )
 
 
 async def apply_wallet_transaction(

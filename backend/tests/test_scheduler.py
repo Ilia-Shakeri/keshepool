@@ -1,6 +1,8 @@
 import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -9,6 +11,17 @@ from sqlalchemy.orm import Session
 
 from app.bot.handlers import admin_panel
 from app.bot.services import scheduler
+
+
+def test_scheduler_is_owned_by_dedicated_worker_not_api_process():
+    root = Path(__file__).resolve().parents[1]
+    api_source = (root / "app" / "main.py").read_text(encoding="utf-8")
+    worker_source = (root / "app" / "workers" / "telegram_inbox.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert "start_scheduler" not in api_source
+    assert "start_scheduler(admin_bot)" in worker_source
 from app.models import InventoryItem, ItemStatus
 
 
@@ -33,14 +46,22 @@ def test_low_stock_counts_only_usable_inventory_and_keeps_empty_variants():
     now = datetime.now(timezone.utc)
     with engine.begin() as connection:
         connection.exec_driver_sql(
+            "CREATE TABLE products (id VARCHAR PRIMARY KEY, is_active BOOLEAN NOT NULL)"
+        )
+        connection.exec_driver_sql(
             "CREATE TABLE product_variants ("
             "id VARCHAR PRIMARY KEY, product_id VARCHAR NOT NULL, duration VARCHAR NOT NULL, "
             "price_label VARCHAR NOT NULL, raw_price NUMERIC NOT NULL, is_active BOOLEAN NOT NULL)"
         )
         connection.exec_driver_sql(
+            "INSERT INTO products (id, is_active) VALUES (?, ?)",
+            ("product", True),
+        )
+        connection.exec_driver_sql(
             "CREATE TABLE inventory_items ("
             "id INTEGER PRIMARY KEY, product_id VARCHAR NOT NULL, variant_id VARCHAR NOT NULL, "
-            "credentials TEXT NOT NULL, status VARCHAR NOT NULL, assigned_to_user_id INTEGER, "
+            "credentials TEXT NOT NULL, credential_vault_state VARCHAR NOT NULL DEFAULT 'legacy', "
+            "status VARCHAR NOT NULL, assigned_to_user_id INTEGER, "
             "expires_at DATETIME, assigned_at DATETIME, created_at DATETIME NOT NULL)"
         )
         variants = [
@@ -104,6 +125,27 @@ def test_low_stock_counts_only_usable_inventory_and_keeps_empty_variants():
     assert "inactive" not in by_variant
 
 
+def test_low_stock_output_escapes_dynamic_html_and_joins_product_visibility():
+    class Result:
+        def all(self):
+            return [SimpleNamespace(vid="<id>", dur="A&B", qty=1)]
+
+    class CapturingSession:
+        statement = None
+
+        async def execute(self, statement):
+            self.statement = statement
+            return Result()
+
+    session = CapturingSession()
+    rows = asyncio.run(scheduler._check_low_stock(session))
+    sql = str(session.statement)
+
+    assert rows == ["⚠️ &lt;id&gt; / A&amp;B: 1 remaining"]
+    assert "JOIN products" in sql
+    assert "products.is_active" in sql
+
+
 def configure_report_test(monkeypatch, report_text="report"):
     build_report = AsyncMock(return_value=report_text)
     monkeypatch.setattr(admin_panel, "build_report_text", build_report)
@@ -163,9 +205,13 @@ def test_scheduler_runs_once_at_tehran_day_end(monkeypatch):
     result = scheduler.start_scheduler(AsyncMock())
 
     assert result is scheduler_instance
-    job = scheduler_instance.add_job.call_args
-    assert job.args == (scheduler.send_daily_report,)
-    assert job.kwargs["trigger"] == "cron"
-    assert job.kwargs["hour"] == 23
-    assert job.kwargs["minute"] == 59
-    assert str(job.kwargs["timezone"]) == "Asia/Tehran"
+    report_job, delivery_job = scheduler_instance.add_job.call_args_list
+    assert report_job.args == (scheduler.send_daily_report,)
+    assert report_job.kwargs["trigger"] == "cron"
+    assert report_job.kwargs["hour"] == 23
+    assert report_job.kwargs["minute"] == 59
+    assert str(report_job.kwargs["timezone"]) == "Asia/Tehran"
+    assert delivery_job.args == (scheduler.retry_card_transfer_notifications,)
+    assert delivery_job.kwargs["trigger"] == "interval"
+    assert delivery_job.kwargs["seconds"] == 60
+    assert delivery_job.kwargs["max_instances"] == 1

@@ -1,11 +1,21 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { bootstrapUser } from "@/lib/api";
+import {
+  AUTH_SESSION_EXPIRED_EVENT,
+  bootstrapUser,
+  resetApiSession,
+} from "@/lib/api";
+
+type TelegramLifecycleApi = {
+  onEvent?: (event: string, callback: () => void) => void;
+  offEvent?: (event: string, callback: () => void) => void;
+};
 
 export default function TelegramBootstrap() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isRetrying, setIsRetrying] = useState(false);
+  const [requiresReopen, setRequiresReopen] = useState(false);
 
   const runBootstrap = useCallback(() => {
     const webApp = window.Telegram?.WebApp;
@@ -15,6 +25,7 @@ export default function TelegramBootstrap() {
     }
 
     setIsRetrying(true);
+    setRequiresReopen(false);
     setErrorMessage(null);
     webApp.expand();
     webApp.ready();
@@ -28,8 +39,54 @@ export default function TelegramBootstrap() {
   }, []);
 
   useEffect(() => {
+    const handleAuthExpired = () => {
+      setIsRetrying(false);
+      setRequiresReopen(true);
+      setErrorMessage("نشست شما پایان یافته است. برنامه را ببندید و دوباره از تلگرام باز کنید.");
+    };
+    const handleActivation = () => {
+      resetApiSession();
+      void runBootstrap();
+    };
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") handleActivation();
+    };
+
+    window.addEventListener(AUTH_SESSION_EXPIRED_EVENT, handleAuthExpired);
+
+    const webApp = window.Telegram?.WebApp;
+    const lifecycle = webApp as (typeof webApp & TelegramLifecycleApi) | undefined;
+    const hasActivationEvent = (
+      typeof lifecycle?.onEvent === "function"
+      && typeof lifecycle.offEvent === "function"
+    );
+    if (hasActivationEvent) {
+      lifecycle.onEvent?.("activated", handleActivation);
+    } else {
+      document.addEventListener("visibilitychange", handleVisibilityChange);
+    }
+
     void Promise.resolve().then(runBootstrap);
+
+    return () => {
+      window.removeEventListener(AUTH_SESSION_EXPIRED_EVENT, handleAuthExpired);
+      if (hasActivationEvent) {
+        lifecycle.offEvent?.("activated", handleActivation);
+      } else {
+        document.removeEventListener("visibilitychange", handleVisibilityChange);
+      }
+    };
   }, [runBootstrap]);
+
+  const recoverExpiredSession = useCallback(() => {
+    resetApiSession();
+    const webApp = window.Telegram?.WebApp;
+    if (webApp?.initData) {
+      webApp.close();
+      return;
+    }
+    window.location.reload();
+  }, []);
 
   if (!errorMessage) return null;
 
@@ -38,11 +95,11 @@ export default function TelegramBootstrap() {
       <p className="min-w-0 flex-1 text-xs leading-5 text-[#F5F5F5]/85">{errorMessage}</p>
       <button
         type="button"
-        onClick={() => void runBootstrap()}
-        disabled={isRetrying}
+        onClick={requiresReopen ? recoverExpiredSession : () => void runBootstrap()}
+        disabled={!requiresReopen && isRetrying}
         className="shrink-0 rounded-xl bg-[#E63946] px-3 py-2 text-xs font-bold text-white disabled:opacity-60"
       >
-        {isRetrying ? "در حال تلاش" : "تلاش دوباره"}
+        {requiresReopen ? "بستن و بازکردن دوباره" : isRetrying ? "در حال تلاش" : "تلاش دوباره"}
       </button>
     </div>
   );

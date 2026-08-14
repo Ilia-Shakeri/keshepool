@@ -1,6 +1,6 @@
 from typing import Any, Dict, List
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -11,7 +11,12 @@ from app.core.security import validate_fresh_telegram_data, validate_telegram_da
 from app.models import Order, User
 from app.services.cache_service import check_rate_limit, invalidate_catalog_cache
 from app.services.catalog_service import get_public_catalog
+from app.services.credential_access_service import (
+    MASKED_CREDENTIAL_PREVIEW,
+    credential_is_revealable,
+)
 from app.services.inventory_service import fulfill_wallet_order
+from app.services.http_response_security import apply_no_store_headers
 from app.services.user_service import ensure_user_from_telegram_init
 
 router = APIRouter(prefix="/api", tags=["catalog"])
@@ -59,6 +64,22 @@ class ProductResponse(BaseModel):
     features: List[str] | None
     variants: List[ProductVariantResponse]
 
+
+class CheckoutOrderResponse(BaseModel):
+    id: str
+    productTitle: str
+    productBrand: str
+    variantDuration: str
+    credentialPreview: str | None
+    credentialAvailable: bool
+    createdAt: str
+    totalAmount: float
+
+
+class CheckoutResponse(BaseModel):
+    status: str
+    order: CheckoutOrderResponse
+
 @router.get("/products", response_model=List[ProductResponse])
 async def get_all_products(
     request: Request,
@@ -75,9 +96,10 @@ async def get_all_products(
         raise HTTPException(status_code=429, detail="Rate limit exceeded.")
     return await get_public_catalog(db)
 
-@router.post("/checkout")
+@router.post("/checkout", response_model=CheckoutResponse)
 async def checkout_with_wallet(
     payload: CheckoutRequest,
+    response: Response,
     idempotency_header: str | None = Header(
         default=None,
         alias="X-Idempotency-Key",
@@ -88,6 +110,7 @@ async def checkout_with_wallet(
     user: User = Depends(current_fresh_user),
     db: AsyncSession = Depends(get_db),
 ):
+    apply_no_store_headers(response)
     rate_limit = await check_rate_limit(
         "checkout",
         f"user:{user.telegram_id}",
@@ -129,16 +152,38 @@ async def checkout_with_wallet(
         .where(Order.id == order.id)
     )
     hydrated_order = order_result.scalars().first()
+    has_complete_snapshot = getattr(hydrated_order, "snapshot_state", None) == "complete"
 
     return {
         "status": "success",
         "order": {
             "id": hydrated_order.public_id,
-            "productTitle": hydrated_order.product.title,
-            "productBrand": hydrated_order.product.brand,
-            "variantDuration": hydrated_order.variant.duration,
-            "credentials": hydrated_order.inventory_item.credentials,
+            "productTitle": (
+                hydrated_order.product_title_snapshot
+                if has_complete_snapshot
+                else hydrated_order.product.title
+            ),
+            "productBrand": (
+                hydrated_order.product_brand_snapshot
+                if has_complete_snapshot
+                else hydrated_order.product.brand
+            ),
+            "variantDuration": (
+                hydrated_order.variant_duration_snapshot
+                if has_complete_snapshot
+                else hydrated_order.variant.duration
+            ),
+            "credentialPreview": (
+                MASKED_CREDENTIAL_PREVIEW
+                if credential_is_revealable(hydrated_order)
+                else None
+            ),
+            "credentialAvailable": credential_is_revealable(hydrated_order),
             "createdAt": hydrated_order.created_at.isoformat(),
-            "totalAmount": float(hydrated_order.total_amount),
+            "totalAmount": float(
+                hydrated_order.total_amount_snapshot
+                if has_complete_snapshot
+                else hydrated_order.total_amount
+            ),
         },
     }

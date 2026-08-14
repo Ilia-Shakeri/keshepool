@@ -1,4 +1,4 @@
-import type { UserOrder } from "@/lib/api";
+import type { UserOrder } from "@/features/orders/types";
 
 export type OrderStatus = UserOrder["status"];
 export type OrderStatusFilter = "all" | OrderStatus;

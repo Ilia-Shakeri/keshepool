@@ -30,6 +30,13 @@ from app.services.catalog_service import (
 from app.services.inventory_service import fulfill_wallet_order
 from app.services.user_service import ensure_user_from_telegram_init
 from app.services.telegram_inbox_service import enqueue_update
+from app.services.admin_authorization_service import (
+    AdminAuthorizationError,
+    approve_request,
+    consume_approved_request,
+    create_approval_request,
+)
+from app.core.config import settings
 
 
 RUN_POSTGRES = os.environ.get("KESHEPOOL_RUN_POSTGRES_TESTS") == "1"
@@ -381,3 +388,68 @@ def test_admin_mutation_is_visible_through_public_endpoint_and_cache(monkeypatch
     assert visible[0]["variants"][0]["stockCount"] == 1
     assert hidden == []
     assert visible_again[0]["id"] == "sync-product"
+
+
+def test_real_postgres_dual_approval_requires_two_actors_and_executes_once(monkeypatch):
+    _assert_disposable_database()
+    monkeypatch.setitem(settings.__dict__, "admin_ids", {"100", "200"})
+    payload = b'{"transaction_id":7,"credit":"10000000.00"}'
+
+    async def scenario():
+        engine = create_async_engine(TEST_DATABASE_URL)
+        sessions = async_sessionmaker(engine, expire_on_commit=False)
+        try:
+            await _reset_database(engine)
+            async with sessions() as session:
+                request = await create_approval_request(
+                    session,
+                    actor_telegram_id="100",
+                    action="wallet.adjust",
+                    target_type="transaction",
+                    target_id="7",
+                    payload=payload,
+                )
+                await session.commit()
+                request_id = request.id
+
+            async with sessions() as session:
+                with pytest.raises(AdminAuthorizationError, match="Second administrator"):
+                    await approve_request(
+                        session,
+                        approval_request_id=request_id,
+                        actor_telegram_id="100",
+                        payload=payload,
+                    )
+                await session.rollback()
+
+            async with sessions() as session:
+                assert await approve_request(
+                    session,
+                    approval_request_id=request_id,
+                    actor_telegram_id="200",
+                    payload=payload,
+                )
+                await session.commit()
+
+            async def consume_once():
+                async with sessions() as session:
+                    try:
+                        await consume_approved_request(
+                            session,
+                            approval_request_id=request_id,
+                            action="wallet.adjust",
+                            target_type="transaction",
+                            target_id="7",
+                            payload=payload,
+                        )
+                        await session.commit()
+                        return True
+                    except AdminAuthorizationError:
+                        await session.rollback()
+                        return False
+
+            return await asyncio.gather(consume_once(), consume_once())
+        finally:
+            await engine.dispose()
+
+    assert sorted(asyncio.run(scenario())) == [False, True]

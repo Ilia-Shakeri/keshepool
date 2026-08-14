@@ -1,5 +1,6 @@
 import json
 import re
+import secrets
 from datetime import timezone
 from typing import Any, Dict, Optional
 
@@ -11,6 +12,20 @@ from sqlalchemy.orm import selectinload
 
 from app.core.config import settings
 from app.models import User, Wallet, utcnow
+
+
+REFERRAL_CODE_PATTERN = re.compile(r"^[0-9a-f]{32}$")
+REFERRAL_INSERT_ATTEMPTS = 5
+
+
+def generate_referral_code() -> str:
+    return secrets.token_hex(16)
+
+
+def normalize_referral_code(value: object) -> str | None:
+    if not isinstance(value, str) or not REFERRAL_CODE_PATTERN.fullmatch(value):
+        return None
+    return value
 
 
 def parse_telegram_user(telegram_data: Dict[str, Any]) -> Dict[str, Any]:
@@ -39,7 +54,7 @@ def parse_telegram_user(telegram_data: Dict[str, Any]) -> Dict[str, Any]:
 async def ensure_user_from_telegram_init(
     db: AsyncSession,
     telegram_data: Dict[str, Any],
-    referrer_telegram_id: Optional[str] = None,
+    referral_code: Optional[str] = None,
 ) -> User:
     telegram_user = parse_telegram_user(telegram_data)
     telegram_id = str(telegram_user["id"])
@@ -55,33 +70,54 @@ async def ensure_user_from_telegram_init(
     if user is not None and user.is_banned:
         raise HTTPException(status_code=403, detail="User access is blocked.")
     referrer_id = None
-    if attempted_user_insert and referrer_telegram_id and referrer_telegram_id != telegram_id:
-        referrer_result = await db.execute(select(User).where(User.telegram_id == referrer_telegram_id))
+    normalized_referral_code = normalize_referral_code(referral_code)
+    if attempted_user_insert and normalized_referral_code:
+        referrer_result = await db.execute(
+            select(User).where(
+                User.referral_code == normalized_referral_code,
+                User.is_banned.is_(False),
+            )
+        )
         referrer = referrer_result.scalars().first()
-        if referrer:
+        if referrer and referrer.telegram_id != telegram_id:
             referrer_id = referrer.id
 
     if attempted_user_insert:
-        insert_result = await db.execute(
-            pg_insert(User)
-            .values(
-                telegram_id=telegram_id,
-                username=telegram_user.get("username"),
-                first_name=telegram_user.get("first_name"),
-                last_name=telegram_user.get("last_name"),
-                language_code=telegram_user.get("language_code"),
-                photo_url=telegram_user.get("photo_url"),
-                is_premium=bool(telegram_user.get("is_premium", False)),
-                role="admin" if telegram_id in settings.admin_ids else "user",
-                referrer_id=referrer_id,
-                last_seen_at=current_time,
-                created_at=current_time,
-                updated_at=current_time,
+        user_inserted_or_found = False
+        for _ in range(REFERRAL_INSERT_ATTEMPTS):
+            insert_result = await db.execute(
+                pg_insert(User)
+                .values(
+                    telegram_id=telegram_id,
+                    username=telegram_user.get("username"),
+                    first_name=telegram_user.get("first_name"),
+                    last_name=telegram_user.get("last_name"),
+                    language_code=telegram_user.get("language_code"),
+                    photo_url=telegram_user.get("photo_url"),
+                    is_premium=bool(telegram_user.get("is_premium", False)),
+                    role="admin" if telegram_id in settings.admin_ids else "user",
+                    referral_code=generate_referral_code(),
+                    referrer_id=referrer_id,
+                    last_seen_at=current_time,
+                    created_at=current_time,
+                    updated_at=current_time,
+                )
+                .on_conflict_do_nothing()
+                .returning(User.id)
             )
-            .on_conflict_do_nothing(index_elements=[User.telegram_id])
-            .returning(User.id)
-        )
-        insert_result.scalar_one_or_none()
+            if insert_result.scalar_one_or_none() is not None:
+                user_inserted_or_found = True
+                break
+            concurrent_user_result = await db.execute(
+                select(User).where(User.telegram_id == telegram_id)
+            )
+            if concurrent_user_result.scalars().first() is not None:
+                user_inserted_or_found = True
+                break
+        if not user_inserted_or_found:
+            await db.rollback()
+            raise HTTPException(status_code=503, detail="Could not allocate a referral code.")
+
         user_result = await db.execute(
             select(User)
             .options(selectinload(User.wallet))

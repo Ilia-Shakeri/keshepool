@@ -47,6 +47,7 @@ docker compose config --quiet
 
 previous_backend_image="$(docker inspect --format '{{.Config.Image}}' keshepool-backend 2>/dev/null || true)"
 previous_frontend_image="$(docker inspect --format '{{.Config.Image}}' keshepool-frontend 2>/dev/null || true)"
+previous_worker_image="$(docker inspect --format '{{.Config.Image}}' keshepool-telegram-worker 2>/dev/null || true)"
 application_replaced=false
 cutover_started=false
 migration_started=false
@@ -156,6 +157,11 @@ rollback_on_failure() {
       docker compose up -d --no-deps --force-recreate backend frontend; then
       wait_for_health backend 120 || echo "[deploy] Prior backend did not recover cleanly." >&2
       wait_for_health frontend 120 || echo "[deploy] Prior frontend did not recover cleanly." >&2
+      if [ -n "$previous_worker_image" ]; then
+        BACKEND_IMAGE="$previous_worker_image" FRONTEND_IMAGE="$previous_frontend_image" \
+          docker compose up -d --no-deps --force-recreate telegram-worker || \
+          echo "[deploy] Prior inbox worker did not recover cleanly." >&2
+      fi
     else
       echo "[deploy] Prior image pair could not be restarted automatically." >&2
     fi
@@ -172,9 +178,7 @@ docker compose pull backend frontend
 echo "[deploy] Starting state services."
 docker compose up -d db redis db-backup
 wait_for_health db 120
-if ! wait_for_health redis 30; then
-  echo "[deploy] Redis is unavailable. Backend readiness must report degraded cache mode." >&2
-fi
+wait_for_health redis 30
 
 echo "[deploy] Preparing persistent asset permissions."
 docker compose run --rm --no-deps static-init
@@ -183,6 +187,7 @@ echo "[deploy] Entering the migration maintenance window."
 cutover_started=true
 docker compose stop frontend
 docker compose stop backend
+docker compose stop telegram-worker
 
 echo "[deploy] Running the single migration owner."
 migration_started=true
@@ -194,6 +199,8 @@ application_replaced=true
 docker compose up -d --no-deps --force-recreate backend
 verify_running_image backend "$BACKEND_IMAGE"
 wait_for_health backend 180
+docker compose up -d --no-deps --force-recreate telegram-worker
+verify_running_image telegram-worker "$BACKEND_IMAGE"
 docker compose up -d --no-deps --force-recreate frontend
 verify_running_image frontend "$FRONTEND_IMAGE"
 wait_for_health frontend 180

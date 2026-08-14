@@ -9,11 +9,15 @@ import {
   Copy,
   CreditCard,
   DollarSign,
+  FileCheck2,
   Home,
+  ImageUp,
   Loader2,
   Plus,
+  ShieldCheck,
   Sparkles,
   Wallet,
+  Wifi,
   X,
 } from "lucide-react";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
@@ -22,13 +26,15 @@ import PageHeader from "@/components/PageHeader";
 import { useTelegramBackButton } from "@/hooks/useTelegramBackButton";
 import {
   createCashoutRequest,
-  createTetra98Payment,
   getCashoutPlatforms,
+  getPublicConfig,
   getUsdtRate,
   getWalletBalance,
   getWalletTransactions,
   initiateCryptoDeposit,
+  submitCardTransfer,
   type CashoutPlatform,
+  type PublicConfig,
   type WalletTransaction,
 } from "@/lib/api";
 import { formatPrice, toPersianDigits } from "@/lib/utils";
@@ -38,7 +44,7 @@ import { formatTransactionAmount } from "@/lib/transaction-format";
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
-type DepositMethod = "irr" | "usdt";
+type DepositMethod = "card" | "usdt";
 type ActiveTab = "wallet" | "cashout";
 
 function txIcon(type: string) {
@@ -80,7 +86,7 @@ export default function FinancePage() {
 
   // Deposit modal state
   const [isDepositOpen, setIsDepositOpen] = useState(false);
-  const [depositMethod, setDepositMethod] = useState<DepositMethod>("irr");
+  const [depositMethod, setDepositMethod] = useState<DepositMethod>("card");
   const [irrAmount, setIrrAmount] = useState("");
   const [usdtAmount, setUsdtAmount] = useState("");
   const [depositLoading, setDepositLoading] = useState(false);
@@ -92,7 +98,14 @@ export default function FinancePage() {
     txId: number;
   } | null>(null);
   const [copiedAddress, setCopiedAddress] = useState(false);
+  const [copiedCard, setCopiedCard] = useState(false);
   const [usdtRate, setUsdtRate] = useState<number | null>(null);
+  const [paymentConfig, setPaymentConfig] = useState<PublicConfig["payments"] | null>(null);
+  const [receiptFile, setReceiptFile] = useState<File | null>(null);
+  const [cardTransferSuccess, setCardTransferSuccess] = useState<{
+    transactionId: number;
+    adminDelivery: "sent" | "queued";
+  } | null>(null);
 
   // Cashout state
   const [platforms, setPlatforms] = useState<CashoutPlatform[]>([]);
@@ -126,6 +139,12 @@ export default function FinancePage() {
 
   useEffect(() => {
     void Promise.resolve().then(refreshWallet);
+    void getPublicConfig()
+      .then((config) => {
+        setPaymentConfig(config.payments);
+        if (!config.payments.cardToCard.enabled) setDepositMethod("usdt");
+      })
+      .catch(() => setPaymentConfig(null));
   }, []);
 
   // Load platforms when cashout tab activates
@@ -137,18 +156,21 @@ export default function FinancePage() {
 
   // ── deposit handlers ────────────────────────────────────────────────────────
 
-  const handleOpenDeposit = () => {
+  const handleOpenDeposit = useCallback(() => {
     setDepositError(null);
     setCryptoDepositInfo(null);
     setIrrAmount("");
     setUsdtAmount("");
-    setDepositMethod("irr");
+    setReceiptFile(null);
+    setCardTransferSuccess(null);
+    setCopiedCard(false);
+    setDepositMethod(paymentConfig?.cardToCard.enabled === false ? "usdt" : "card");
     setIsDepositOpen(true);
     // Pull the live USDT rate so the user sees the equivalent value upfront
     getUsdtRate()
       .then((data) => setUsdtRate(data.tomanPerUsdt))
       .catch(() => setUsdtRate(null));
-  };
+  }, [paymentConfig]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -162,29 +184,34 @@ export default function FinancePage() {
     const query = searchParams.toString();
     const nextUrl = query ? `${window.location.pathname}?${query}` : window.location.pathname;
     window.history.replaceState(null, "", nextUrl);
-  }, []);
+  }, [handleOpenDeposit]);
 
-  const handleIrrDeposit = async () => {
+  const handleCardTransfer = async () => {
     const amount = Number(irrAmount);
     if (!Number.isFinite(amount) || amount < 10000) {
       setDepositError("حداقل مبلغ ۱۰٬۰۰۰ تومان است.");
       return;
     }
+    if (!receiptFile) {
+      setDepositError("لطفاً عکس رسید بانکی را انتخاب کنید.");
+      return;
+    }
+    const maxBytes = paymentConfig?.cardToCard.maxReceiptBytes ?? 5_000_000;
+    if (receiptFile.size > maxBytes) {
+      setDepositError(`حجم عکس رسید باید کمتر از ${Math.floor(maxBytes / 1_000_000)} مگابایت باشد.`);
+      return;
+    }
     setDepositError(null);
     setDepositLoading(true);
     try {
-      const res = await createTetra98Payment(amount);
-      const webApp = window.Telegram?.WebApp;
-      if (res.paymentUrlBot && webApp) {
-        // t.me links must open via openTelegramLink to stay within Telegram
-        webApp.openTelegramLink(res.paymentUrlBot);
-      } else if (res.paymentUrlWeb) {
-        webApp?.openLink(res.paymentUrlWeb);
-      }
-      setIsDepositOpen(false);
-      setTimeout(refreshWallet, 4000);
+      const result = await submitCardTransfer(amount, receiptFile);
+      setCardTransferSuccess({
+        transactionId: result.transactionId,
+        adminDelivery: result.adminDelivery,
+      });
+      await refreshWallet();
     } catch (err) {
-      setDepositError(err instanceof Error ? err.message : "اتصال به درگاه ناموفق بود.");
+      setDepositError(err instanceof Error ? err.message : "ثبت رسید ناموفق بود.");
     } finally {
       setDepositLoading(false);
     }
@@ -222,9 +249,36 @@ export default function FinancePage() {
     }
   };
 
+  const handleCopyCard = async () => {
+    const cardNumber = paymentConfig?.cardToCard.cardNumber;
+    if (!cardNumber) return;
+    if (await copyText(cardNumber)) {
+      setCopiedCard(true);
+      setTimeout(() => setCopiedCard(false), 2000);
+    } else {
+      window.Telegram?.WebApp?.showAlert(cardNumber);
+    }
+  };
+
+  const handleReceiptChange = (file: File | null) => {
+    setDepositError(null);
+    if (!file) {
+      setReceiptFile(null);
+      return;
+    }
+    if (!new Set(["image/jpeg", "image/png", "image/webp"]).has(file.type)) {
+      setReceiptFile(null);
+      setDepositError("فقط عکس JPG، PNG یا WebP پذیرفته می‌شود.");
+      return;
+    }
+    setReceiptFile(file);
+  };
+
   const closeDeposit = () => {
     if (shouldBlockFinancialDismiss(depositLoading)) return;
     setCryptoDepositInfo(null);
+    setReceiptFile(null);
+    setCardTransferSuccess(null);
     setDepositError(null);
     setIsDepositOpen(false);
   };
@@ -368,12 +422,19 @@ export default function FinancePage() {
                         </div>
                         <div className="flex flex-col min-w-0">
                           <div className="flex items-center gap-1.5">
-                            <span className="text-sm font-bold truncate">{txLabel(tx.type)}</span>
+                            <span className="text-sm font-bold truncate">
+                              {tx.gateway === "card_to_card" ? "شارژ کارت‌به‌کارت" : txLabel(tx.type)}
+                            </span>
                             {txStatusBadge(tx.status)}
                           </div>
                           <span className="text-[10px] text-[#F5F5F5]/45 mt-0.5">
                             {new Date(tx.createdAt).toLocaleDateString("fa-IR")}
                           </span>
+                          {tx.hasReceipt && (
+                            <span className="mt-0.5 flex items-center gap-1 text-[9px] font-medium text-blue-300/75">
+                              <FileCheck2 className="h-3 w-3" /> رسید ثبت شده
+                            </span>
+                          )}
                         </div>
                       </div>
                       <span
@@ -603,7 +664,9 @@ export default function FinancePage() {
           >
             {(
               [
-                { key: "irr", label: "تومانی (Tetra98)", icon: <CreditCard className="w-3.5 h-3.5" /> },
+                ...(paymentConfig?.cardToCard.enabled !== false
+                  ? [{ key: "card" as const, label: "کارت‌به‌کارت", icon: <CreditCard className="w-3.5 h-3.5" /> }]
+                  : []),
                 { key: "usdt", label: "رمزارز (USDT)", icon: <Bitcoin className="w-3.5 h-3.5" /> },
               ] as { key: DepositMethod; label: string; icon: React.ReactNode }[]
             ).map(({ key, label, icon }) => (
@@ -629,13 +692,77 @@ export default function FinancePage() {
             ))}
           </div>
 
-          {/* ── IRR deposit form ── */}
-          {depositMethod === "irr" && (
+          {/* ── Card transfer form ── */}
+          {depositMethod === "card" && !cardTransferSuccess && (
             <div className="space-y-4">
+              {paymentConfig?.cardToCard.enabled && paymentConfig.cardToCard.cardNumber && paymentConfig.cardToCard.cardHolder ? (
+                <button
+                  type="button"
+                  onClick={() => void handleCopyCard()}
+                  aria-label="کپی شماره کارت"
+                  className="group relative block w-full overflow-hidden rounded-[1.6rem] p-5 text-right shadow-[0_22px_55px_rgba(14,91,255,0.32)] transition-all active:scale-[0.985]"
+                  style={{
+                    aspectRatio: "1.586 / 1",
+                    background: "linear-gradient(145deg, #0b76ff 0%, #0755db 48%, #0533a3 100%)",
+                    border: "1px solid rgba(255,255,255,0.24)",
+                  }}
+                >
+                  <span className="pointer-events-none absolute -right-16 -top-20 h-48 w-48 rounded-full bg-cyan-300/25 blur-2xl" />
+                  <span className="pointer-events-none absolute -bottom-24 -left-12 h-52 w-52 rounded-full bg-blue-950/50 blur-2xl" />
+                  <span className="pointer-events-none absolute inset-0 bg-[linear-gradient(115deg,transparent_20%,rgba(255,255,255,0.16)_42%,transparent_56%)] opacity-60" />
+
+                  <span className="relative flex h-full flex-col justify-between text-white">
+                    <span className="flex items-start justify-between">
+                      <span className="flex items-center gap-2">
+                        <span className="text-lg font-black tracking-tight">کِش‌پول</span>
+                        <span className="rounded-full border border-white/25 bg-white/10 px-2 py-0.5 text-[8px] font-bold tracking-widest text-white/80">
+                          BANK CARD
+                        </span>
+                      </span>
+                      <Wifi className="h-6 w-6 rotate-90 text-white/75" />
+                    </span>
+
+                    <span className="flex items-center justify-between">
+                      <span className="grid h-10 w-12 grid-cols-3 overflow-hidden rounded-lg border border-amber-100/65 bg-gradient-to-br from-amber-100 via-yellow-300 to-amber-500 shadow-inner">
+                        {Array.from({ length: 9 }).map((_, index) => (
+                          <span key={index} className="border border-amber-700/25" />
+                        ))}
+                      </span>
+                      <span className="flex items-center gap-1.5 rounded-full bg-black/15 px-3 py-1.5 text-[10px] font-bold text-white/90 backdrop-blur-sm">
+                        {copiedCard ? <CheckCircle2 className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+                        {copiedCard ? "کپی شد" : "برای کپی لمس کنید"}
+                      </span>
+                    </span>
+
+                    <span>
+                      <span className="block text-left font-mono text-[clamp(1.05rem,5vw,1.45rem)] font-semibold tracking-[0.12em] text-white drop-shadow-sm" dir="ltr">
+                        {paymentConfig.cardToCard.cardNumber.replace(/(\d{4})(?=\d)/g, "$1 ")}
+                      </span>
+                      <span className="mt-3 flex items-end justify-between">
+                        <span>
+                          <span className="block text-[8px] font-medium uppercase tracking-widest text-white/50">CARD HOLDER</span>
+                          <span className="mt-0.5 block text-sm font-bold tracking-wide text-white/95">
+                            {paymentConfig.cardToCard.cardHolder}
+                          </span>
+                        </span>
+                        <ShieldCheck className="h-6 w-6 text-white/75" />
+                      </span>
+                    </span>
+                  </span>
+                </button>
+              ) : (
+                <div className="rounded-2xl border border-amber-400/20 bg-amber-400/[0.07] p-4 text-xs leading-6 text-amber-200">
+                  اطلاعات کارت در دسترس نیست. روش USDT را انتخاب کنید.
+                </div>
+              )}
+
               <div>
                 <label className="text-xs text-[#F5F5F5]/55 mb-2 block">مبلغ (تومان)</label>
                 <input
                   type="number"
+                  inputMode="numeric"
+                  min={10000}
+                  max={50000000}
                   value={irrAmount}
                   onChange={(e) => setIrrAmount(e.target.value)}
                   placeholder="مثال: ۵۰۰،۰۰۰"
@@ -647,16 +774,51 @@ export default function FinancePage() {
                   }}
                 />
               </div>
-              <div
-                className="flex items-center gap-3 p-3.5 rounded-2xl"
-                style={{
-                  background: "rgba(230,57,70,0.07)",
-                  border: "1px solid rgba(230,57,70,0.15)",
-                }}
-              >
-                <Wallet className="w-4 h-4 text-[#E63946] flex-shrink-0" />
-                <p className="text-[11px] text-[#F5F5F5]/60 leading-relaxed">
-                  مبلغ پرداخت شده مستقیماً به کیف پول داخلی شما واریز می‌شود.
+
+              <div>
+                <div className="mb-2 flex items-center justify-between gap-3">
+                  <label htmlFor="card-transfer-receipt" className="text-xs text-[#F5F5F5]/65">
+                    لطفاً بعد از واریز، عکس رسید را بارگذاری کنید.
+                  </label>
+                  <span className="shrink-0 text-[9px] text-[#F5F5F5]/35">حداکثر ۵ مگابایت</span>
+                </div>
+                <label
+                  htmlFor="card-transfer-receipt"
+                  className={`flex min-h-28 cursor-pointer flex-col items-center justify-center gap-2 rounded-2xl border border-dashed px-4 py-5 text-center transition-all active:scale-[0.99] ${
+                    receiptFile
+                      ? "border-emerald-400/35 bg-emerald-400/[0.07]"
+                      : "border-blue-400/30 bg-blue-500/[0.06] hover:bg-blue-500/[0.1]"
+                  }`}
+                >
+                  {receiptFile ? (
+                    <>
+                      <FileCheck2 className="h-8 w-8 text-emerald-400" />
+                      <span className="max-w-full truncate text-xs font-bold text-emerald-300">{receiptFile.name}</span>
+                      <span className="text-[10px] text-[#F5F5F5]/45">برای تغییر عکس، دوباره لمس کنید</span>
+                    </>
+                  ) : (
+                    <>
+                      <span className="rounded-2xl bg-blue-500/15 p-3 text-blue-300">
+                        <ImageUp className="h-6 w-6" />
+                      </span>
+                      <span className="text-xs font-bold text-[#F5F5F5]/80">انتخاب عکس رسید بانکی</span>
+                      <span className="text-[10px] text-[#F5F5F5]/40">JPG، PNG یا WebP</span>
+                    </>
+                  )}
+                </label>
+                <input
+                  id="card-transfer-receipt"
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp"
+                  className="sr-only"
+                  onChange={(event) => handleReceiptChange(event.target.files?.[0] ?? null)}
+                />
+              </div>
+
+              <div className="flex items-start gap-3 rounded-2xl border border-blue-400/15 bg-blue-400/[0.06] p-3.5">
+                <Wallet className="mt-0.5 h-4 w-4 flex-shrink-0 text-blue-300" />
+                <p className="text-[11px] leading-relaxed text-[#F5F5F5]/60">
+                  رسید برای مدیران فرستاده می‌شود. موجودی فقط بعد از بررسی و تایید مدیر شارژ می‌شود.
                 </p>
               </div>
               {depositError && (
@@ -671,16 +833,43 @@ export default function FinancePage() {
                 </p>
               )}
               <button
-                onClick={handleIrrDeposit}
-                disabled={depositLoading}
+                onClick={handleCardTransfer}
+                disabled={depositLoading || !paymentConfig?.cardToCard.enabled}
                 className="w-full py-4 rounded-2xl text-sm font-bold transition-all active:scale-95 flex items-center justify-center gap-2 disabled:opacity-60"
                 style={{
-                  background: "linear-gradient(135deg, #E63946 0%, #c0303c 100%)",
+                  background: "linear-gradient(135deg, #0b76ff 0%, #0647c8 100%)",
                   color: "white",
-                  boxShadow: "0 8px 24px rgba(230,57,70,0.3)",
+                  boxShadow: "0 8px 24px rgba(11,118,255,0.28)",
                 }}
               >
-                {depositLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : "انتقال به درگاه"}
+                {depositLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : "ثبت رسید و ارسال برای بررسی"}
+              </button>
+            </div>
+          )}
+
+          {depositMethod === "card" && cardTransferSuccess && (
+            <div className="space-y-4 py-2 text-center">
+              <span className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-emerald-400/10 text-emerald-400">
+                <CheckCircle2 className="h-9 w-9" />
+              </span>
+              <div>
+                <h3 className="text-base font-black text-emerald-300">رسید با موفقیت ثبت شد</h3>
+                <p className="mt-2 text-xs leading-6 text-[#F5F5F5]/55">
+                  تراکنش #{toPersianDigits(cardTransferSuccess.transactionId)} در انتظار بررسی مدیر است.
+                  نتیجه در همین بخش تراکنش‌ها دیده می‌شود.
+                </p>
+                {cardTransferSuccess.adminDelivery === "queued" && (
+                  <p className="mt-2 text-[10px] leading-5 text-amber-300/80">
+                    پیام مدیر در صف ارسال است و خودکار دوباره فرستاده می‌شود.
+                  </p>
+                )}
+              </div>
+              <button
+                type="button"
+                onClick={closeDeposit}
+                className="w-full rounded-2xl border border-white/10 bg-white/[0.07] py-3 text-sm font-bold"
+              >
+                بستن
               </button>
             </div>
           )}

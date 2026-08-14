@@ -1,3 +1,5 @@
+import { isIP } from "node:net";
+
 const HOP_BY_HOP_HEADERS = [
   "connection",
   "content-encoding",
@@ -10,6 +12,20 @@ const HOP_BY_HOP_HEADERS = [
   "trailer",
   "transfer-encoding",
   "upgrade",
+];
+const CLIENT_PROVENANCE_HEADERS = [
+  "forwarded",
+  "x-forwarded-for",
+  "x-forwarded-host",
+  "x-forwarded-proto",
+  "x-forwarded-port",
+  "x-real-ip",
+  "client-ip",
+  "true-client-ip",
+  "cf-connecting-ip",
+  "fly-client-ip",
+  "fastly-client-ip",
+  "x-cluster-client-ip",
 ];
 const UPSTREAM_TIMEOUT_MS = 10_000;
 const MAX_PROXY_BODY_BYTES = 1_048_576;
@@ -24,11 +40,14 @@ function backendBaseUrl(): string {
 }
 
 function forwardedHeaders(request: Request): Headers {
+  const rebuiltClientIp = request.headers.get("x-forwarded-for")?.trim() || "";
   const headers = new Headers(request.headers);
   for (const name of HOP_BY_HOP_HEADERS) headers.delete(name);
+  for (const name of CLIENT_PROVENANCE_HEADERS) headers.delete(name);
   headers.delete("x-admin-token");
 
   const requestUrl = new URL(request.url);
+  if (isIP(rebuiltClientIp)) headers.set("x-forwarded-for", rebuiltClientIp);
   headers.set("x-forwarded-host", requestUrl.host);
   headers.set("x-forwarded-proto", requestUrl.protocol.slice(0, -1));
   return headers;

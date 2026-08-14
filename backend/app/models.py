@@ -1,4 +1,5 @@
 import enum
+import secrets
 from datetime import datetime, timezone
 
 from sqlalchemy import (
@@ -9,10 +10,13 @@ from sqlalchemy import (
     DateTime,
     Enum,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     JSON,
+    LargeBinary,
     Numeric,
+    SmallInteger,
     String,
     Text,
     UniqueConstraint,
@@ -74,6 +78,17 @@ class CashoutRequestStatus(str, enum.Enum):
 
 class User(Base):
     __tablename__ = "users"
+    __table_args__ = (
+        UniqueConstraint("referral_code", name="uq_users_referral_code"),
+        CheckConstraint(
+            "referral_code ~ '^[0-9a-f]{32}$'",
+            name="ck_users_referral_code_format",
+        ),
+        CheckConstraint(
+            "referrer_id IS NULL OR referrer_id <> id",
+            name="ck_users_no_self_referral",
+        ),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
     telegram_id = Column(String, unique=True, index=True, nullable=False)
@@ -87,6 +102,12 @@ class User(Base):
     banned_at = Column(DateTime(timezone=True), nullable=True)
     banned_by = Column(String, nullable=True)
     role = Column(String, default="user", nullable=False)
+    referral_code = Column(
+        String(32),
+        default=lambda: secrets.token_hex(16),
+        server_default=text("replace(gen_random_uuid()::text, '-', '')"),
+        nullable=False,
+    )
     referrer_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     last_seen_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
     created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
@@ -129,6 +150,93 @@ class Transaction(Base):
     created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
 
     wallet = relationship("Wallet", back_populates="transactions")
+    card_transfer_receipt = relationship(
+        "CardTransferReceipt",
+        back_populates="transaction",
+        uselist=False,
+        cascade="all, delete-orphan",
+    )
+
+
+class CardTransferReceipt(Base):
+    __tablename__ = "card_transfer_receipts"
+    __table_args__ = (
+        UniqueConstraint(
+            "transaction_id",
+            name="uq_card_transfer_receipts_transaction_id",
+        ),
+        UniqueConstraint(
+            "receipt_sha256",
+            name="uq_card_transfer_receipts_sha256",
+        ),
+        CheckConstraint(
+            "receipt_sha256 ~ '^[0-9a-f]{64}$'",
+            name="ck_card_transfer_receipt_sha256",
+        ),
+        CheckConstraint(
+            "octet_length(image_bytes) BETWEEN 1 AND 5000000",
+            name="ck_card_transfer_receipt_size",
+        ),
+    )
+
+    id = Column(Integer, primary_key=True)
+    transaction_id = Column(
+        Integer,
+        ForeignKey("transactions.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    image_bytes = Column(LargeBinary, nullable=False)
+    mime_type = Column(String(32), nullable=False, default="image/jpeg")
+    receipt_sha256 = Column(String(64), nullable=False)
+    created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+    transaction = relationship("Transaction", back_populates="card_transfer_receipt")
+    deliveries = relationship(
+        "CardTransferAdminDelivery",
+        back_populates="receipt",
+        cascade="all, delete-orphan",
+    )
+
+
+class CardTransferAdminDelivery(Base):
+    __tablename__ = "card_transfer_admin_deliveries"
+    __table_args__ = (
+        UniqueConstraint(
+            "receipt_id",
+            "chat_id",
+            name="uq_card_transfer_delivery_receipt_chat",
+        ),
+        CheckConstraint(
+            "status IN ('pending', 'sent', 'failed')",
+            name="ck_card_transfer_delivery_status",
+        ),
+        CheckConstraint(
+            "attempts BETWEEN 0 AND 100",
+            name="ck_card_transfer_delivery_attempts",
+        ),
+        Index(
+            "ix_card_transfer_delivery_retry",
+            "status",
+            "next_attempt_at",
+        ),
+    )
+
+    id = Column(Integer, primary_key=True)
+    receipt_id = Column(
+        Integer,
+        ForeignKey("card_transfer_receipts.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    chat_id = Column(String(32), nullable=False)
+    status = Column(String(16), nullable=False, default="pending")
+    attempts = Column(SmallInteger, nullable=False, default=0)
+    next_attempt_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
+    message_id = Column(BigInteger, nullable=True)
+    last_error_code = Column(String(100), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+
+    receipt = relationship("CardTransferReceipt", back_populates="deliveries")
 
 class Product(Base):
     __tablename__ = "products"
@@ -150,6 +258,13 @@ class Product(Base):
 
 class ProductVariant(Base):
     __tablename__ = "product_variants"
+    __table_args__ = (
+        UniqueConstraint(
+            "product_id",
+            "id",
+            name="uq_product_variant_product_id_id",
+        ),
+    )
 
     id = Column(String, primary_key=True, index=True)
     product_id = Column(String, ForeignKey("products.id"), index=True, nullable=False)
@@ -165,13 +280,115 @@ class InventoryItem(Base):
     __tablename__ = "inventory_items"
     __table_args__ = (
         Index("ix_inventory_available", "product_id", "variant_id", "status"),
+        Index(
+            "ix_inventory_allocation_fifo",
+            "product_id",
+            "variant_id",
+            "status",
+            "expires_at",
+            "created_at",
+            "id",
+        ),
+        Index("ix_inventory_vault_state_id", "credential_vault_state", "id"),
+        Index(
+            "uq_inventory_credential_fingerprint",
+            "credential_fingerprint",
+            unique=True,
+            postgresql_where=text(
+                "credential_fingerprint IS NOT NULL "
+                "AND credential_vault_state = 'encrypted'"
+            ),
+        ),
         UniqueConstraint("product_id", "variant_id", "credentials", name="uq_inventory_unique_credentials"),
+        UniqueConstraint(
+            "id",
+            "product_id",
+            "variant_id",
+            name="uq_inventory_item_ownership",
+        ),
+        ForeignKeyConstraint(
+            ["product_id", "variant_id"],
+            ["product_variants.product_id", "product_variants.id"],
+            name="fk_inventory_product_variant",
+        ),
+        CheckConstraint(
+            "credential_vault_state IN ('legacy', 'encrypted', 'quarantined')",
+            name="ck_inventory_credential_vault_state",
+        ),
+        CheckConstraint(
+            "credential_fingerprint IS NULL "
+            "OR octet_length(credential_fingerprint) = 32",
+            name="ck_inventory_credential_fingerprint_length",
+        ),
+        CheckConstraint(
+            "credential_vault_state != 'encrypted' OR ("
+            "credential_ciphertext IS NOT NULL "
+            "AND octet_length(credential_ciphertext) >= 17 "
+            "AND credential_nonce IS NOT NULL "
+            "AND octet_length(credential_nonce) = 12 "
+            "AND credential_key_version IS NOT NULL "
+            "AND credential_key_version ~ '^[A-Za-z0-9._-]{1,32}$' "
+            "AND credential_envelope_version = 1 "
+            "AND credential_fingerprint IS NOT NULL "
+            "AND octet_length(credential_fingerprint) = 32 "
+            "AND credential_masked_preview IS NOT NULL "
+            "AND credential_masked_preview = repeat(chr(8226), 8) "
+            "AND credential_canonical_length BETWEEN 1 AND 16384 "
+            "AND credential_vault_updated_at IS NOT NULL)",
+            name="ck_inventory_credential_encrypted_bundle",
+        ),
+        CheckConstraint(
+            "(credential_vault_state = 'quarantined') = "
+            "(credential_quarantine_reason IS NOT NULL)",
+            name="ck_inventory_credential_quarantine_reason",
+        ),
+        CheckConstraint(
+            "credential_quarantine_reason IS NULL OR "
+            "credential_quarantine_reason IN ("
+            "'invalid_legacy_value', 'duplicate_fingerprint', "
+            "'integrity_verification_failed')",
+            name="ck_inventory_credential_quarantine_reason_value",
+        ),
+        CheckConstraint(
+            "credential_vault_verified_at IS NULL "
+            "OR (credential_vault_state = 'encrypted' "
+            "AND credential_vault_updated_at IS NOT NULL "
+            "AND credential_vault_verified_at >= credential_vault_updated_at)",
+            name="ck_inventory_credential_verified_state",
+        ),
+        CheckConstraint(
+            "credential_legacy_erased_at IS NULL OR ("
+            "credential_vault_state IN ('encrypted', 'quarantined'))",
+            name="ck_inventory_credential_legacy_erasure",
+        ),
+        CheckConstraint(
+            "credential_legacy_erased_at IS NULL "
+            "OR credentials = 'vaulted:' || id::text",
+            name="ck_inventory_credential_legacy_tombstone",
+        ),
     )
 
     id = Column(Integer, primary_key=True, index=True)
     product_id = Column(String, ForeignKey("products.id"), index=True, nullable=False)
-    variant_id = Column(String, ForeignKey("product_variants.id"), index=True, nullable=False)
+    variant_id = Column(String, index=True, nullable=False)
     credentials = Column(Text, nullable=False)
+    credential_ciphertext = Column(LargeBinary, nullable=True)
+    credential_nonce = Column(LargeBinary, nullable=True)
+    credential_key_version = Column(String(32), nullable=True)
+    credential_envelope_version = Column(SmallInteger, nullable=True)
+    credential_fingerprint = Column(LargeBinary, nullable=True)
+    credential_masked_preview = Column(String(32), nullable=True)
+    credential_canonical_length = Column(Integer, nullable=True)
+    credential_vault_state = Column(
+        String(16),
+        default="legacy",
+        server_default=text("'legacy'"),
+        nullable=False,
+    )
+    credential_quarantine_reason = Column(String(64), nullable=True)
+    credential_vault_updated_at = Column(DateTime(timezone=True), nullable=True)
+    credential_vault_verified_at = Column(DateTime(timezone=True), nullable=True)
+    credential_legacy_erased_at = Column(DateTime(timezone=True), nullable=True)
     status = Column(
         postgres_enum(ItemStatus, "itemstatus"),
         default=ItemStatus.AVAILABLE,
@@ -189,6 +406,45 @@ class Order(Base):
     __tablename__ = "orders"
     __table_args__ = (
         UniqueConstraint("inventory_item_id", name="uq_order_inventory_item_id"),
+        CheckConstraint(
+            "credential_reveal_count BETWEEN 0 AND 100",
+            name="ck_orders_credential_reveal_count",
+        ),
+        ForeignKeyConstraint(
+            ["inventory_item_id", "product_id", "variant_id"],
+            [
+                "inventory_items.id",
+                "inventory_items.product_id",
+                "inventory_items.variant_id",
+            ],
+            name="fk_order_inventory_ownership",
+        ),
+        CheckConstraint(
+            "(snapshot_state = 'complete' "
+            "AND snapshot_quarantine_reason IS NULL "
+            "AND product_title_snapshot IS NOT NULL "
+            "AND char_length(product_title_snapshot) > 0 "
+            "AND product_brand_snapshot IS NOT NULL "
+            "AND char_length(product_brand_snapshot) > 0 "
+            "AND variant_duration_snapshot IS NOT NULL "
+            "AND char_length(variant_duration_snapshot) > 0 "
+            "AND variant_price_label_snapshot IS NOT NULL "
+            "AND char_length(variant_price_label_snapshot) > 0 "
+            "AND currency_snapshot IS NOT NULL "
+            "AND char_length(currency_snapshot) BETWEEN 3 AND 10 "
+            "AND unit_price_amount IS NOT NULL AND unit_price_amount >= 0 "
+            "AND tax_amount IS NOT NULL AND tax_amount >= 0 "
+            "AND fee_amount IS NOT NULL AND fee_amount >= 0 "
+            "AND total_amount_snapshot IS NOT NULL AND total_amount_snapshot >= 0 "
+            "AND total_amount_snapshot = unit_price_amount + tax_amount + fee_amount "
+            "AND total_amount = total_amount_snapshot) OR "
+            "(snapshot_state = 'legacy_quarantined' "
+            "AND snapshot_quarantine_reason IN ("
+            "'historical_snapshot_unavailable', 'ownership_mismatch') "
+            "AND (total_amount_snapshot IS NULL "
+            "OR total_amount_snapshot = total_amount))",
+            name="ck_order_commercial_snapshot",
+        ),
         Index(
             "uq_orders_user_idempotency_key",
             "user_id",
@@ -196,6 +452,8 @@ class Order(Base):
             unique=True,
             postgresql_where=text("idempotency_key IS NOT NULL"),
         ),
+        Index("ix_orders_user_created_id", "user_id", "created_at", "id"),
+        Index("ix_orders_snapshot_state_created", "snapshot_state", "created_at", "id"),
     )
 
     id = Column(Integer, primary_key=True, index=True)
@@ -203,8 +461,29 @@ class Order(Base):
     user_id = Column(Integer, ForeignKey("users.id"), index=True, nullable=False)
     product_id = Column(String, ForeignKey("products.id"), nullable=False)
     variant_id = Column(String, ForeignKey("product_variants.id"), nullable=False)
-    inventory_item_id = Column(Integer, ForeignKey("inventory_items.id"), nullable=False)
+    inventory_item_id = Column(Integer, nullable=False)
     total_amount = Column(Numeric(precision=18, scale=2), nullable=False)
+    product_title_snapshot = Column(String(180), nullable=True)
+    product_brand_snapshot = Column(String(180), nullable=True)
+    variant_duration_snapshot = Column(String(120), nullable=True)
+    variant_price_label_snapshot = Column(String(50), nullable=True)
+    currency_snapshot = Column(String(10), nullable=True)
+    unit_price_amount = Column(Numeric(precision=18, scale=2), nullable=True)
+    tax_amount = Column(Numeric(precision=18, scale=2), nullable=True)
+    fee_amount = Column(Numeric(precision=18, scale=2), nullable=True)
+    total_amount_snapshot = Column(Numeric(precision=18, scale=2), nullable=True)
+    snapshot_state = Column(
+        String(24),
+        default="legacy_quarantined",
+        server_default=text("'legacy_quarantined'"),
+        nullable=False,
+    )
+    snapshot_quarantine_reason = Column(
+        String(64),
+        default="historical_snapshot_unavailable",
+        server_default=text("'historical_snapshot_unavailable'"),
+        nullable=True,
+    )
     idempotency_key = Column(String(64), nullable=True)
     status = Column(
         postgres_enum(OrderStatus, "orderstatus"),
@@ -212,13 +491,58 @@ class Order(Base):
         index=True,
         nullable=False,
     )
-    created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
+    created_at = Column(
+        DateTime(timezone=True),
+        default=utcnow,
+        nullable=False,
+    )
     expires_at = Column(DateTime(timezone=True), nullable=True)
+    credential_reveal_count = Column(
+        Integer,
+        default=0,
+        server_default=text("0"),
+        nullable=False,
+    )
 
     user = relationship("User", back_populates="orders")
     product = relationship("Product")
     variant = relationship("ProductVariant")
-    inventory_item = relationship("InventoryItem")
+    inventory_item = relationship("InventoryItem", viewonly=True)
+
+
+class CredentialRevealEvent(Base):
+    __tablename__ = "credential_reveal_events"
+    __table_args__ = (
+        Index("ix_credential_reveal_order_created", "order_id", "created_at", "id"),
+        Index("ix_credential_reveal_user_created", "user_id", "created_at", "id"),
+        CheckConstraint(
+            "outcome IN ('allowed', 'denied_not_found', 'denied_state', "
+            "'denied_limit', 'denied_size', 'denied_vault')",
+            name="ck_credential_reveal_event_outcome",
+        ),
+        CheckConstraint(
+            "reveal_count IS NULL OR reveal_count BETWEEN 0 AND 100",
+            name="ck_credential_reveal_event_count",
+        ),
+    )
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    order_id = Column(Integer, ForeignKey("orders.id"), nullable=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    actor_telegram_id = Column(String(20), nullable=False)
+    order_public_id = Column(String(120), nullable=False)
+    outcome = Column(String(16), nullable=False)
+    reveal_count = Column(Integer, nullable=True)
+    request_id = Column(String(64), nullable=True)
+    created_at = Column(
+        DateTime(timezone=True),
+        default=utcnow,
+        server_default=text("CURRENT_TIMESTAMP"),
+        nullable=False,
+    )
+
+    order = relationship("Order")
+    user = relationship("User")
 
 class Notification(Base):
     __tablename__ = "notifications"
@@ -260,6 +584,11 @@ class AdminAuditLog(Base):
     __table_args__ = (
         Index("ix_admin_audit_actor_created", "actor_telegram_id", "created_at"),
         Index("ix_admin_audit_action_created", "action", "created_at"),
+        Index("ix_admin_audit_outcome_created", "outcome", "created_at"),
+        CheckConstraint(
+            "outcome IN ('success', 'rejected', 'failed', 'requested')",
+            name="ck_admin_audit_outcome",
+        ),
     )
 
     id = Column(Integer, primary_key=True, index=True)
@@ -267,6 +596,13 @@ class AdminAuditLog(Base):
     action = Column(String(100), nullable=False)
     target_type = Column(String(50), nullable=False)
     target_id = Column(String(180), nullable=True)
+    outcome = Column(String(16), nullable=False, default="success")
+    request_id = Column(String(64), nullable=True)
+    update_id = Column(BigInteger, nullable=True)
+    chat_id = Column(String(24), nullable=True)
+    reason = Column(String(100), nullable=True)
+    old_values = Column(JSON, default=dict, server_default=text("'{}'::json"), nullable=False)
+    new_values = Column(JSON, default=dict, server_default=text("'{}'::json"), nullable=False)
     details = Column(
         JSON,
         default=dict,
@@ -286,6 +622,10 @@ class TelegramUpdateInbox(Base):
             name="ck_telegram_update_status",
         ),
         CheckConstraint("attempts >= 0", name="ck_telegram_update_attempts"),
+        CheckConstraint(
+            "claim_token IS NULL OR char_length(claim_token) BETWEEN 32 AND 64",
+            name="ck_telegram_update_claim_token_length",
+        ),
         Index("ix_telegram_update_claim", "status", "next_attempt_at", "id"),
     )
 
@@ -297,6 +637,7 @@ class TelegramUpdateInbox(Base):
     attempts = Column(Integer, nullable=False, default=0)
     next_attempt_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
     locked_at = Column(DateTime(timezone=True), nullable=True)
+    claim_token = Column(String(64), nullable=True)
     processed_at = Column(DateTime(timezone=True), nullable=True)
     last_error = Column(String(200), nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
@@ -396,4 +737,47 @@ class AdminApprovalVote(Base):
     id = Column(Integer, primary_key=True)
     approval_request_id = Column(Integer, ForeignKey("admin_approval_requests.id"), nullable=False)
     actor_telegram_id = Column(String(20), nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+
+class UsdtRateOverride(Base):
+    __tablename__ = "usdt_rate_override"
+    __table_args__ = (
+        CheckConstraint("id = 1", name="ck_usdt_rate_override_singleton"),
+        CheckConstraint("version > 0", name="ck_usdt_rate_override_version"),
+        CheckConstraint(
+            "(is_active AND rate IS NOT NULL AND rate > 0) "
+            "OR (NOT is_active AND rate IS NULL)",
+            name="ck_usdt_rate_override_state",
+        ),
+    )
+
+    id = Column(Integer, primary_key=True)
+    rate = Column(Numeric(precision=24, scale=8), nullable=True)
+    is_active = Column(Boolean, nullable=False, default=False)
+    version = Column(Integer, nullable=False, default=1)
+    changed_by_telegram_id = Column(String(20), nullable=True)
+    change_source = Column(String(32), nullable=False)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow)
+
+
+class UsdtRateOverrideVersion(Base):
+    __tablename__ = "usdt_rate_override_versions"
+    __table_args__ = (
+        UniqueConstraint("version", name="uq_usdt_rate_override_version"),
+        CheckConstraint("version > 0", name="ck_usdt_rate_override_history_version"),
+        CheckConstraint(
+            "(is_active AND rate IS NOT NULL AND rate > 0) "
+            "OR (NOT is_active AND rate IS NULL)",
+            name="ck_usdt_rate_override_history_state",
+        ),
+        Index("ix_usdt_rate_override_history_created", "created_at", "id"),
+    )
+
+    id = Column(BigInteger, primary_key=True)
+    version = Column(Integer, nullable=False)
+    rate = Column(Numeric(precision=24, scale=8), nullable=True)
+    is_active = Column(Boolean, nullable=False)
+    changed_by_telegram_id = Column(String(20), nullable=True)
+    change_source = Column(String(32), nullable=False)
     created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)

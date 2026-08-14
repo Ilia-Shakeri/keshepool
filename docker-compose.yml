@@ -25,7 +25,7 @@ services:
       timeout: 5s
       retries: 5
     networks:
-      - keshepool_internal_net
+      - keshepool_data_net
     logging: *default-logging
 
   db-backup:
@@ -61,7 +61,7 @@ services:
       retries: 3
       start_period: 6h30m
     networks:
-      - keshepool_internal_net
+      - keshepool_data_net
     logging: *default-logging
 
   redis:
@@ -78,7 +78,7 @@ services:
       timeout: 5s
       retries: 5
     networks:
-      - keshepool_internal_net
+      - keshepool_data_net
     logging: *default-logging
 
   static-init:
@@ -90,6 +90,7 @@ services:
     restart: "no"
     volumes:
       - ./static:/app/static
+    network_mode: "none"
     logging: *default-logging
 
   migrate:
@@ -101,25 +102,16 @@ services:
     restart: "no"
     environment:
       - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
-      - REDIS_URL=redis://redis:6379/0
-      - BOT_TOKEN=${BOT_TOKEN}
-      - ADMIN_BOT_TOKEN=${ADMIN_BOT_TOKEN}
-      - TELEGRAM_BOT_MODE=webhook
-      - WEBHOOK_URL=${WEBHOOK_URL}
-      - WEB_APP_URL=${WEB_APP_URL}
-      - MAIN_TELEGRAM_WEBHOOK_SECRET=${MAIN_TELEGRAM_WEBHOOK_SECRET:?Set a distinct main Telegram webhook secret}
-      - ADMIN_TELEGRAM_WEBHOOK_SECRET=${ADMIN_TELEGRAM_WEBHOOK_SECRET:?Set a distinct admin Telegram webhook secret}
-      - ADMIN_TELEGRAM_IDS=${ADMIN_TELEGRAM_IDS}
-      - ADMIN_API_KEY=${ADMIN_API_KEY:-}
-      - ENVIRONMENT=${ENVIRONMENT:-production}
-      - USDT_TO_IRR_RATE=${USDT_TO_IRR_RATE:?Set an operator-reviewed emergency USDT rate in .env}
-      - TRUSTED_PROXY_IPS=${TRUSTED_PROXY_IPS:-127.0.0.1}
-      - CSP_REPORT_ONLY=${CSP_REPORT_ONLY:-true}
+      - BOT_TOKEN=migration-not-used
+      - ADMIN_BOT_TOKEN=migration-not-used
+      - TELEGRAM_BOT_MODE=disabled
+      - WEB_APP_URL=https://migration.invalid
+      - ENVIRONMENT=migration
     depends_on:
       db:
         condition: service_healthy
     networks:
-      - keshepool_internal_net
+      - keshepool_data_net
     logging: *default-logging
 
   backend:
@@ -132,6 +124,13 @@ services:
     stop_grace_period: 30s
     environment: &backend-environment
       - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      - DATABASE_POOL_SIZE=${DATABASE_POOL_SIZE:-10}
+      - DATABASE_MAX_OVERFLOW=${DATABASE_MAX_OVERFLOW:-10}
+      - DATABASE_POOL_TIMEOUT_SECONDS=${DATABASE_POOL_TIMEOUT_SECONDS:-5}
+      - DATABASE_POOL_RECYCLE_SECONDS=${DATABASE_POOL_RECYCLE_SECONDS:-1800}
+      - DATABASE_STATEMENT_TIMEOUT_MS=${DATABASE_STATEMENT_TIMEOUT_MS:-30000}
+      - DATABASE_LOCK_TIMEOUT_MS=${DATABASE_LOCK_TIMEOUT_MS:-5000}
+      - DATABASE_IDLE_TRANSACTION_TIMEOUT_MS=${DATABASE_IDLE_TRANSACTION_TIMEOUT_MS:-30000}
       - REDIS_URL=redis://redis:6379/0
       - BOT_TOKEN=${BOT_TOKEN}
       - ADMIN_BOT_TOKEN=${ADMIN_BOT_TOKEN}
@@ -145,10 +144,15 @@ services:
       - CRYPTO_WEBHOOK_SECRET=${CRYPTO_WEBHOOK_SECRET:-}
       - CRYPTO_DEPOSIT_ADDRESS_USDT=${CRYPTO_DEPOSIT_ADDRESS_USDT:-}
       - USDT_TO_IRR_RATE=${USDT_TO_IRR_RATE:?Set an operator-reviewed emergency USDT rate in .env}
+      - OPERATIONS_RATE_DB_ENABLED=${OPERATIONS_RATE_DB_ENABLED:-false}
       - ADMIN_TELEGRAM_IDS=${ADMIN_TELEGRAM_IDS}
       - ADMIN_GROUP_CHAT_ID=${ADMIN_GROUP_CHAT_ID:-}
       - ADMIN_REQUIRE_GROUP_ADMIN=${ADMIN_REQUIRE_GROUP_ADMIN:-false}
       - ADMIN_RBAC_ENABLED=${ADMIN_RBAC_ENABLED:-false}
+      - ADMIN_ENV_BREAK_GLASS_ENABLED=${ADMIN_ENV_BREAK_GLASS_ENABLED:-true}
+      - ADMIN_DUAL_APPROVAL_ENABLED=${ADMIN_DUAL_APPROVAL_ENABLED:-false}
+      - ADMIN_DUAL_APPROVAL_WALLET_THRESHOLD_TOMAN=${ADMIN_DUAL_APPROVAL_WALLET_THRESHOLD_TOMAN:-10000000}
+      - ADMIN_DUAL_APPROVAL_RATE_DEVIATION_PERCENT=${ADMIN_DUAL_APPROVAL_RATE_DEVIATION_PERCENT:-10}
       - ADMIN_FSM_TTL_SECONDS=${ADMIN_FSM_TTL_SECONDS:-3600}
       - TZ=${TZ:-Asia/Tehran}
       - ADMIN_REPORT_LANGUAGE=${ADMIN_REPORT_LANGUAGE:-fa}
@@ -163,6 +167,7 @@ services:
       - TELEGRAM_AUTH_FUTURE_SKEW_SECONDS=${TELEGRAM_AUTH_FUTURE_SKEW_SECONDS:-60}
       - TELEGRAM_INIT_DATA_MAX_BYTES=${TELEGRAM_INIT_DATA_MAX_BYTES:-8192}
       - TELEGRAM_WEBHOOK_MAX_BYTES=${TELEGRAM_WEBHOOK_MAX_BYTES:-1048576}
+      - TELEGRAM_WEBHOOK_MAX_JSON_DEPTH=${TELEGRAM_WEBHOOK_MAX_JSON_DEPTH:-32}
       - TELEGRAM_INBOX_BATCH_SIZE=${TELEGRAM_INBOX_BATCH_SIZE:-20}
       - TELEGRAM_INBOX_POLL_SECONDS=${TELEGRAM_INBOX_POLL_SECONDS:-0.5}
       - TELEGRAM_INBOX_STALE_SECONDS=${TELEGRAM_INBOX_STALE_SECONDS:-300}
@@ -174,9 +179,23 @@ services:
       - CATALOG_CACHE_LOCK_TTL_SECONDS=${CATALOG_CACHE_LOCK_TTL_SECONDS:-5}
       - REDIS_CONNECT_TIMEOUT_SECONDS=${REDIS_CONNECT_TIMEOUT_SECONDS:-2}
       - REDIS_SOCKET_TIMEOUT_SECONDS=${REDIS_SOCKET_TIMEOUT_SECONDS:-2}
+      - REDIS_MAX_CONNECTIONS=${REDIS_MAX_CONNECTIONS:-50}
+      - REDIS_RETRY_ATTEMPTS=${REDIS_RETRY_ATTEMPTS:-3}
+      - REDIS_RETRY_BACKOFF_MAX_SECONDS=${REDIS_RETRY_BACKOFF_MAX_SECONDS:-1}
+      - INGRESS_SENSITIVE_MAX_IN_FLIGHT=${INGRESS_SENSITIVE_MAX_IN_FLIGHT:-64}
+      - INGRESS_IN_FLIGHT_TTL_SECONDS=${INGRESS_IN_FLIGHT_TTL_SECONDS:-120}
+      - TETRA98_CALLBACK_ALLOWED_CIDRS=${TETRA98_CALLBACK_ALLOWED_CIDRS:-}
+      - CRYPTO_CALLBACK_ALLOWED_CIDRS=${CRYPTO_CALLBACK_ALLOWED_CIDRS:-}
+      - CREDENTIAL_VAULT_DUAL_WRITE_ENABLED=${CREDENTIAL_VAULT_DUAL_WRITE_ENABLED:-false}
+      - CREDENTIAL_VAULT_READ_PREFER_ENCRYPTED=${CREDENTIAL_VAULT_READ_PREFER_ENCRYPTED:-false}
+      - CREDENTIAL_VAULT_LEGACY_FALLBACK_ENABLED=${CREDENTIAL_VAULT_LEGACY_FALLBACK_ENABLED:-true}
+      - CREDENTIAL_VAULT_FINALIZE_ENABLED=${CREDENTIAL_VAULT_FINALIZE_ENABLED:-false}
+      - CREDENTIAL_VAULT_ENCRYPTION_KEYS_FILE=${CREDENTIAL_VAULT_ENCRYPTION_KEYS_FILE:-}
+      - CREDENTIAL_VAULT_FINGERPRINT_KEY_FILE=${CREDENTIAL_VAULT_FINGERPRINT_KEY_FILE:-}
+      - CREDENTIAL_REVEAL_MAX_PER_ORDER=${CREDENTIAL_REVEAL_MAX_PER_ORDER:-5}
       - ADMIN_API_KEY=${ADMIN_API_KEY}
       - ENABLE_INTERNAL_ADMIN_API=${ENABLE_INTERNAL_ADMIN_API:-false}
-      - TRUSTED_PROXY_IPS=${TRUSTED_PROXY_IPS:-127.0.0.1}
+      - TRUSTED_PROXY_IPS=${TRUSTED_PROXY_IPS:?Set exact Caddy and frontend proxy addresses or reviewed proxy network ranges}
       - CSP_REPORT_ONLY=${CSP_REPORT_ONLY:-true}
       - ENVIRONMENT=${ENVIRONMENT:-production}
     volumes:
@@ -197,7 +216,7 @@ services:
       retries: 12
       start_period: 20s
     networks:
-      - keshepool_internal_net
+      - keshepool_data_net
       - caddy_gateway_net
     logging: *default-logging
 
@@ -223,8 +242,8 @@ services:
       redis:
         condition: service_started
     networks:
-      - keshepool_internal_net
-      - caddy_gateway_net
+      - keshepool_data_net
+      - keshepool_worker_egress_net
     logging: *default-logging
 
   telegram-configure:
@@ -234,13 +253,24 @@ services:
     profiles: ["ops"]
     restart: "no"
     command: ["python", "/app/scripts/configure_telegram.py"]
-    environment: *backend-environment
-    depends_on:
-      migrate:
-        condition: service_completed_successfully
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://unused:unused@127.0.0.1:1/unused
+      - REDIS_URL=redis://127.0.0.1:1/0
+      - BOT_TOKEN=${BOT_TOKEN}
+      - ADMIN_BOT_TOKEN=${ADMIN_BOT_TOKEN}
+      - TELEGRAM_BOT_MODE=webhook
+      - WEBHOOK_URL=${WEBHOOK_URL}
+      - WEB_APP_URL=${WEB_APP_URL}
+      - MAIN_TELEGRAM_WEBHOOK_SECRET=${MAIN_TELEGRAM_WEBHOOK_SECRET:?Set a distinct main Telegram webhook secret}
+      - ADMIN_TELEGRAM_WEBHOOK_SECRET=${ADMIN_TELEGRAM_WEBHOOK_SECRET:?Set a distinct admin Telegram webhook secret}
+      - ADMIN_TELEGRAM_IDS=${ADMIN_TELEGRAM_IDS}
+      - ADMIN_GROUP_CHAT_ID=${ADMIN_GROUP_CHAT_ID:-}
+      - ADMIN_REQUIRE_GROUP_ADMIN=${ADMIN_REQUIRE_GROUP_ADMIN:-false}
+      - USDT_TO_IRR_RATE=${USDT_TO_IRR_RATE:?Set an operator-reviewed emergency USDT rate in .env}
+      - TRUSTED_PROXY_IPS=${TRUSTED_PROXY_IPS:?Set exact Caddy and frontend proxy addresses or reviewed proxy network ranges}
+      - ENVIRONMENT=${ENVIRONMENT:-production}
     networks:
-      - keshepool_internal_net
-      - caddy_gateway_net
+      - keshepool_worker_egress_net
     logging: *default-logging
 
   frontend:
@@ -255,6 +285,17 @@ services:
     restart: unless-stopped
     init: true
     stop_grace_period: 30s
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 200
+    mem_limit: 512m
+    cpus: 1.0
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+      - /app/.next/cache:rw,noexec,nosuid,size=64m
     environment:
       - NODE_ENV=production
       - BACKEND_INTERNAL_URL=http://backend:8000
@@ -297,7 +338,6 @@ services:
       retries: 12
       start_period: 20s
     networks:
-      - keshepool_internal_net
       - caddy_gateway_net
     logging: *default-logging
 
@@ -306,7 +346,11 @@ volumes:
   redisdata:
 
 networks:
-  keshepool_internal_net:
-    name: keshepool_internal_net
+  keshepool_data_net:
+    name: keshepool_data_net
+    internal: true
+  keshepool_worker_egress_net:
+    name: keshepool_worker_egress_net
+    driver: bridge
   caddy_gateway_net:
     external: true

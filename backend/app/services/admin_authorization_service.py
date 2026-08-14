@@ -16,6 +16,7 @@ from app.models import (
     AdminIdentity,
     AdminRoleGrant,
 )
+from app.services.admin_audit_service import add_admin_audit
 
 
 ADMIN_ROLES: Final = frozenset({"superadmin", "finance", "catalog", "support", "auditor"})
@@ -25,6 +26,11 @@ ACTION_ROLES: Final = {
     "catalog.mass_remove": frozenset({"superadmin", "catalog"}),
     "report.bulk_export": frozenset({"superadmin", "finance", "auditor"}),
     "crypto.auto_credit.enable": frozenset({"superadmin", "finance"}),
+    "transaction.review": frozenset({"superadmin", "finance"}),
+    "catalog.product_remove": frozenset({"superadmin", "catalog"}),
+    "user.access_change": frozenset({"superadmin", "support"}),
+    "broadcast.send": frozenset({"superadmin", "support"}),
+    "cashout.status_change": frozenset({"superadmin", "finance"}),
 }
 DUAL_APPROVAL_ACTIONS: Final = frozenset(ACTION_ROLES)
 
@@ -51,7 +57,7 @@ def payload_digest(payload: bytes) -> str:
 async def effective_roles(session: AsyncSession, telegram_id: int | str) -> frozenset[str]:
     actor = _bounded(telegram_id, name="actor", maximum=20)
     roles: set[str] = set()
-    if actor in settings.admin_ids:
+    if settings.ADMIN_ENV_BREAK_GLASS_ENABLED and actor in settings.admin_ids:
         roles.add("superadmin")
     rows = await session.execute(
         select(AdminRoleGrant.role)
@@ -76,6 +82,116 @@ async def require_action_role(session: AsyncSession, telegram_id: int | str, act
     return roles
 
 
+async def require_superadmin(session: AsyncSession, telegram_id: int | str) -> None:
+    if "superadmin" not in await effective_roles(session, telegram_id):
+        raise AdminAuthorizationError("Superadmin role required.")
+
+
+def _telegram_id(value: int | str) -> str:
+    normalized = _bounded(value, name="Telegram user ID", maximum=20)
+    if not normalized.isdigit() or normalized.startswith("0"):
+        raise AdminAuthorizationError("Invalid Telegram user ID.")
+    return normalized
+
+
+async def grant_admin_role(
+    session: AsyncSession,
+    *,
+    actor_telegram_id: int | str,
+    target_telegram_id: int | str,
+    role: str,
+    display_name: str | None = None,
+) -> bool:
+    actor = _telegram_id(actor_telegram_id)
+    target = _telegram_id(target_telegram_id)
+    if role not in ADMIN_ROLES:
+        raise AdminAuthorizationError("Unknown admin role.")
+    await require_superadmin(session, actor)
+    identity = await session.scalar(
+        select(AdminIdentity).where(AdminIdentity.telegram_id == target).with_for_update()
+    )
+    if identity is None:
+        identity = AdminIdentity(
+            telegram_id=target,
+            display_name=(display_name or "").strip()[:100] or None,
+            is_active=True,
+            is_break_glass=(
+                settings.ADMIN_ENV_BREAK_GLASS_ENABLED
+                and target in settings.admin_ids
+            ),
+        )
+        session.add(identity)
+        await session.flush()
+    else:
+        identity.is_active = True
+        if display_name is not None:
+            identity.display_name = display_name.strip()[:100] or None
+    existing = await session.scalar(
+        select(AdminRoleGrant).where(
+            AdminRoleGrant.admin_identity_id == identity.id,
+            AdminRoleGrant.role == role,
+            AdminRoleGrant.revoked_at.is_(None),
+        )
+    )
+    if existing is not None:
+        return False
+    session.add(
+        AdminRoleGrant(
+            admin_identity_id=identity.id,
+            role=role,
+            granted_by_telegram_id=actor,
+        )
+    )
+    await add_admin_audit(
+        session,
+        actor_telegram_id=actor,
+        action="admin.role.grant",
+        target_type="admin_identity",
+        target_id=identity.id,
+        details={"role": role},
+    )
+    await session.flush()
+    return True
+
+
+async def revoke_admin_role(
+    session: AsyncSession,
+    *,
+    actor_telegram_id: int | str,
+    target_telegram_id: int | str,
+    role: str,
+) -> bool:
+    actor = _telegram_id(actor_telegram_id)
+    target = _telegram_id(target_telegram_id)
+    if role not in ADMIN_ROLES:
+        raise AdminAuthorizationError("Unknown admin role.")
+    await require_superadmin(session, actor)
+    grant = await session.scalar(
+        select(AdminRoleGrant)
+        .join(AdminIdentity, AdminIdentity.id == AdminRoleGrant.admin_identity_id)
+        .where(
+            AdminIdentity.telegram_id == target,
+            AdminRoleGrant.role == role,
+            AdminRoleGrant.revoked_at.is_(None),
+        )
+        .with_for_update()
+    )
+    if grant is None:
+        return False
+    grant.revoked_at = _utcnow()
+    grant.revoked_by_telegram_id = actor
+    await add_admin_audit(
+        session,
+        actor_telegram_id=actor,
+        action="admin.role.revoke",
+        target_type="admin_identity",
+        target_id=grant.admin_identity_id,
+        details={"role": role},
+    )
+    await session.flush()
+    return True
+
+
 async def issue_action_nonce(
     session: AsyncSession,
     *,
@@ -90,7 +206,7 @@ async def issue_action_nonce(
         raise AdminAuthorizationError("Unknown privileged action.")
     if not 30 <= ttl_seconds <= 300:
         raise AdminAuthorizationError("Invalid nonce lifetime.")
-    raw = secrets.token_urlsafe(24)
+    raw = secrets.token_urlsafe(18)
     session.add(
         AdminActionNonce(
             nonce_hash=payload_digest(raw.encode("ascii")),

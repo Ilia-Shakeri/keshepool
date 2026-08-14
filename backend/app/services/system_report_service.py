@@ -69,7 +69,9 @@ def _display(value: object, lang: str) -> str:
 
 def _number(value: object) -> str:
     if isinstance(value, Decimal):
-        value = float(value)
+        if not value.is_finite():
+            return "—"
+        return f"{value:,.2f}".rstrip("0").rstrip(".")
     if isinstance(value, float):
         return f"{value:,.2f}".rstrip("0").rstrip(".")
     if isinstance(value, int):

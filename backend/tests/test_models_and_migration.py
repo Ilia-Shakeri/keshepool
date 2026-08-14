@@ -85,6 +85,12 @@ def test_admin_audit_json_default_matches_migration():
     server_default = AdminAuditLog.__table__.c.details.server_default
     assert server_default is not None
     assert str(server_default.arg) == "'{}'::json"
+    constraints = {constraint.name for constraint in AdminAuditLog.__table__.constraints}
+    indexes = {index.name for index in AdminAuditLog.__table__.indexes}
+    assert "ck_admin_audit_outcome" in constraints
+    assert "ix_admin_audit_outcome_created" in indexes
+    assert str(AdminAuditLog.__table__.c.old_values.server_default.arg) == "'{}'::json"
+    assert str(AdminAuditLog.__table__.c.new_values.server_default.arg) == "'{}'::json"
 
 
 def test_telegram_inbox_has_database_replay_and_claim_guards():

@@ -21,6 +21,7 @@ __pycache__/
 *.py[cod]
 *$py.class
 .pytest_cache/
+.pytest-tmp-*/
 .venv/
 backend/venv/
 backend/env/
@@ -73,3 +74,5 @@ backups/*
 *.tgz
 *.zip
 keshepool-source-*.tar.gz
+runtime/credential-vault/
+credential-vault-keys/

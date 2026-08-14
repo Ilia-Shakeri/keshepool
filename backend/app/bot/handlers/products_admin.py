@@ -5,9 +5,7 @@ import io
 import json
 import logging
 import re
-import tempfile
 from decimal import Decimal, InvalidOperation
-from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
 from aiogram import F, Router
@@ -25,16 +23,19 @@ from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.orm import selectinload
 
 from app.core.config import settings
-from app.bot.filters import IsAdminFilter
+from app.bot.filters import HasAdminRoleFilter, IsAdminFilter
 from app.core.redis import redis_client
 from app.core.database import AsyncSessionLocal
-from app.models import Product, InventoryItem, ItemStatus, utcnow
+from app.models import AdminApprovalRequest, Product, InventoryItem, ItemStatus, utcnow
 from app.bot.locales.translations import get_text
 from app.bot.states import ProductAdminStates
 from app.services.admin_audit_service import add_admin_audit, record_admin_audit
 from app.services.admin_authorization_service import (
     AdminAuthorizationError,
+    approve_request,
     consume_action_nonce,
+    consume_approved_request,
+    create_approval_request,
     issue_action_nonce,
     require_action_role,
 )
@@ -51,12 +52,21 @@ from app.services.catalog_service import (
     set_variant_price,
     upsert_product,
 )
+from app.services.product_asset_service import (
+    ProductAssetError,
+    StoredProductAsset,
+    delete_owned_product_asset,
+    discard_new_asset,
+    store_product_image,
+)
 
 logger = logging.getLogger(__name__)
 
 products_router = Router()
 products_router.message.filter(IsAdminFilter())
 products_router.callback_query.filter(IsAdminFilter())
+products_router.message.filter(HasAdminRoleFilter("catalog"))
+products_router.callback_query.filter(HasAdminRoleFilter("catalog"))
 
 ALLOWED_CATEGORIES = {"vpn", "music", "video", "ai", "social", "gaming", "tools", "edu", "finance"}
 SAFE_ID_RE = re.compile(r"^[a-zA-Z0-9_-]{2,120}$")
@@ -67,47 +77,8 @@ def _force_reply() -> ForceReply:
     return ForceReply(selective=True)
 
 
-def _store_logo_bytes(
-    product_id: str,
-    file_bytes: bytes,
-) -> tuple[str, Path, bytes | None]:
-    if len(file_bytes) > 2_000_000:
-        raise ValueError("logo_too_large")
-    signature = file_bytes[:16]
-    if signature[:8] == b"\x89PNG\r\n\x1a\n":
-        extension = ".png"
-    elif signature[:4] == b"RIFF" and signature[8:12] == b"WEBP":
-        extension = ".webp"
-    elif signature[:2] == b"\xff\xd8":
-        extension = ".jpg"
-    else:
-        raise ValueError("image_required")
-
-    safe_product_id = re.sub(r"[^a-zA-Z0-9_-]", "_", product_id)
-    asset_dir = Path(settings.ASSET_ROOT) / "product-assets"
-    asset_dir.mkdir(parents=True, exist_ok=True)
-    target_path = asset_dir / f"{safe_product_id}{extension}"
-    previous_bytes = target_path.read_bytes() if target_path.exists() else None
-    with tempfile.NamedTemporaryFile(
-        dir=asset_dir,
-        prefix=".logo-",
-        suffix=extension,
-        delete=False,
-    ) as temporary:
-        temporary.write(file_bytes)
-        temporary_path = Path(temporary.name)
-    temporary_path.replace(target_path)
-    asset_url = (
-        f"{settings.PUBLIC_ASSET_BASE_URL.rstrip('/')}/product-assets/{target_path.name}"
-    )
-    return asset_url, target_path, previous_bytes
-
-
-def _restore_logo(path: Path, previous_bytes: bytes | None) -> None:
-    if previous_bytes is None:
-        path.unlink(missing_ok=True)
-    else:
-        path.write_bytes(previous_bytes)
+def _catalog_removal_snapshot(product_ids: list[str]) -> bytes:
+    return json.dumps(sorted(product_ids), ensure_ascii=True, separators=(",", ":")).encode("ascii")
 
 
 async def _lang(user_id: int) -> str:
@@ -376,7 +347,21 @@ async def select_product_for_removal(message: Message, state: FSMContext):
         product_id = matches[0]
 
     title = product_names.get(product_id, {}).get("title", product_id)
-    await state.update_data(removal_target_product_id=product_id, removal_target_title=title)
+    async with AsyncSessionLocal() as session:
+        nonce = await issue_action_nonce(
+            session,
+            actor_telegram_id=message.from_user.id,
+            chat_id=message.chat.id,
+            action="catalog.product_remove",
+            target_type="product",
+            target_id=product_id,
+        )
+        await session.commit()
+    await state.update_data(
+        removal_target_product_id=product_id,
+        removal_target_title=title,
+        product_remove_nonce=nonce,
+    )
     markup = InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text=get_text(lang, "confirm_remove_one_btn"), callback_data="confirm_remove_one_product")],
@@ -400,6 +385,15 @@ async def confirm_remove_one_product(callback: CallbackQuery, state: FSMContext)
         return
     try:
         async with AsyncSessionLocal() as session:
+            await consume_action_nonce(
+                session,
+                nonce=str(data.get("product_remove_nonce", "")),
+                actor_telegram_id=callback.from_user.id,
+                chat_id=callback.message.chat.id,
+                action="catalog.product_remove",
+                target_type="product",
+                target_id=product_id,
+            )
             await set_product_active(
                 session,
                 product_id,
@@ -415,7 +409,7 @@ async def confirm_remove_one_product(callback: CallbackQuery, state: FSMContext)
                 target_id=product_id,
             )
             await commit_catalog_change(session)
-    except CatalogMutationError:
+    except (AdminAuthorizationError, CatalogMutationError):
         await callback.answer(get_text(lang, "not_found"), show_alert=True)
         return
     except Exception as exc:
@@ -474,6 +468,7 @@ async def confirm_remove_all_products(message: Message, state: FSMContext):
         await message.answer(get_text(lang, "remove_all_phrase_wrong"), reply_markup=_cancel_markup(lang))
         return
 
+    approval_request_id = None
     try:
         async with AsyncSessionLocal() as session:
             data = await state.get_data()
@@ -492,6 +487,113 @@ async def confirm_remove_all_products(message: Message, state: FSMContext):
                 select(Product.id).where(Product.is_active.is_(True)).with_for_update()
             )
             product_ids = list(result.scalars().all())
+            if settings.ADMIN_DUAL_APPROVAL_ENABLED:
+                request = await create_approval_request(
+                    session,
+                    actor_telegram_id=message.from_user.id,
+                    action="catalog.mass_remove",
+                    target_type="catalog",
+                    target_id="active",
+                    payload=_catalog_removal_snapshot(product_ids),
+                )
+                await add_admin_audit(
+                    session,
+                    actor_telegram_id=message.from_user.id,
+                    action="catalog_mass_removal_requested",
+                    target_type="catalog",
+                    target_id="active",
+                    details={"approval_request_id": request.id, "product_count": len(product_ids)},
+                )
+                await session.commit()
+                approval_request_id = request.id
+            else:
+                for product_id in product_ids:
+                    await set_product_active(
+                        session,
+                        product_id,
+                        False,
+                        deactivate_variants=True,
+                        commit=False,
+                    )
+                await add_admin_audit(
+                    session,
+                    actor_telegram_id=message.from_user.id,
+                    action="product_remove_all",
+                    target_type="catalog",
+                    details={"product_count": len(product_ids)},
+                )
+                await commit_catalog_change(session)
+    except AdminAuthorizationError:
+        await message.answer(get_text(lang, "remove_all_phrase_wrong"), reply_markup=_cancel_markup(lang))
+        return
+    except Exception as exc:
+        logger.error("Remove all products failed: %s", exc, exc_info=True)
+        await message.answer(get_text(lang, "db_error"), reply_markup=_cancel_markup(lang))
+        return
+
+    await state.clear()
+    if approval_request_id is not None:
+        await message.bot.send_message(
+            chat_id=int(settings.ADMIN_GROUP_CHAT_ID),
+            text=get_text(lang, "remove_all_dual_group_notice").format(count=len(product_ids)),
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[[InlineKeyboardButton(
+                    text=get_text(lang, "remove_all_dual_approve_btn"),
+                    callback_data=f"catdual:{approval_request_id}",
+                )]]
+            ),
+            parse_mode="HTML",
+        )
+        await message.answer(get_text(lang, "remove_all_dual_pending"))
+        return
+    await message.answer(
+        get_text(lang, "remove_all_done").format(count=len(product_ids)),
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text=get_text(lang, "back"), callback_data="manage_inventory")]
+            ]
+        ),
+    )
+
+
+@products_router.callback_query(F.data.startswith("catdual:"))
+async def approve_mass_product_removal(callback: CallbackQuery):
+    lang = await _lang(callback.from_user.id)
+    if str(callback.message.chat.id) != str(settings.ADMIN_GROUP_CHAT_ID):
+        await callback.answer(get_text(lang, "remove_all_phrase_wrong"), show_alert=True)
+        return
+    try:
+        request_id = int(callback.data.removeprefix("catdual:"))
+        async with AsyncSessionLocal() as session:
+            request = await session.get(AdminApprovalRequest, request_id)
+            if (
+                request is None
+                or request.action != "catalog.mass_remove"
+                or request.target_type != "catalog"
+                or request.target_id != "active"
+            ):
+                raise AdminAuthorizationError("Approval request rejected.")
+            result = await session.execute(
+                select(Product.id).where(Product.is_active.is_(True)).with_for_update()
+            )
+            product_ids = list(result.scalars().all())
+            snapshot = _catalog_removal_snapshot(product_ids)
+            approved = await approve_request(
+                session,
+                approval_request_id=request_id,
+                actor_telegram_id=callback.from_user.id,
+                payload=snapshot,
+            )
+            if not approved:
+                raise AdminAuthorizationError("Second approval required.")
+            await consume_approved_request(
+                session,
+                approval_request_id=request_id,
+                action="catalog.mass_remove",
+                target_type="catalog",
+                target_id="active",
+                payload=snapshot,
+            )
             for product_id in product_ids:
                 await set_product_active(
                     session,
@@ -502,29 +604,27 @@ async def confirm_remove_all_products(message: Message, state: FSMContext):
                 )
             await add_admin_audit(
                 session,
-                actor_telegram_id=message.from_user.id,
+                actor_telegram_id=callback.from_user.id,
                 action="product_remove_all",
                 target_type="catalog",
-                details={"product_count": len(product_ids)},
+                details={"approval_request_id": request_id, "product_count": len(product_ids)},
             )
             await commit_catalog_change(session)
-    except AdminAuthorizationError:
-        await message.answer(get_text(lang, "remove_all_phrase_wrong"), reply_markup=_cancel_markup(lang))
+    except (AdminAuthorizationError, ValueError):
+        await record_admin_audit(
+            actor_telegram_id=callback.from_user.id,
+            action="catalog_mass_removal_rejected",
+            target_type="approval_request",
+            target_id=callback.data.removeprefix("catdual:")[:20],
+            details={"chat_id": callback.message.chat.id},
+        )
+        await callback.answer(get_text(lang, "remove_all_phrase_wrong"), show_alert=True)
         return
-    except Exception as exc:
-        logger.error("Remove all products failed: %s", exc, exc_info=True)
-        await message.answer(get_text(lang, "db_error"), reply_markup=_cancel_markup(lang))
-        return
-
-    await state.clear()
-    await message.answer(
+    await callback.message.edit_text(
         get_text(lang, "remove_all_done").format(count=len(product_ids)),
-        reply_markup=InlineKeyboardMarkup(
-            inline_keyboard=[
-                [InlineKeyboardButton(text=get_text(lang, "back"), callback_data="manage_inventory")]
-            ]
-        ),
+        parse_mode="HTML",
     )
+    await callback.answer()
 
 
 @products_router.callback_query(F.data == "add_single_product")
@@ -947,11 +1047,10 @@ async def show_guided_preview(callback: CallbackQuery, state: FSMContext):
 async def _store_guided_logo(
     bot,
     file_id: str,
-    product_id: str,
-) -> tuple[str, Path, bytes | None]:
+) -> StoredProductAsset:
     buffer = io.BytesIO()
     await bot.download(file_id, destination=buffer)
-    return _store_logo_bytes(product_id, buffer.getvalue())
+    return store_product_image(buffer.getvalue())
 
 
 @products_router.callback_query(F.data == "guided_confirm_save", ProductAdminStates.guided_preview)
@@ -963,17 +1062,13 @@ async def confirm_guided_product(callback: CallbackQuery, state: FSMContext):
         return
     payload = _guided_payload(data)
     logo_file_id = data.get("guided_logo_file_id")
-    logo_path: Path | None = None
-    previous_logo_bytes: bytes | None = None
+    logo_asset = None
     if logo_file_id:
         try:
-            (
-                payload["assetUrl"],
-                logo_path,
-                previous_logo_bytes,
-            ) = await _store_guided_logo(callback.bot, logo_file_id, payload["id"])
+            logo_asset = await _store_guided_logo(callback.bot, logo_file_id)
+            payload["assetUrl"] = logo_asset.url
             payload["icon"] = "Image"
-        except ValueError as exc:
+        except ProductAssetError as exc:
             await callback.answer(get_text(lang, str(exc)), show_alert=True)
             return
     try:
@@ -994,14 +1089,14 @@ async def confirm_guided_product(callback: CallbackQuery, state: FSMContext):
             )
             result.cache_invalidated = await commit_catalog_change(session)
     except (CatalogMutationError, VariantOwnershipError) as exc:
-        if logo_path is not None:
-            _restore_logo(logo_path, previous_logo_bytes)
+        if logo_asset is not None:
+            discard_new_asset(logo_asset)
         logger.warning("Guided product rejected: %s", exc)
         await callback.answer(get_text(lang, "single_product_invalid"), show_alert=True)
         return
     except Exception as exc:
-        if logo_path is not None:
-            _restore_logo(logo_path, previous_logo_bytes)
+        if logo_asset is not None:
+            discard_new_asset(logo_asset)
         logger.error("Guided product save failed: %s", exc, exc_info=True)
         await callback.answer(get_text(lang, "db_error"), show_alert=True)
         return
@@ -1405,6 +1500,22 @@ async def refresh_catalog_cache(callback: CallbackQuery):
 @products_router.callback_query(F.data == "action_delete_product")
 async def prompt_delete_product(callback: CallbackQuery, state: FSMContext):
     lang = await _lang(callback.from_user.id)
+    data = await state.get_data()
+    product_id = data.get("target_product_id")
+    if not product_id:
+        await callback.answer(get_text(lang, "not_found"), show_alert=True)
+        return
+    async with AsyncSessionLocal() as session:
+        nonce = await issue_action_nonce(
+            session,
+            actor_telegram_id=callback.from_user.id,
+            chat_id=callback.message.chat.id,
+            action="catalog.product_remove",
+            target_type="product",
+            target_id=product_id,
+        )
+        await session.commit()
+    await state.update_data(product_remove_nonce=nonce)
     markup = InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text=get_text(lang, "confirm_delete_yes"), callback_data="confirm_delete_product")],
@@ -1423,6 +1534,15 @@ async def soft_delete_product(callback: CallbackQuery, state: FSMContext):
 
     try:
         async with AsyncSessionLocal() as session:
+            await consume_action_nonce(
+                session,
+                nonce=str(data.get("product_remove_nonce", "")),
+                actor_telegram_id=callback.from_user.id,
+                chat_id=callback.message.chat.id,
+                action="catalog.product_remove",
+                target_type="product",
+                target_id=product_id,
+            )
             await set_product_active(
                 session,
                 product_id,
@@ -1812,7 +1932,7 @@ async def toggle_variant_visibility(callback: CallbackQuery, state: FSMContext):
                 details={"product_id": product_id, "active": active},
             )
             await commit_catalog_change(session)
-    except CatalogMutationError:
+    except (AdminAuthorizationError, CatalogMutationError):
         await callback.answer(get_text(lang, "not_found"), show_alert=True)
         return
     except Exception as exc:
@@ -1993,25 +2113,25 @@ async def process_logo_upload(message: Message, state: FSMContext):
     await message.bot.download(file_id, destination=buffer)
     file_bytes = buffer.getvalue()
     try:
-        asset_url, target_path, previous_bytes = _store_logo_bytes(
-            product_id,
-            file_bytes,
-        )
-    except ValueError as exc:
+        asset = store_product_image(file_bytes)
+    except ProductAssetError as exc:
         await message.answer(get_text(lang, str(exc)))
         return
 
+    previous_asset_url = None
+    committed = False
     async with AsyncSessionLocal() as session:
         try:
             product = await session.get(Product, product_id)
             if not product:
-                _restore_logo(target_path, previous_bytes)
+                discard_new_asset(asset)
                 await message.answer(get_text(lang, "not_found"))
                 return
+            previous_asset_url = product.asset_url
             await patch_product_fields(
                 session,
                 product_id,
-                {"asset_url": asset_url, "icon": "Image"},
+                {"asset_url": asset.url, "icon": "Image"},
                 commit=False,
             )
             await add_admin_audit(
@@ -2020,15 +2140,32 @@ async def process_logo_upload(message: Message, state: FSMContext):
                 action="product.logo_update",
                 target_type="product",
                 target_id=product_id,
-                details={"asset_type": target_path.suffix.lstrip(".")},
+                details={"asset_type": "webp"},
             )
             await commit_catalog_change(session)
+            committed = True
         except Exception as exc:
             await session.rollback()
-            _restore_logo(target_path, previous_bytes)
+            if not committed:
+                discard_new_asset(asset)
             logger.error("Logo upload DB error: %s", exc)
             await message.answer(get_text(lang, "db_error"))
             return
+
+        if previous_asset_url and previous_asset_url != asset.url:
+            try:
+                reference_count = await session.scalar(
+                    select(func.count(Product.id)).where(
+                        Product.asset_url == previous_asset_url
+                    )
+                )
+                if int(reference_count or 0) == 0:
+                    delete_owned_product_asset(previous_asset_url)
+            except Exception as exc:
+                logger.warning(
+                    "Old product asset cleanup failed: %s",
+                    type(exc).__name__,
+                )
 
     await state.clear()
     await message.answer(get_text(lang, "logo_uploaded"), reply_markup=_inventory_back_markup(lang))

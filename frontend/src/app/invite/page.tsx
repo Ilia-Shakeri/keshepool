@@ -3,7 +3,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { Check, Copy, Gift, Share2 } from "lucide-react";
 import PageHeader from "@/components/PageHeader";
-import { getPublicConfig, getTelegramUserId } from "@/lib/api";
+import { buildInviteLink } from "@/features/referrals/invite-link";
+import { getProfile, getPublicConfig } from "@/lib/api";
 import { copyText } from "@/lib/clipboard";
 
 export default function InvitePage() {
@@ -14,15 +15,10 @@ export default function InvitePage() {
   const loadInviteLink = useCallback(async () => {
     setLoadError(null);
     try {
-      const config = await getPublicConfig();
-      const botUsername = config.botUsername?.replace(/^@/, "");
-      const telegramUserId = getTelegramUserId();
-      if (!botUsername) throw new Error("نام کاربری ربات تنظیم نشده است.");
-      setInviteLink(
-        telegramUserId
-          ? `https://t.me/${botUsername}?startapp=ref_${telegramUserId}`
-          : `https://t.me/${botUsername}`,
-      );
+      const [config, profile] = await Promise.all([getPublicConfig(), getProfile()]);
+      const link = buildInviteLink(config.botUsername, profile.user.referralCode);
+      if (!link) throw new Error("لینک دعوت معتبر در دسترس نیست.");
+      setInviteLink(link);
     } catch (error) {
       setInviteLink("");
       setLoadError(error instanceof Error ? error.message : "لینک دعوت آماده نشد.");

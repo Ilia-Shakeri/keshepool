@@ -1,11 +1,14 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Check, ChevronRight, Copy, Headphones } from "lucide-react";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import ProductIcon from "@/features/products/components/ProductIcon";
 import PageHeader from "@/components/PageHeader";
-import { getOrders, getPublicConfig, type UserOrder } from "@/lib/api";
+import { getOrdersPage, revealOrderCredential } from "@/features/orders/api";
+import { appendUniqueOrders } from "@/features/orders/pagination";
+import type { UserOrder } from "@/features/orders/types";
+import { getPublicConfig } from "@/lib/api";
 import { copyText } from "@/lib/clipboard";
 import { filterOrdersByStatus, getOrderStatusLabel, type OrderStatus, type OrderStatusFilter } from "@/lib/order-status";
 import { useTelegramBackButton } from "@/hooks/useTelegramBackButton";
@@ -30,31 +33,91 @@ export default function OrdersPage() {
   const [activeTab, setActiveTab] = useState<OrderStatusFilter>("all");
   const [orders, setOrders] = useState<UserOrder[]>([]);
   const [selectedOrder, setSelectedOrder] = useState<UserOrder | null>(null);
+  const [revealedCredential, setRevealedCredential] = useState<string | null>(null);
+  const [isRevealing, setIsRevealing] = useState(false);
+  const [revealError, setRevealError] = useState<string | null>(null);
   const [copiedField, setCopiedField] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [orderError, setOrderError] = useState<string | null>(null);
+  const [loadMoreError, setLoadMoreError] = useState<string | null>(null);
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [supportLink, setSupportLink] = useState<string | null>(null);
+  const revealRequestVersion = useRef(0);
+  const orderRequestVersion = useRef(0);
+  const cursorInFlight = useRef(false);
+  const loadMoreRequestVersion = useRef(0);
 
   const loadOrders = useCallback(async () => {
+    const requestVersion = ++orderRequestVersion.current;
+    loadMoreRequestVersion.current += 1;
+    cursorInFlight.current = false;
     setIsLoading(true);
+    setIsLoadingMore(false);
     setOrderError(null);
+    setLoadMoreError(null);
+    setNextCursor(null);
     try {
-      setOrders(await getOrders());
+      const page = await getOrdersPage();
+      if (requestVersion === orderRequestVersion.current) {
+        setOrders(page.orders);
+        setNextCursor(page.nextCursor);
+      }
     } catch (error) {
-      setOrderError(error instanceof Error ? error.message : "سفارش‌ها دریافت نشدند.");
+      if (requestVersion === orderRequestVersion.current) {
+        setOrderError(error instanceof Error ? error.message : "سفارش‌ها دریافت نشدند.");
+      }
     } finally {
-      setIsLoading(false);
+      if (requestVersion === orderRequestVersion.current) setIsLoading(false);
     }
   }, []);
+
+  const loadMoreOrders = useCallback(async () => {
+    if (!nextCursor || cursorInFlight.current) return;
+    const cursor = nextCursor;
+    const requestVersion = orderRequestVersion.current;
+    const loadMoreVersion = ++loadMoreRequestVersion.current;
+    cursorInFlight.current = true;
+    setIsLoadingMore(true);
+    setLoadMoreError(null);
+    try {
+      const page = await getOrdersPage(cursor);
+      if (requestVersion !== orderRequestVersion.current) return;
+      setOrders((current) => appendUniqueOrders(current, page.orders));
+      setNextCursor(page.nextCursor);
+    } catch (error) {
+      if (requestVersion === orderRequestVersion.current) {
+        setLoadMoreError(error instanceof Error ? error.message : "سفارش‌های بیشتر دریافت نشدند.");
+      }
+    } finally {
+      if (loadMoreVersion === loadMoreRequestVersion.current) {
+        cursorInFlight.current = false;
+        setIsLoadingMore(false);
+      }
+    }
+  }, [nextCursor]);
 
   useEffect(() => {
     void Promise.resolve().then(loadOrders);
     void getPublicConfig()
       .then((config) => setSupportLink(config.supportUrl || (config.supportUsername ? `https://t.me/${config.supportUsername.replace(/^@/, "")}` : null)))
       .catch((error) => console.error("Support config load failed:", error));
+    return () => {
+      orderRequestVersion.current += 1;
+      loadMoreRequestVersion.current += 1;
+      cursorInFlight.current = false;
+    };
   }, [loadOrders]);
 
-  useTelegramBackButton(() => setSelectedOrder(null), Boolean(selectedOrder));
+  const closeOrder = useCallback(() => {
+    revealRequestVersion.current += 1;
+    setSelectedOrder(null);
+    setRevealedCredential(null);
+    setRevealError(null);
+    setIsRevealing(false);
+  }, []);
+
+  useTelegramBackButton(closeOrder, Boolean(selectedOrder));
 
   const filteredOrders = useMemo(
     () => filterOrdersByStatus(orders, activeTab),
@@ -71,6 +134,26 @@ export default function OrdersPage() {
       }
     } catch {
       window.Telegram?.WebApp?.showAlert(`متن را دستی کپی کنید:\n${text}`);
+    }
+  };
+
+  const handleReveal = async () => {
+    if (!selectedOrder?.credentialAvailable || isRevealing) return;
+    const orderId = selectedOrder.id;
+    const requestVersion = ++revealRequestVersion.current;
+    setIsRevealing(true);
+    setRevealError(null);
+    try {
+      const result = await revealOrderCredential(orderId);
+      if (requestVersion === revealRequestVersion.current && result.orderId === orderId) {
+        setRevealedCredential(result.credential);
+      }
+    } catch (error) {
+      if (requestVersion === revealRequestVersion.current) {
+        setRevealError(error instanceof Error ? error.message : "Credential could not be loaded.");
+      }
+    } finally {
+      if (requestVersion === revealRequestVersion.current) setIsRevealing(false);
     }
   };
 
@@ -129,7 +212,12 @@ export default function OrdersPage() {
             filteredOrders.map((order) => (
               <div
                 key={order.id}
-                onClick={() => setSelectedOrder(order)}
+                onClick={() => {
+                  revealRequestVersion.current += 1;
+                  setSelectedOrder(order);
+                  setRevealedCredential(null);
+                  setRevealError(null);
+                }}
                 className="flex cursor-pointer items-center justify-between gap-3 rounded-2xl p-4 transition-all active:scale-[0.98]"
                 style={{
                   background: "linear-gradient(135deg, rgba(255,255,255,0.06) 0%, rgba(255,255,255,0.02) 100%)",
@@ -151,10 +239,23 @@ export default function OrdersPage() {
               </div>
             ))
           )}
+          {!isLoading && !orderError && nextCursor && (
+            <button
+              type="button"
+              disabled={isLoadingMore}
+              onClick={() => void loadMoreOrders()}
+              className="w-full rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3 text-xs font-bold text-[#F5F5F5] disabled:opacity-50"
+            >
+              {isLoadingMore ? "در حال دریافت..." : "نمایش سفارش‌های بیشتر"}
+            </button>
+          )}
+          {loadMoreError && (
+            <p className="text-center text-xs text-[#E63946]">{loadMoreError}</p>
+          )}
         </div>
       </main>
 
-      <Dialog open={!!selectedOrder} onOpenChange={(open) => !open && setSelectedOrder(null)}>
+      <Dialog open={!!selectedOrder} onOpenChange={(open) => !open && closeOrder()}>
         <DialogContent className="dialog-safe-area flex h-[100dvh] w-full max-w-md flex-col rounded-none border-none p-0 font-sans text-[#F5F5F5] sm:h-auto sm:max-h-[90dvh] sm:rounded-3xl" style={{ background: "#0A0A0B" }}>
           <DialogTitle className="sr-only">جزئیات سفارش</DialogTitle>
           <DialogDescription className="sr-only">وضعیت، تاریخ و اطلاعات دسترسی سفارش</DialogDescription>
@@ -163,7 +264,7 @@ export default function OrdersPage() {
             className="flex flex-row justify-between items-center px-5 py-4 sticky top-0 z-20"
             style={{ background: "rgba(10,10,11,0.9)", backdropFilter: "blur(20px)", borderBottom: "1px solid rgba(255,255,255,0.07)" }}
           >
-            <button type="button" onClick={() => setSelectedOrder(null)} className="p-2 rounded-full hover:bg-white/10 transition-colors" style={{ background: "rgba(255,255,255,0.07)" }} aria-label="بستن جزئیات سفارش">
+            <button type="button" onClick={closeOrder} className="p-2 rounded-full hover:bg-white/10 transition-colors" style={{ background: "rgba(255,255,255,0.07)" }} aria-label="بستن جزئیات سفارش">
               <ChevronRight className="w-4 h-4" />
             </button>
             <h2 className="text-base font-bold">جزئیات سفارش</h2>
@@ -200,11 +301,23 @@ export default function OrdersPage() {
 
               <div className="pt-4" style={{ borderTop: "1px solid rgba(255,255,255,0.07)" }}>
                 <h4 className="text-sm font-bold text-[#F5F5F5] mb-3">اطلاعات سرویس</h4>
-                <div className="rounded-2xl p-4 flex items-start justify-between gap-3" style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)" }}>
-                  <span className="flex-1 select-text whitespace-pre-wrap break-all font-mono text-sm leading-relaxed text-[#F5F5F5]/80">{selectedOrder.credentials}</span>
-                  <button type="button" onClick={() => handleCopy(selectedOrder.credentials, "credentials")} className="mt-0.5 flex-shrink-0 text-[#F5F5F5]/40 transition-colors hover:text-[#F5F5F5]" aria-label="کپی اطلاعات سرویس">
-                    {copiedField === "credentials" ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
-                  </button>
+                <div className="rounded-2xl p-4 space-y-3" style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)" }}>
+                  <div className="flex items-start justify-between gap-3">
+                    <span className="flex-1 select-text whitespace-pre-wrap break-all font-mono text-sm leading-relaxed text-[#F5F5F5]/80">
+                      {revealedCredential || selectedOrder.credentialPreview || "اطلاعات این سفارش در دسترس نیست."}
+                    </span>
+                    {revealedCredential && (
+                      <button type="button" onClick={() => handleCopy(revealedCredential, "credentials")} className="mt-0.5 flex-shrink-0 text-[#F5F5F5]/40 transition-colors hover:text-[#F5F5F5]" aria-label="کپی اطلاعات سرویس">
+                        {copiedField === "credentials" ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
+                      </button>
+                    )}
+                  </div>
+                  {!revealedCredential && selectedOrder.credentialAvailable && (
+                    <button type="button" disabled={isRevealing} onClick={() => void handleReveal()} className="w-full rounded-xl bg-white/[0.07] px-4 py-3 text-xs font-bold disabled:opacity-50">
+                      {isRevealing ? "در حال دریافت..." : "نمایش اطلاعات سرویس"}
+                    </button>
+                  )}
+                  {revealError && <p className="text-xs text-[#E63946]">{revealError}</p>}
                 </div>
               </div>
             </div>

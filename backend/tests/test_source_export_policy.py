@@ -40,12 +40,14 @@ def test_ci_builds_the_exported_source() -> None:
 
 def test_frontend_runtime_is_pinned_to_node_22() -> None:
     package = (ROOT / "frontend" / "package.json").read_text(encoding="utf-8")
+    dockerfile = (ROOT / "frontend" / "Dockerfile").read_text(encoding="utf-8")
 
     assert (ROOT / "frontend" / ".nvmrc").read_text(encoding="utf-8").strip() == "22"
     assert '">=22 <23"' in package
-    assert "FROM node:22-alpine" in (ROOT / "frontend" / "Dockerfile").read_text(
-        encoding="utf-8"
-    )
+    assert "FROM node:22-alpine" in dockerfile
+    assert "COPY package.json package-lock.json ./" in dockerfile
+    assert "npm ci --legacy-peer-deps" in dockerfile
+    assert "npm install" not in dockerfile
     assert "image: node:22-alpine" in (ROOT / ".gitlab-ci.yml").read_text(
         encoding="utf-8"
     )

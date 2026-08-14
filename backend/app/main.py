@@ -25,11 +25,16 @@ from app.bot.handlers.customer import customer_router
 from app.bot.handlers.products_admin import products_router
 from app.bot.handlers.transactions_admin import transactions_router
 from app.bot.middleware import BlockBannedUserMiddleware
-from app.bot.services.scheduler import start_scheduler
 from app.core.config import settings
-from app.core.database import AsyncSessionLocal, engine, init_db
+from app.core.database import AsyncSessionLocal, database_pool_snapshot, engine, init_db
+from app.core.logging_security import SensitiveDataFilter
 from app.core.redis import redis_client
 from app.services.cache_service import redis_health
+from app.services.ingress_security import check_ingress_request, release_ingress_slot
+from app.services.schema_compatibility_service import (
+    check_schema_compatibility,
+    schema_health_payload,
+)
 from app.services.telegram_inbox_service import enqueue_update
 
 # Configure structured JSON logging
@@ -39,6 +44,7 @@ if logger.handlers:
 logHandler = logging.StreamHandler()
 formatter = jsonlogger.JsonFormatter('%(asctime)s %(levelname)s %(name)s %(message)s')
 logHandler.setFormatter(formatter)
+logHandler.addFilter(SensitiveDataFilter())
 logger.addHandler(logHandler)
 logger.setLevel(logging.INFO)
 
@@ -79,6 +85,19 @@ def _webhook_request_fields(
         fields["exception_class"] = exception_class
     return fields
 
+
+def _json_depth_within_limit(value: object, max_depth: int) -> bool:
+    stack: list[tuple[object, int]] = [(value, 1)]
+    while stack:
+        current, depth = stack.pop()
+        if depth > max_depth:
+            return False
+        if isinstance(current, dict):
+            stack.extend((child, depth + 1) for child in current.values())
+        elif isinstance(current, list):
+            stack.extend((child, depth + 1) for child in current)
+    return True
+
 # Initialize application bots and dispatchers
 bot = Bot(token=settings.BOT_TOKEN)
 customer_storage = RedisStorage.from_url(
@@ -107,13 +126,9 @@ admin_dp.include_router(transactions_router)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    scheduler = None
     polling_tasks: list[asyncio.Task] = []
     try:
         await init_db()
-        if settings.TELEGRAM_BOT_MODE != "disabled":
-            scheduler = start_scheduler(admin_bot)
-
         if settings.TELEGRAM_BOT_MODE == "webhook":
             module_logger.info("Telegram webhook transport enabled; configuration is managed separately.")
         elif settings.TELEGRAM_BOT_MODE == "polling":
@@ -136,12 +151,6 @@ async def lifespan(app: FastAPI):
                 except RuntimeError:
                     pass
             await asyncio.gather(*polling_tasks, return_exceptions=True)
-
-        if scheduler is not None:
-            try:
-                scheduler.shutdown()
-            except Exception:
-                module_logger.exception("Scheduler shutdown failed.")
 
         shutdown_steps = (
             ("main bot session", bot.session.close),
@@ -176,7 +185,45 @@ async def add_correlation_id(request: Request, call_next):
         else uuid.uuid4().hex
     )
     request.state.request_id = request_id
-    response = await call_next(request)
+    ingress_decision = await check_ingress_request(request)
+    blocked_status = ingress_decision.blocked_status
+    if blocked_status is None:
+        try:
+            response = await call_next(request)
+        finally:
+            await release_ingress_slot(ingress_decision.lease)
+    else:
+        policy = ingress_decision.policy
+        module_logger.warning(
+            "Ingress request blocked.",
+            extra={
+                "request_id": request_id,
+                "ingress_policy": policy.name if policy else None,
+                "result": ingress_decision.block_reason or "blocked",
+            },
+        )
+        response = JSONResponse(
+            status_code=blocked_status,
+            content={
+                "detail": (
+                    "Ingress protection is unavailable."
+                    if blocked_status == 503
+                    else (
+                        "Too many requests."
+                        if blocked_status == 429
+                        else "Forbidden."
+                    )
+                )
+            },
+        )
+        if blocked_status in {429, 503}:
+            response.headers["Retry-After"] = str(
+                1
+                if blocked_status == 503
+                or ingress_decision.block_reason == "concurrency_limited"
+                else policy.window_seconds
+            )
+        response.headers["Cache-Control"] = "no-store"
     response.headers["X-Request-ID"] = request_id
     response.headers["Referrer-Policy"] = "no-referrer"
     response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
@@ -213,6 +260,7 @@ app.add_middleware(
         "X-Telegram-Init-Data",
         "X-Idempotency-Key",
     ],
+    expose_headers=["X-Next-Cursor"],
 )
 
 # Mount API routers and static files
@@ -245,6 +293,15 @@ async def get_public_config():
         "botUsername": settings.BOT_USERNAME,
         "supportUsername": support_username or None,
         "supportUrl": f"https://t.me/{support_username}" if support_username else None,
+        "payments": {
+            "tetra98Enabled": settings.TETRA98_ENABLED,
+            "cardToCard": {
+                "enabled": settings.card_to_card_ready,
+                "cardNumber": settings.card_to_card_number if settings.card_to_card_ready else None,
+                "cardHolder": settings.CARD_TO_CARD_HOLDER.strip() if settings.card_to_card_ready else None,
+                "maxReceiptBytes": settings.CARD_TRANSFER_MAX_RECEIPT_BYTES,
+            },
+        },
     }
 
 @app.post(f"{WEBHOOK_PATH}/{{bot_type}}")
@@ -258,6 +315,12 @@ async def bot_webhook(
         if bot_type == "admin"
         else settings.main_telegram_webhook_secret
     )
+    if not expected_secret:
+        module_logger.error(
+            "Telegram webhook secret is not configured.",
+            extra=_webhook_request_fields(request, bot_type, "failed"),
+        )
+        raise HTTPException(status_code=503, detail="Webhook is unavailable.")
     if not hmac.compare_digest(
         x_telegram_bot_api_secret_token or "",
         expected_secret,
@@ -294,9 +357,21 @@ async def bot_webhook(
         update_data = json.loads(b"".join(chunks))
         if not isinstance(update_data, dict):
             raise HTTPException(status_code=400, detail="Webhook JSON body must be an object.")
+        if not _json_depth_within_limit(
+            update_data,
+            settings.TELEGRAM_WEBHOOK_MAX_JSON_DEPTH,
+        ):
+            raise HTTPException(status_code=400, detail="Webhook JSON body is too deeply nested.")
         telegram_update = types.Update(**update_data)
         update_id = telegram_update.update_id
-    except (json.JSONDecodeError, ValidationError, TypeError, ValueError) as exc:
+    except (
+        json.JSONDecodeError,
+        ValidationError,
+        TypeError,
+        UnicodeError,
+        ValueError,
+        RecursionError,
+    ) as exc:
         module_logger.warning(
             "Telegram webhook request ignored.",
             extra=_webhook_request_fields(
@@ -349,27 +424,35 @@ async def health_check():
 async def readiness_check():
     database_ok = False
     database_detail = "unavailable"
+    schema_payload: dict[str, object] = {"ok": False}
     try:
         async with AsyncSessionLocal() as session:
             await session.execute(text("SELECT 1"))
-        database_ok = True
-        database_detail = "ok"
+            schema_result = await check_schema_compatibility(session)
+        database_ok = schema_result.ready
+        database_detail = "ok" if database_ok else "schema_mismatch"
+        schema_payload = schema_health_payload(schema_result)
     except Exception as exc:
         database_detail = type(exc).__name__
         module_logger.error("Database readiness check failed: %s", database_detail)
 
     redis_ok, redis_detail = await redis_health()
+    ready = database_ok and redis_ok
     payload = {
-        "status": "ready" if database_ok and redis_ok else "degraded" if database_ok else "not_ready",
-        "ready": database_ok,
+        "status": "ready" if ready else "not_ready",
+        "ready": ready,
         "checks": {
-            "database": {"ok": database_ok, "detail": database_detail},
+            "database": {
+                "ok": database_ok,
+                "detail": database_detail,
+                "pool": database_pool_snapshot(),
+                "schema": schema_payload,
+            },
             "redis": {
                 "ok": redis_ok,
                 "detail": redis_detail,
-                "required": False,
-                "fallback": "database" if not redis_ok else None,
+                "required": True,
             },
         },
     }
-    return JSONResponse(status_code=200 if database_ok else 503, content=payload)
+    return JSONResponse(status_code=200 if ready else 503, content=payload)

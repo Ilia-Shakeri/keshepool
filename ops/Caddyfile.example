@@ -1,62 +1,108 @@
 {
-    log default {
-        format filter {
-            wrap json
-            request>headers>X-Telegram-Init-Data delete
-            request>headers>X-Telegram-Bot-Api-Secret-Token delete
-            request>headers>X-Admin-Token delete
-            request>headers>Authorization delete
-            request>headers>Cookie delete
-            request>headers>Set-Cookie delete
-            resp_headers>Set-Cookie delete
-        }
-    }
+	log default {
+		format filter {
+			wrap json
+			request>headers>X-Telegram-Init-Data delete
+			request>headers>X-Telegram-Bot-Api-Secret-Token delete
+			request>headers>X-Admin-Token delete
+			request>headers>X-Tetra98-Signature delete
+			request>headers>X-Crypto-Signature delete
+			request>headers>Authorization delete
+			request>headers>Cookie delete
+			request>headers>Set-Cookie delete
+			resp_headers>Set-Cookie delete
+		}
+	}
+}
+
+# Standard X-Forwarded-For, X-Forwarded-Host, and X-Forwarded-Proto values are
+# rebuilt by reverse_proxy because this public edge has no trusted upstream proxy.
+(backend_upstream) {
+	reverse_proxy keshepool-backend:8000 {
+		header_up -Forwarded
+		header_up -X-Forwarded-Port
+		header_up -X-Real-IP
+		header_up -Client-IP
+		header_up -True-Client-IP
+		header_up -CF-Connecting-IP
+		header_up -Fly-Client-IP
+		header_up -Fastly-Client-IP
+		header_up -X-Cluster-Client-IP
+	}
+}
+
+(frontend_upstream) {
+	reverse_proxy keshepool-frontend:3000 {
+		header_up -Forwarded
+		header_up -X-Forwarded-Port
+		header_up -X-Real-IP
+		header_up -Client-IP
+		header_up -True-Client-IP
+		header_up -CF-Connecting-IP
+		header_up -Fly-Client-IP
+		header_up -Fastly-Client-IP
+		header_up -X-Cluster-Client-IP
+	}
 }
 
 keshepool.example.com {
-    header {
-        Strict-Transport-Security "max-age=31536000; includeSubDomains"
-        Referrer-Policy "no-referrer"
-        Permissions-Policy "camera=(), microphone=(), geolocation=()"
-        X-Content-Type-Options "nosniff"
-        Content-Security-Policy-Report-Only "default-src 'self'; base-uri 'self'; connect-src 'self'; font-src 'self' data:; form-action 'self'; frame-ancestors 'self' https://web.telegram.org https://*.telegram.org; img-src 'self' data: https:; object-src 'none'; script-src 'self' https://telegram.org; style-src 'self' 'unsafe-inline'"
-    }
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		Referrer-Policy "no-referrer"
+		Permissions-Policy "camera=(), microphone=(), geolocation=()"
+		X-Content-Type-Options "nosniff"
+	}
 
-    log {
-        output stdout
-        format filter {
-            wrap json
-            request>headers>X-Telegram-Init-Data delete
-            request>headers>X-Telegram-Bot-Api-Secret-Token delete
-            request>headers>X-Admin-Token delete
-            request>headers>Authorization delete
-            request>headers>Cookie delete
-            request>headers>Set-Cookie delete
-            resp_headers>Set-Cookie delete
-        }
-    }
+	log {
+		output stdout
+		format filter {
+			wrap json
+			request>headers>X-Telegram-Init-Data delete
+			request>headers>X-Telegram-Bot-Api-Secret-Token delete
+			request>headers>X-Admin-Token delete
+			request>headers>X-Tetra98-Signature delete
+			request>headers>X-Crypto-Signature delete
+			request>headers>Authorization delete
+			request>headers>Cookie delete
+			request>headers>Set-Cookie delete
+			resp_headers>Set-Cookie delete
+		}
+	}
 
-    handle /health/ready {
-        reverse_proxy keshepool-backend:8000
-    }
+	handle /health/ready {
+		import backend_upstream
+	}
 
-    handle /webhook/* {
-        reverse_proxy keshepool-backend:8000
-    }
+	handle /health/live {
+		import frontend_upstream
+	}
 
-    handle /api/pay/tetra98/callback {
-        reverse_proxy keshepool-backend:8000
-    }
+	handle /webhook/* {
+		request_body {
+			max_size 1MB
+		}
+		import backend_upstream
+	}
 
-    handle /api/pay/crypto/callback {
-        reverse_proxy keshepool-backend:8000
-    }
+	handle /api/pay/tetra98/callback {
+		request_body {
+			max_size 1MB
+		}
+		import backend_upstream
+	}
 
-    handle /static/* {
-        reverse_proxy keshepool-backend:8000
-    }
+	handle /api/pay/crypto/callback {
+		request_body {
+			max_size 1MB
+		}
+		import backend_upstream
+	}
 
-    handle {
-        reverse_proxy keshepool-frontend:3000
-    }
+	handle /static/* {
+		import backend_upstream
+	}
+
+	handle {
+		import frontend_upstream
+	}
 }

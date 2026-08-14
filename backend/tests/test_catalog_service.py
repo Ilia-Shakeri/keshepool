@@ -170,7 +170,12 @@ def test_product_mapping_rejects_unsafe_prices(value):
 
 @pytest.mark.parametrize(
     "asset_url",
-    ["javascript:alert(1)", "http://example.test/logo.png", "//example.test/logo.png"],
+    [
+        "javascript:alert(1)",
+        "http://example.test/logo.png",
+        "https://example.test/logo.png",
+        "//example.test/logo.png",
+    ],
 )
 def test_product_mapping_rejects_unsafe_asset_urls(asset_url):
     payload = {
@@ -183,6 +188,44 @@ def test_product_mapping_rejects_unsafe_asset_urls(asset_url):
     }
     with pytest.raises(catalog_service.CatalogMutationError):
         catalog_service.product_mutation_from_mapping(payload)
+
+
+def test_product_gradient_uses_fixed_contract_only():
+    payload = {
+        "id": "product-one",
+        "title": "Product",
+        "brand": "Brand",
+        "category": "tools",
+        "gradient": "from-blue-500 to-indigo-800",
+        "variants": [{"id": "variant-one", "duration": "1 month", "rawPrice": 100}],
+    }
+    assert catalog_service.product_mutation_from_mapping(payload).gradient == payload["gradient"]
+    payload["gradient"] = "from-runtime-value to-missing-css"
+    with pytest.raises(catalog_service.CatalogMutationError, match="gradient"):
+        catalog_service.product_mutation_from_mapping(payload)
+    assert catalog_service.public_gradient("legacy arbitrary value") == (
+        catalog_service.DEFAULT_PRODUCT_GRADIENT
+    )
+
+
+def test_price_label_is_always_derived_from_canonical_price():
+    payload = {
+        "id": "product-one",
+        "title": "Product",
+        "brand": "Brand",
+        "category": "tools",
+        "variants": [
+            {
+                "id": "variant-one",
+                "duration": "1 month",
+                "rawPrice": "1234.50",
+                "priceLabel": "stale or false label",
+            }
+        ],
+    }
+    mutation = catalog_service.product_mutation_from_mapping(payload)
+    assert mutation.variants[0].price_label == "1,234.5"
+    assert catalog_service.canonical_price_label("100") == "100"
 
 
 def test_product_mapping_rejects_unbounded_features_and_inventory():

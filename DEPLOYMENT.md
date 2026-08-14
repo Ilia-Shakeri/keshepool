@@ -4,13 +4,15 @@
 
 Keshepool uses one public origin. The browser calls same-origin `/api`; no public backend URL is compiled into client code.
 
-The `frontend` and `backend` services join `caddy_gateway_net`. Caddy sends `/health/ready` directly to the backend and all other public requests to `keshepool-frontend:3000`. Next forwards these application paths to `http://backend:8000` on the private Compose network:
+The `frontend` and `backend` services join `caddy_gateway_net`. Caddy sends these paths directly to `keshepool-backend:8000`:
 
-- `/api/*`
 - `/webhook/*`
+- `/api/pay/tetra98/callback`
+- `/api/pay/crypto/callback`
 - `/static/*`
+- `/health/ready`
 
-Health routing stays separate: `/health/ready` is a backend-owned public route, while `/health/live` is served by the frontend process without a backend call.
+Browser `/api/*` traffic and `/health/live` go to `keshepool-frontend:3000`. The frontend forwards browser API requests to `http://backend:8000` on the shared Caddy gateway segment. Webhooks and provider callbacks never traverse the frontend proxy.
 
 The backend, PostgreSQL, and Redis are not public ingress targets. Create the shared proxy network once:
 
@@ -25,6 +27,12 @@ keshepool.example.com {
     handle /health/ready {
         reverse_proxy keshepool-backend:8000
     }
+    handle /webhook/* {
+        reverse_proxy keshepool-backend:8000
+    }
+    handle /api/pay/tetra98/callback {
+        reverse_proxy keshepool-backend:8000
+    }
     handle {
         reverse_proxy keshepool-frontend:3000
     }
@@ -33,7 +41,27 @@ keshepool.example.com {
 
 The Caddy container must also join `caddy_gateway_net`. Replace the sample host in `.env` with the same HTTPS origin for `WEBHOOK_URL` and `WEB_APP_URL`.
 
-Set `TRUSTED_PROXY_IPS` to the exact Caddy container address or a reviewed proxy network range. Production rejects `*`; forwarded headers from other sources are ignored.
+## Container network isolation
+
+Compose uses three separate network planes and publishes no application or data-service ports:
+
+- `keshepool_data_net` is an internal-only data plane. PostgreSQL, Redis, migrations, backups, the backend, and the inbox worker join it. Docker does not give this network an external route. Its new name forces a fresh private network instead of reusing the older routable `keshepool_internal_net`.
+- `caddy_gateway_net` is the externally managed ingress plane. Only Caddy, the backend, and the frontend join it. The frontend reaches the backend here and has no route to PostgreSQL or Redis.
+- `keshepool_worker_egress_net` gives the inbox worker outbound provider access. The worker also joins the data plane, but never the Caddy gateway. The short-lived Telegram configuration job joins only this egress plane.
+
+The static permission initializer uses `network_mode: none`. The migration and backup jobs join only the data plane. The migration container receives only the database credential; unused bot, webhook, cache, provider, and administrator credentials are not injected. The Telegram configuration job receives only its required bot and webhook settings, uses unreachable local placeholders for mandatory database and cache configuration fields, and has no data-plane route.
+
+The frontend runtime has a read-only root filesystem, drops every Linux capability, enables `no-new-privileges`, and has CPU, memory, process, and temporary-filesystem bounds. Only `/tmp` and the image cache are writable in bounded in-memory filesystems.
+
+Treat all three memberships as a security contract. Run the source contract test and `docker compose config --quiet` before release. After a host cutover, inspect each running container's attached networks and prove that the frontend cannot resolve or connect to `db` or `redis`, while the worker cannot resolve the frontend or accept a route through Caddy.
+
+The first release with this split must recreate every application and state container during the maintenance window so no old container stays attached to `keshepool_internal_net`. The deployment script stops and recreates the inbox worker with the same immutable backend image as the API. Named data volumes are unchanged. After all containers pass the network probes, the detached old network may be removed in a separate reviewed cleanup; its presence alone does not expose a service when it has no endpoints.
+
+Set `TRUSTED_PROXY_IPS` to the exact Caddy and frontend container addresses, or narrowly reviewed ranges containing only those proxy peers. Compose has no loopback fallback for this value. Production rejects `*`; do not use all private ranges. The public Caddy must be the first edge. It discards nonstandard client-IP headers and safely rebuilds the standard forwarded headers. The frontend strips them again and rebuilds one validated edge address for browser API traffic. Forwarding chains and values from untrusted backend peers do not select a rate-limit identity.
+
+The example uses `request_body max_size`, which requires Caddy 2.10 or newer. It was locally validated and adapted with checksum-verified Caddy 2.11.4. Validate the exact production binary before reload. Public ingress rate ceilings are listed in `docs/phase-1-design.md`; webhook, callback, admin, auth bootstrap, and financial writes fail closed when Redis cannot decide. Ordinary API reads keep the database fallback.
+
+`INGRESS_SENSITIVE_MAX_IN_FLIGHT` limits simultaneous work per sensitive policy across backend replicas. Keep `INGRESS_IN_FLIGHT_TTL_SECONDS` longer than the reviewed maximum normal handler time so a valid slow request does not expire while still running. A dead worker's token expires automatically. Leave `TETRA98_CALLBACK_ALLOWED_CIDRS` and `CRYPTO_CALLBACK_ALLOWED_CIDRS` blank until the respective provider publishes stable source networks and an operator verifies them independently. When set, use exact comma-separated IPv4 or IPv6 CIDRs; a malformed or host-bit CIDR blocks startup and callback processing.
 
 ## Image and migration policy
 
@@ -56,6 +84,10 @@ The deployment order is:
 6. Start and verify the exact backend image, then wait for readiness.
 7. Start and verify the exact frontend image, wait for liveness, and confirm its reported deployment revision.
 8. Verify service-DNS, same-origin, and public ingress routes with `smoke.sh`.
+
+Revision `012` is an expand-only credential-vault migration. Its runtime gates stay off by default, and deployment must not combine the schema release with data backfill or plaintext finalization. Follow the separate staged runbook in `docs/credential-vault-rollout.md`; every applied data command is an operator-reviewed maintenance action.
+
+Revision `015` adds immutable order snapshots and composite ownership guards after revision `014`. Legacy order labels remain quarantined because current catalog text is not reliable history. Review `docs/order-snapshot-design.md` before release. If either composite foreign key remains `NOT VALID`, new writes are still guarded, but the release record must retain a follow-up task to resolve legacy mismatches and validate the constraint.
 
 ## Production release
 
@@ -89,7 +121,11 @@ The production job is manual and serialized. It copies only the revision's Compo
 
 ## Admin authorization
 
-`ADMIN_TELEGRAM_IDS` bootstraps break-glass superadmins and must contain numeric Telegram user IDs separated by commas. Durable role grants remain disabled until migration `008` is applied and reviewed. Keep `ADMIN_RBAC_ENABLED=false` during the expand release; a later cutover may enable active database grants. Private chat stays available to authorized operators. `ADMIN_GROUP_CHAT_ID` is optional and, when set, is the only group accepted by the administrator bot. `ADMIN_REQUIRE_GROUP_ADMIN=false` allows authorized ordinary group members. Set it to `true` only when each operator must also be a Telegram administrator or creator. Group role or username alone never grants access.
+`ADMIN_TELEGRAM_IDS` bootstraps break-glass superadmins and must contain numeric Telegram user IDs separated by commas. Durable role grants remain disabled until migration `008` is applied and reviewed. Keep `ADMIN_RBAC_ENABLED=false` and `ADMIN_ENV_BREAK_GLASS_ENABLED=true` during the expand release. After every required durable grant is verified, enable role enforcement first. In a separate reviewed release, set `ADMIN_ENV_BREAK_GLASS_ENABLED=false`; environment IDs then need active database grants and can be revoked. The configuration rejects disabling both paths at once. Private chat stays available to authorized operators. `ADMIN_GROUP_CHAT_ID` is optional and, when set, is the only group accepted by the administrator bot. `ADMIN_REQUIRE_GROUP_ADMIN=false` allows authorized ordinary group members. Set it to `true` only when each operator must also be a Telegram administrator or creator. Group role or username alone never grants access.
+
+Production group operation requires `ADMIN_REQUIRE_GROUP_ADMIN=true`. Keep `ADMIN_DUAL_APPROVAL_ENABLED=false` until revision `008`, at least two reviewed finance/catalog grants, and the disposable PostgreSQL concurrency test pass. When enabled, wallet credits at or above `ADMIN_DUAL_APPROVAL_WALLET_THRESHOLD_TOMAN` and mass catalog removal require a distinct second administrator in `ADMIN_GROUP_CHAT_ID`. Pending approval buttons are single-use and expire.
+
+After revision `008`, a break-glass superadmin can prepare durable grants inside the backend container. Run `python scripts/manage_admin_roles.py --actor-telegram-id <actor> grant --target-telegram-id <target> --role <role>`. Supported roles are `superadmin`, `finance`, `catalog`, `support`, and `auditor`. Use the `revoke` subcommand to revoke a grant and `list` to review active grants. The command records grant and revoke audit rows and never accepts a token or secret argument.
 
 The administrator bot can remain an ordinary group member. Add it to the configured group, keep privacy mode enabled if desired, and use `/start`, commands, inline buttons, and forced replies. Persistent private-chat keyboards are not shown in groups. Bot creation, privacy-mode settings, and group membership are external operator steps and cannot be changed by this repository.
 

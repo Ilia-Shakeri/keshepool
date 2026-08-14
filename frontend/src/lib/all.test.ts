@@ -1,10 +1,15 @@
 import "./api.test.ts";
+import "./content-security-policy.test.ts";
 import "./health.test.ts";
 import "./modal-dismiss.test.ts";
+import "./order-api.test.ts";
 import "./order-status.test.ts";
 import "./product-filters.test.ts";
 import "./product-load.test.ts";
+import "./product-gradient.test.ts";
+import "./referral-link.test.ts";
 import "./request-diagnostics.test.ts";
+import "./server-proxy.test.ts";
 import "./telegram-back.test.ts";
 import "./transaction-format.test.ts";
 import "./ui-contract.test.ts";

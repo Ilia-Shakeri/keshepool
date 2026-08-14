@@ -1,12 +1,12 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Check, ChevronRight, Copy, Wallet } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import ProductIcon from "@/features/products/components/ProductIcon";
 import { Button } from "@/components/ui/button";
-import { checkoutWithWallet } from "@/lib/api";
+import { checkoutWithWallet, revealOrderCredential } from "@/features/orders/api";
 import { copyText } from "@/lib/clipboard";
 import { shouldBlockFinancialDismiss } from "@/lib/modal-dismiss";
 import { useTelegramBackButton } from "@/hooks/useTelegramBackButton";
@@ -24,7 +24,9 @@ interface CheckoutModalProps {
 
 interface OrderResult {
   id: string;
-  credentials: string;
+  credential: string | null;
+  credentialPreview: string | null;
+  credentialAvailable: boolean;
   productBrand: string;
   variantDuration: string;
 }
@@ -58,7 +60,9 @@ export default function CheckoutModal({ isOpen, setIsOpen, product, variant, wal
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [orderResult, setOrderResult] = useState<OrderResult | null>(null);
   const [copied, setCopied] = useState(false);
+  const [isRevealing, setIsRevealing] = useState(false);
   const [idempotencyKey, setIdempotencyKey] = useState(createCheckoutKey);
+  const revealRequestVersion = useRef(0);
 
   const isOutOfStock = (variant.stockCount ?? 0) <= 0;
   const canPay = walletBalance !== null && walletBalance >= variant.rawPrice && !isOutOfStock;
@@ -73,7 +77,9 @@ export default function CheckoutModal({ isOpen, setIsOpen, product, variant, wal
       const result = await checkoutWithWallet(product.id, variant.id, idempotencyKey);
       setOrderResult({
         id: result.order.id,
-        credentials: result.order.credentials,
+        credential: null,
+        credentialPreview: result.order.credentialPreview || null,
+        credentialAvailable: result.order.credentialAvailable,
         productBrand: result.order.productBrand,
         variantDuration: result.order.variantDuration,
       });
@@ -87,20 +93,44 @@ export default function CheckoutModal({ isOpen, setIsOpen, product, variant, wal
   };
 
   const handleCopy = async () => {
-    if (!orderResult) return;
-    if (await copyText(orderResult.credentials)) {
+    if (!orderResult?.credential) return;
+    if (await copyText(orderResult.credential)) {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } else {
-      window.Telegram?.WebApp?.showAlert(`اطلاعات را دستی کپی کنید:\n${orderResult.credentials}`);
+      window.Telegram?.WebApp?.showAlert(`اطلاعات را دستی کپی کنید:\n${orderResult.credential}`);
+    }
+  };
+
+  const handleReveal = async () => {
+    if (!orderResult?.credentialAvailable || isRevealing) return;
+    const orderId = orderResult.id;
+    const requestVersion = ++revealRequestVersion.current;
+    setIsRevealing(true);
+    setErrorMessage(null);
+    try {
+      const result = await revealOrderCredential(orderId);
+      if (requestVersion === revealRequestVersion.current) {
+        setOrderResult((current) => (
+          current?.id === result.orderId ? { ...current, credential: result.credential } : current
+        ));
+      }
+    } catch (error) {
+      if (requestVersion === revealRequestVersion.current) {
+        setErrorMessage(error instanceof Error ? error.message : "اطلاعات سرویس دریافت نشد.");
+      }
+    } finally {
+      if (requestVersion === revealRequestVersion.current) setIsRevealing(false);
     }
   };
 
   const handleClose = () => {
     if (isSubmitting) return;
+    revealRequestVersion.current += 1;
     setOrderResult(null);
     setErrorMessage(null);
     setCopied(false);
+    setIsRevealing(false);
     setIsOpen(false);
   };
 
@@ -136,17 +166,32 @@ export default function CheckoutModal({ isOpen, setIsOpen, product, variant, wal
 
             <div className="rounded-2xl p-4" style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)" }}>
               <p className="text-[10px] text-[#F5F5F5]/45 mb-2">اطلاعات دسترسی</p>
-              <p className="select-text break-all font-mono text-sm leading-relaxed text-emerald-400">{orderResult.credentials}</p>
+              <p className="select-text break-all font-mono text-sm leading-relaxed text-emerald-400">
+                {orderResult.credential || orderResult.credentialPreview || "اطلاعات این سفارش در دسترس نیست."}
+              </p>
             </div>
 
-            <Button
-              onClick={handleCopy}
-              className="w-full py-5 rounded-2xl text-sm font-bold transition-all active:scale-95 border-none gap-2"
-              style={{ background: "rgba(255,255,255,0.08)", color: "#F5F5F5" }}
-            >
-              {copied ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
-              {copied ? "کپی شد" : "کپی اطلاعات"}
-            </Button>
+            {orderResult.credential ? (
+              <Button
+                onClick={handleCopy}
+                className="w-full py-5 rounded-2xl text-sm font-bold transition-all active:scale-95 border-none gap-2"
+                style={{ background: "rgba(255,255,255,0.08)", color: "#F5F5F5" }}
+              >
+                {copied ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
+                {copied ? "کپی شد" : "کپی اطلاعات"}
+              </Button>
+            ) : orderResult.credentialAvailable ? (
+              <Button
+                disabled={isRevealing}
+                onClick={() => void handleReveal()}
+                className="w-full py-5 rounded-2xl text-sm font-bold transition-all active:scale-95 border-none"
+                style={{ background: "rgba(255,255,255,0.08)", color: "#F5F5F5" }}
+              >
+                {isRevealing ? "در حال دریافت..." : "نمایش اطلاعات سرویس"}
+              </Button>
+            ) : null}
+
+            {errorMessage && <p className="text-xs text-[#E63946]">{errorMessage}</p>}
 
             <Button
               onClick={handleClose}

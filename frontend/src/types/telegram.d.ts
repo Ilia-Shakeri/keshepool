@@ -16,6 +16,13 @@ export interface TelegramBackButton {
   offClick: (callback: () => void) => void;
 }
 
+export interface TelegramWebAppInsets {
+  top: number;
+  right: number;
+  bottom: number;
+  left: number;
+}
+
 export interface TelegramWebApp {
   ready: () => void;
   expand: () => void;
@@ -48,6 +55,10 @@ export interface TelegramWebApp {
   backgroundColor: string;
   sendData: (data: string) => void;
   BackButton: TelegramBackButton;
+  safeAreaInset?: TelegramWebAppInsets;
+  contentSafeAreaInset?: TelegramWebAppInsets;
+  onEvent?: (eventType: string, eventHandler: () => void) => void;
+  offEvent?: (eventType: string, eventHandler: () => void) => void;
 }
 
 declare global {

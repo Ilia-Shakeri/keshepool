@@ -1,7 +1,8 @@
 from datetime import timedelta
+from secrets import token_urlsafe
 from typing import Any, Literal
 
-from sqlalchemy import or_, select
+from sqlalchemy import and_, or_, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -9,6 +10,7 @@ from app.models import TelegramUpdateInbox, utcnow
 
 
 BotType = Literal["main", "admin"]
+MAX_ATTEMPTS_ERROR = "MaxAttemptsExceeded"
 
 
 async def enqueue_update(
@@ -41,22 +43,54 @@ async def claim_updates(
     *,
     limit: int,
     stale_after_seconds: int,
+    max_attempts: int,
 ) -> list[TelegramUpdateInbox]:
+    if limit < 1:
+        raise ValueError("limit must be positive")
+    if stale_after_seconds < 1:
+        raise ValueError("stale_after_seconds must be positive")
+    if max_attempts < 1:
+        raise ValueError("max_attempts must be positive")
+
     now = utcnow()
     stale_before = now - timedelta(seconds=stale_after_seconds)
+    due_or_stale = or_(
+        and_(
+            TelegramUpdateInbox.status.in_(("pending", "retry")),
+            TelegramUpdateInbox.next_attempt_at <= now,
+        ),
+        and_(
+            TelegramUpdateInbox.status == "processing",
+            or_(
+                TelegramUpdateInbox.locked_at.is_(None),
+                TelegramUpdateInbox.locked_at < stale_before,
+            ),
+        ),
+    )
+
+    # A worker may die on its last allowed attempt. Retire that stale lease
+    # instead of leaving it stuck or granting an extra attempt.
+    await db.execute(
+        update(TelegramUpdateInbox)
+        .where(
+            TelegramUpdateInbox.attempts >= max_attempts,
+            due_or_stale,
+        )
+        .values(
+            status="failed",
+            payload={},
+            claim_token=None,
+            locked_at=None,
+            processed_at=now,
+            last_error=MAX_ATTEMPTS_ERROR,
+            updated_at=now,
+        )
+    )
     statement = (
         select(TelegramUpdateInbox)
         .where(
-            or_(
-                (
-                    TelegramUpdateInbox.status.in_(("pending", "retry"))
-                    & (TelegramUpdateInbox.next_attempt_at <= now)
-                ),
-                (
-                    (TelegramUpdateInbox.status == "processing")
-                    & (TelegramUpdateInbox.locked_at < stale_before)
-                ),
-            )
+            TelegramUpdateInbox.attempts < max_attempts,
+            due_or_stale,
         )
         .order_by(TelegramUpdateInbox.id)
         .limit(limit)
@@ -67,39 +101,115 @@ async def claim_updates(
         item.status = "processing"
         item.attempts += 1
         item.locked_at = now
+        item.claim_token = token_urlsafe(32)
+        item.processed_at = None
         item.updated_at = now
     await db.commit()
     return items
 
 
-async def mark_update_done(db: AsyncSession, inbox_id: int) -> None:
-    item = await db.get(TelegramUpdateInbox, inbox_id, with_for_update=True)
-    if item is None:
-        return
+async def renew_update_claim(
+    db: AsyncSession,
+    inbox_id: int,
+    *,
+    claim_token: str,
+) -> bool:
+    if not claim_token:
+        return False
     now = utcnow()
-    item.status = "done"
-    item.processed_at = now
-    item.locked_at = None
-    item.last_error = None
-    item.updated_at = now
+    result = await db.execute(
+        update(TelegramUpdateInbox)
+        .where(
+            TelegramUpdateInbox.id == inbox_id,
+            TelegramUpdateInbox.status == "processing",
+            TelegramUpdateInbox.claim_token == claim_token,
+        )
+        .values(locked_at=now, updated_at=now)
+    )
     await db.commit()
+    return result.rowcount == 1
+
+
+async def mark_update_done(
+    db: AsyncSession,
+    inbox_id: int,
+    *,
+    claim_token: str,
+) -> bool:
+    if not claim_token:
+        return False
+    now = utcnow()
+    result = await db.execute(
+        update(TelegramUpdateInbox)
+        .where(
+            TelegramUpdateInbox.id == inbox_id,
+            TelegramUpdateInbox.status == "processing",
+            TelegramUpdateInbox.claim_token == claim_token,
+        )
+        .values(
+            status="done",
+            payload={},
+            claim_token=None,
+            processed_at=now,
+            locked_at=None,
+            last_error=None,
+            updated_at=now,
+        )
+    )
+    await db.commit()
+    return result.rowcount == 1
 
 
 async def mark_update_failed(
     db: AsyncSession,
     inbox_id: int,
     *,
+    claim_token: str,
     max_attempts: int,
     retry_delay_seconds: int,
     error_class: str,
-) -> None:
-    item = await db.get(TelegramUpdateInbox, inbox_id, with_for_update=True)
-    if item is None:
-        return
+) -> bool:
+    if not claim_token:
+        return False
+    if max_attempts < 1:
+        raise ValueError("max_attempts must be positive")
+    if retry_delay_seconds < 1:
+        raise ValueError("retry_delay_seconds must be positive")
     now = utcnow()
-    item.status = "failed" if item.attempts >= max_attempts else "retry"
-    item.next_attempt_at = now + timedelta(seconds=retry_delay_seconds)
-    item.locked_at = None
-    item.last_error = error_class[:200]
-    item.updated_at = now
+    claim_matches = and_(
+        TelegramUpdateInbox.id == inbox_id,
+        TelegramUpdateInbox.status == "processing",
+        TelegramUpdateInbox.claim_token == claim_token,
+    )
+    terminal = await db.execute(
+        update(TelegramUpdateInbox)
+        .where(claim_matches, TelegramUpdateInbox.attempts >= max_attempts)
+        .values(
+            status="failed",
+            payload={},
+            claim_token=None,
+            processed_at=now,
+            locked_at=None,
+            last_error=error_class[:200],
+            updated_at=now,
+        )
+    )
+    if terminal.rowcount == 1:
+        await db.commit()
+        return True
+
+    retry = await db.execute(
+        update(TelegramUpdateInbox)
+        .where(claim_matches, TelegramUpdateInbox.attempts < max_attempts)
+        .values(
+            status="retry",
+            claim_token=None,
+            next_attempt_at=now + timedelta(seconds=retry_delay_seconds),
+            processed_at=None,
+            locked_at=None,
+            last_error=error_class[:200],
+            updated_at=now,
+        )
+    )
     await db.commit()
+    return retry.rowcount == 1

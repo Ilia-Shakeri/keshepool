@@ -7,6 +7,7 @@ import pytest
 
 from app.models import AdminActionNonce, AdminApprovalRequest
 from app.services import admin_authorization_service as service
+from app.services import admin_audit_service
 
 
 class FakeSession:
@@ -129,3 +130,50 @@ def test_second_admin_cannot_approve_changed_payload():
                 payload=b"new",
             )
         )
+
+
+@pytest.mark.parametrize("value", ["", "0", "01", "-1", "not-a-number", "1" * 21])
+def test_admin_role_target_requires_bounded_positive_telegram_id(value):
+    with pytest.raises(service.AdminAuthorizationError, match="Telegram user ID"):
+        service._telegram_id(value)
+
+
+def test_admin_role_target_accepts_valid_telegram_id():
+    assert service._telegram_id("123456789") == "123456789"
+
+
+def test_audit_scrub_redacts_secret_shapes_even_under_plain_key():
+    assert admin_audit_service._safe_value(
+        {"value": "123456789:abcdefghijklmnopqrstuvwxyzABCDEFGH1234"}
+    ) == {"value": "[redacted]"}
+    assert admin_audit_service._safe_value(
+        {"value": "auth_date=1&hash=hidden"}
+    ) == {"value": "[redacted]"}
+    assert admin_audit_service._safe_value(
+        {
+            "initData": "raw-user-data",
+            "api_key": "key-value",
+            "callback_signature": "signed-value",
+            "cashout_details": "private-financial-text",
+            "safe_count": 3,
+        }
+    ) == {
+        "initData": "[redacted]",
+        "api_key": "[redacted]",
+        "callback_signature": "[redacted]",
+        "cashout_details": "[redacted]",
+        "safe_count": 3,
+    }
+    assert admin_audit_service._safe_value(
+        {"value": "Authorization: Bearer sample-value"}
+    ) == {"value": "[redacted]"}
+
+
+def test_audit_context_is_scoped_and_reset():
+    assert admin_audit_service._AUDIT_CONTEXT.get() == {}
+    with admin_audit_service.admin_audit_context(update_id=7, chat_id=-1001):
+        assert admin_audit_service._AUDIT_CONTEXT.get() == {
+            "update_id": 7,
+            "chat_id": "-1001",
+        }
+    assert admin_audit_service._AUDIT_CONTEXT.get() == {}

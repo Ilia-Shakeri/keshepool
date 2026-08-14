@@ -3,19 +3,27 @@ import re
 from dataclasses import asdict, dataclass
 from decimal import Decimal, InvalidOperation
 from typing import Any, Iterable, Mapping, Sequence
-from urllib.parse import urlparse
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import bindparam, func, or_, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.core.config import settings
 from app.models import InventoryItem, ItemStatus, Product, ProductVariant, utcnow
 from app.services.cache_service import (
     CATALOG_CACHE_KEY,
     invalidate_catalog_cache,
     load_catalog_cached,
     read_json,
+)
+from app.services.credential_vault import (
+    CREDENTIAL_VAULT_ADVISORY_LOCK_ID,
+    CredentialVaultError,
+    canonicalize_credential,
+    credential_cipher_from_settings,
+    encrypted_credential_values,
+    inventory_credential_binding,
 )
 
 CATALOG_CATEGORIES = {
@@ -29,6 +37,22 @@ CATALOG_CATEGORIES = {
     "edu",
     "finance",
 }
+DEFAULT_PRODUCT_GRADIENT = "from-gray-700 to-black"
+CATALOG_GRADIENTS = frozenset(
+    {
+        DEFAULT_PRODUCT_GRADIENT,
+        "from-gray-600 to-slate-900",
+        "from-blue-500 to-indigo-800",
+        "from-pink-500 to-purple-800",
+        "from-red-500 to-rose-900",
+        "from-cyan-500 to-blue-800",
+        "from-green-500 to-teal-800",
+        "from-violet-500 to-purple-900",
+        "from-amber-500 to-orange-800",
+        "from-yellow-500 to-amber-800",
+        "from-emerald-500 to-green-800",
+    }
+)
 SAFE_CATALOG_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$")
 MAX_TITLE_LENGTH = 180
 MAX_BRAND_LENGTH = 180
@@ -167,6 +191,11 @@ def _decimal_price(value: Any) -> Decimal:
     return price.quantize(Decimal("0.01"))
 
 
+def canonical_price_label(value: Any) -> str:
+    price = _decimal_price(value)
+    return f"{price:,.2f}".rstrip("0").rstrip(".")
+
+
 def _catalog_id(value: Any, field: str) -> str:
     clean_value = _clean_required(value, field, max_length=120)
     if not SAFE_CATALOG_ID_RE.fullmatch(clean_value):
@@ -184,16 +213,29 @@ def _asset_url(value: Any) -> str | None:
         raise CatalogMutationError("Product asset URL is too long.")
     if clean_value.startswith("/static/") and not clean_value.startswith("//"):
         return clean_value
-    parsed = urlparse(clean_value)
-    if (
-        parsed.scheme != "https"
-        or not parsed.netloc
-        or parsed.username
-        or parsed.password
-        or parsed.fragment
-    ):
-        raise CatalogMutationError("Product asset URL must be HTTPS or a /static/ path.")
+    raise CatalogMutationError("Product asset URL must use the owned /static/ path.")
+
+
+def _gradient(value: Any) -> str:
+    clean_value = _clean_required(
+        value or DEFAULT_PRODUCT_GRADIENT,
+        "Product gradient",
+        max_length=80,
+    )
+    if clean_value not in CATALOG_GRADIENTS:
+        raise CatalogMutationError("Unsupported product gradient.")
     return clean_value
+
+
+def public_gradient(value: Any) -> str:
+    return str(value) if value in CATALOG_GRADIENTS else DEFAULT_PRODUCT_GRADIENT
+
+
+def public_asset_url(value: Any) -> str | None:
+    try:
+        return _asset_url(value)
+    except CatalogMutationError:
+        return None
 
 
 def _features(value: Any) -> tuple[str, ...] | None:
@@ -240,6 +282,8 @@ def _validated_product_fields(values: Mapping[str, Any]) -> dict[str, Any]:
         validated["subtitle"] = _subtitle(validated["subtitle"])
     if "asset_url" in validated:
         validated["asset_url"] = _asset_url(validated["asset_url"])
+    if "gradient" in validated:
+        validated["gradient"] = _gradient(validated["gradient"])
     if "category" in validated and validated["category"] not in CATALOG_CATEGORIES:
         raise CatalogMutationError("Unsupported product category.")
     if "features" in validated and not isinstance(validated["features"], str):
@@ -321,11 +365,7 @@ def product_mutation_from_mapping(payload: Mapping[str, Any]) -> ProductMutation
                     max_length=120,
                 ),
                 raw_price=price,
-                price_label=str(
-                    raw_variant.get("price_label")
-                    or raw_variant.get("priceLabel")
-                    or f"{int(price):,}"
-                ).strip(),
+                price_label=canonical_price_label(price),
                 is_active=_mapping_boolean(
                     raw_variant,
                     "is_active",
@@ -353,11 +393,7 @@ def product_mutation_from_mapping(payload: Mapping[str, Any]) -> ProductMutation
         subtitle=_subtitle(payload.get("subtitle")),
         icon=_clean_required(payload.get("icon") or "Box", "Product icon", max_length=50),
         asset_url=_asset_url(payload.get("asset_url", payload.get("assetUrl"))),
-        gradient=_clean_required(
-            payload.get("gradient") or "from-gray-700 to-black",
-            "Product gradient",
-            max_length=200,
-        ),
+        gradient=_gradient(payload.get("gradient")),
         category=category,
         features=features,
         is_active=_mapping_boolean(payload, "is_active", "isActive", default=True),
@@ -371,43 +407,128 @@ async def _insert_inventory_rows(
     variant_credentials: Iterable[tuple[str, str]],
 ) -> tuple[int, int]:
     submitted_rows: list[dict[str, Any]] = []
-    seen_rows: set[tuple[str, str]] = set()
+    seen_rows: set[tuple[str, str] | bytes] = set()
     submitted_count = 0
+    cipher = None
+    if settings.CREDENTIAL_VAULT_DUAL_WRITE_ENABLED:
+        try:
+            cipher = credential_cipher_from_settings(settings)
+        except CredentialVaultError as exc:
+            raise CatalogMutationError("Credential vault is unavailable.") from exc
     for variant_id, credential in variant_credentials:
-        clean_credential = credential.strip()
+        if not credential.strip():
+            continue
+        try:
+            clean_credential = (
+                canonicalize_credential(credential)
+                if cipher is not None
+                else credential.strip()
+            )
+        except CredentialVaultError as exc:
+            raise CatalogMutationError("Inventory credential is invalid.") from exc
         if clean_credential:
             submitted_count += 1
             if submitted_count > MAX_INVENTORY_BATCH_SIZE:
                 raise CatalogMutationError("Inventory import batch is too large.")
             if len(clean_credential) > MAX_CREDENTIAL_LENGTH:
                 raise CatalogMutationError("Inventory credential is too long.")
-            row_key = (variant_id, clean_credential)
+            fingerprint = None
+            if cipher is not None:
+                try:
+                    fingerprint = cipher.fingerprint(clean_credential)
+                except CredentialVaultError as exc:
+                    raise CatalogMutationError("Inventory credential encryption failed.") from exc
+            row_key = fingerprint if fingerprint is not None else (variant_id, clean_credential)
             if row_key in seen_rows:
                 continue
             seen_rows.add(row_key)
-            submitted_rows.append(
-                {
-                    "product_id": product_id,
-                    "variant_id": variant_id,
-                    "credentials": clean_credential,
-                    "status": ItemStatus.AVAILABLE,
-                }
-            )
+            row: dict[str, Any] = {
+                "product_id": product_id,
+                "variant_id": variant_id,
+                "credentials": clean_credential,
+                "status": ItemStatus.AVAILABLE,
+            }
+            if fingerprint is not None:
+                row["credential_fingerprint"] = fingerprint
+            submitted_rows.append(row)
 
     if not submitted_rows:
         return 0, 0
 
     inserted_count = 0
+    if cipher is not None:
+        await db.execute(
+            text("SELECT pg_advisory_xact_lock(:lock_id)"),
+            {"lock_id": CREDENTIAL_VAULT_ADVISORY_LOCK_ID},
+        )
+        fingerprints = [row["credential_fingerprint"] for row in submitted_rows]
+        existing_result = await db.execute(
+            select(InventoryItem.credential_fingerprint).where(
+                InventoryItem.credential_vault_state == "encrypted",
+                InventoryItem.credential_fingerprint.in_(fingerprints),
+            )
+        )
+        existing_fingerprints = set(existing_result.scalars().all())
+        submitted_rows = [
+            row
+            for row in submitted_rows
+            if row["credential_fingerprint"] not in existing_fingerprints
+        ]
+
+    inserted_vault_rows: list[tuple[int, str]] = []
     # Keep each statement below PostgreSQL's bind-parameter limit for large imports.
     for offset in range(0, len(submitted_rows), 5_000):
-        statement = (
-            pg_insert(InventoryItem)
-            .values(submitted_rows[offset : offset + 5_000])
-            .on_conflict_do_nothing(constraint="uq_inventory_unique_credentials")
-            .returning(InventoryItem.id)
+        statement = pg_insert(InventoryItem).values(
+            submitted_rows[offset : offset + 5_000]
         )
+        statement = (
+            statement.on_conflict_do_nothing()
+            if cipher is not None
+            else statement.on_conflict_do_nothing(
+                constraint="uq_inventory_unique_credentials"
+            )
+        ).returning(InventoryItem.id, InventoryItem.credentials)
         result = await db.execute(statement)
-        inserted_count += len(result.scalars().all())
+        inserted_rows = result.all()
+        inserted_count += len(inserted_rows)
+        if cipher is not None:
+            inserted_vault_rows.extend(
+                (int(row.id), str(row.credentials)) for row in inserted_rows
+            )
+
+    if cipher is not None and inserted_vault_rows:
+        encrypted_updates: list[dict[str, Any]] = []
+        for item_id, credential in inserted_vault_rows:
+            try:
+                envelope = cipher.encrypt(
+                    credential,
+                    binding=inventory_credential_binding(item_id),
+                )
+            except CredentialVaultError as exc:
+                raise CatalogMutationError("Inventory credential encryption failed.") from exc
+            values = encrypted_credential_values(envelope)
+            values["credential_vault_updated_at"] = utcnow()
+            values["vault_item_id"] = item_id
+            encrypted_updates.append(values)
+        statement = (
+            update(InventoryItem.__table__)
+            .where(InventoryItem.__table__.c.id == bindparam("vault_item_id"))
+            .values(
+                credential_ciphertext=bindparam("credential_ciphertext"),
+                credential_nonce=bindparam("credential_nonce"),
+                credential_key_version=bindparam("credential_key_version"),
+                credential_envelope_version=bindparam("credential_envelope_version"),
+                credential_fingerprint=bindparam("credential_fingerprint"),
+                credential_masked_preview=bindparam("credential_masked_preview"),
+                credential_canonical_length=bindparam("credential_canonical_length"),
+                credential_vault_state=bindparam("credential_vault_state"),
+                credential_quarantine_reason=bindparam("credential_quarantine_reason"),
+                credential_vault_updated_at=bindparam("credential_vault_updated_at"),
+                credential_vault_verified_at=bindparam("credential_vault_verified_at"),
+                credential_legacy_erased_at=bindparam("credential_legacy_erased_at"),
+            )
+        )
+        await db.execute(statement, encrypted_updates)
     return inserted_count, submitted_count - inserted_count
 
 
@@ -678,7 +799,7 @@ async def patch_product(
             raise CatalogMutationError("Product variant not found.")
         for variant in matched_variants:
             variant.raw_price = raw_price
-            variant.price_label = f"{int(raw_price):,}"
+            variant.price_label = canonical_price_label(raw_price)
 
     await db.flush()
     active_variant_count = sum(1 for variant in variants if variant.is_active)
@@ -720,7 +841,7 @@ async def set_active_variant_prices(
     variants = variants_result.scalars().all()
     for variant in variants:
         variant.raw_price = raw_price
-        variant.price_label = f"{int(raw_price):,}"
+        variant.price_label = canonical_price_label(raw_price)
     if commit:
         await commit_catalog_change(db)
     return len(variants)
@@ -747,7 +868,7 @@ async def set_variant_price(
     if variant is None:
         raise CatalogMutationError("Product variant not found.")
     variant.raw_price = raw_price
-    variant.price_label = f"{int(raw_price):,}"
+    variant.price_label = canonical_price_label(raw_price)
     if commit:
         await commit_catalog_change(db)
     return variant
@@ -816,15 +937,15 @@ async def build_public_catalog(db: AsyncSession) -> list[dict[str, Any]]:
                 "brand": product.brand,
                 "subtitle": product.subtitle or "",
                 "icon": product.icon or "Box",
-                "assetUrl": product.asset_url,
-                "gradient": product.gradient or "from-gray-700 to-black",
+                "assetUrl": public_asset_url(product.asset_url),
+                "gradient": public_gradient(product.gradient),
                 "category": product.category or "tools",
                 "features": parse_product_features(product.features),
                 "variants": [
                     {
                         "id": variant.id,
                         "duration": variant.duration,
-                        "priceLabel": variant.price_label,
+                        "priceLabel": canonical_price_label(variant.raw_price),
                         "rawPrice": float(variant.raw_price),
                         "stockCount": int(stock_by_variant.get(variant.id, 0)),
                     }

@@ -7,16 +7,16 @@ States are evidence-bound. `fixed-and-tested` needs code plus a passing reproduc
 | ID | State |
 | --- | --- |
 | C-01 | blocked |
-| C-02 | fixed-and-tested |
+| C-02 | in-progress |
 | C-03 | fixed-and-tested |
-| C-04 | not-started |
+| C-04 | in-progress |
 | C-05 | not-started |
 | C-06 | not-started |
 | C-07 | not-started |
 | C-08 | not-started |
-| C-09 | not-started |
+| C-09 | in-progress |
 | C-10 | not-started |
-| C-11 | not-started |
+| C-11 | in-progress |
 | C-12 | not-started |
 
 ## High
@@ -34,10 +34,10 @@ States are evidence-bound. `fixed-and-tested` needs code plus a passing reproduc
 | H-09 | in-progress |
 | H-10 | in-progress |
 | H-11 | fixed-and-tested |
-| H-12 | not-started |
-| H-13 | fixed-and-tested |
+| H-12 | fixed-and-tested |
+| H-13 | in-progress |
 | H-14 | fixed-and-tested |
-| H-15 | fixed-and-tested |
+| H-15 | in-progress |
 | H-16 | not-started |
 | H-17 | not-started |
 | H-18 | not-started |
@@ -46,13 +46,13 @@ States are evidence-bound. `fixed-and-tested` needs code plus a passing reproduc
 | H-21 | not-started |
 | H-22 | not-started |
 | H-23 | not-started |
-| H-24 | not-started |
+| H-24 | in-progress |
 | H-25 | not-started |
-| H-26 | not-started |
-| H-27 | not-started |
+| H-26 | fixed-and-tested |
+| H-27 | fixed-and-tested |
 | H-28 | fixed-and-tested |
 | H-29 | not-started |
-| H-30 | fixed-and-tested |
+| H-30 | in-progress |
 | H-31 | not-started |
 | H-32 | in-progress |
 
@@ -63,7 +63,7 @@ States are evidence-bound. `fixed-and-tested` needs code plus a passing reproduc
 | M-01 | not-started |
 | M-02 | not-started |
 | M-03 | not-started |
-| M-04 | not-started |
+| M-04 | fixed-and-tested |
 | M-05 | not-started |
 | M-06 | fixed-and-tested |
 | M-07 | fixed-and-tested |
@@ -77,7 +77,7 @@ States are evidence-bound. `fixed-and-tested` needs code plus a passing reproduc
 | M-15 | not-started |
 | M-16 | not-started |
 | M-17 | not-started |
-| M-18 | not-started |
+| M-18 | fixed-and-tested |
 | M-19 | not-started |
 | M-20 | not-started |
 | M-21 | not-started |
@@ -89,7 +89,7 @@ States are evidence-bound. `fixed-and-tested` needs code plus a passing reproduc
 | M-27 | not-started |
 | M-28 | not-started |
 | M-29 | not-started |
-| M-30 | not-started |
+| M-30 | fixed-and-tested |
 | M-31 | not-started |
 | M-32 | not-started |
 | M-33 | not-started |
@@ -107,32 +107,32 @@ States are evidence-bound. `fixed-and-tested` needs code plus a passing reproduc
 | M-45 | not-started |
 | M-46 | not-started |
 | M-47 | not-started |
-| M-48 | not-started |
+| M-48 | in-progress |
 | M-49 | not-started |
 | M-50 | not-started |
 | M-51 | not-started |
 | M-52 | not-started |
 | M-53 | not-started |
-| M-54 | not-started |
-| M-55 | not-started |
+| M-54 | fixed-and-tested |
+| M-55 | fixed-and-tested |
 | M-56 | not-started |
 | M-57 | not-started |
-| M-58 | not-started |
+| M-58 | fixed-and-tested |
 | M-59 | not-started |
 | M-60 | not-started |
 | M-61 | not-started |
 | M-62 | not-started |
 | M-63 | not-started |
 | M-64 | not-started |
-| M-65 | not-started |
-| M-66 | not-started |
+| M-65 | fixed-and-tested |
+| M-66 | in-progress |
 | M-67 | fixed-and-tested |
 | M-68 | fixed-and-tested |
 | M-69 | not-started |
-| M-70 | not-started |
-| M-71 | not-started |
-| M-72 | not-started |
-| M-73 | not-started |
+| M-70 | fixed-and-tested |
+| M-71 | fixed-and-tested |
+| M-72 | in-progress |
+| M-73 | fixed-and-tested |
 | M-74 | not-started |
 
 ## Low

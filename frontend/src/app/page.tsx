@@ -12,7 +12,7 @@ import {
   DialogDescription,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { getNotifications, getProducts, markNotificationsRead, type UserNotification } from "@/lib/api";
+import { getNotifications, getProducts, markNotificationsReadThrough, type UserNotification } from "@/lib/api";
 import type { Product } from "@/features/products/types";
 import { toPersianDigits } from "@/lib/utils";
 
@@ -70,10 +70,15 @@ export default function Home() {
 
   const markAllRead = useCallback(async () => {
     if (unreadCount === 0 || isMarkingRead) return;
+    const throughId = notifications.reduce(
+      (highest, notification) => Math.max(highest, notification.id),
+      0,
+    );
+    if (throughId <= 0) return;
     setIsMarkingRead(true);
     setNotificationError(null);
     try {
-      await markNotificationsRead();
+      await markNotificationsReadThrough(throughId);
       setNotifications(await getNotifications());
     } catch (error) {
       setNotificationError(
@@ -82,7 +87,7 @@ export default function Home() {
     } finally {
       setIsMarkingRead(false);
     }
-  }, [isMarkingRead, unreadCount]);
+  }, [isMarkingRead, notifications, unreadCount]);
 
   function getStartingPrice(product: Product): string {
     const startingVariant = product.variants.reduce<Product["variants"][number] | null>((lowest, variant) => {

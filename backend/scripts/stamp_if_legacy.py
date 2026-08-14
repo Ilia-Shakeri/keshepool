@@ -17,6 +17,10 @@ from sqlalchemy.ext.asyncio import create_async_engine
 sys.path.insert(0, "/app")
 
 from app.core.config import settings
+from app.services.legacy_schema_fingerprint import (
+    legacy_schema_issues,
+    load_legacy_schema_snapshot,
+)
 
 
 async def detect_and_stamp() -> int:
@@ -35,6 +39,10 @@ async def detect_and_stamp() -> int:
                 "  WHERE table_schema = 'public' AND table_name = 'users'"
                 ")"
             ))
+            fingerprint_issues = ()
+            if not alembic_exists and users_exists:
+                snapshot = await load_legacy_schema_snapshot(conn)
+                fingerprint_issues = legacy_schema_issues(snapshot)
     finally:
         await engine.dispose()
 
@@ -45,6 +53,16 @@ async def detect_and_stamp() -> int:
     if not users_exists:
         print("[migration-check] Fresh database — alembic will build schema from scratch.")
         return 0
+
+    if fingerprint_issues:
+        print(
+            "[migration-check] ERROR: legacy schema fingerprint mismatch; "
+            "manual migration review is required.",
+            file=sys.stderr,
+        )
+        for issue in fingerprint_issues:
+            print(f"[migration-check] - {issue}", file=sys.stderr)
+        return 1
 
     # Legacy database: schema exists but has never been tracked by Alembic.
     # Mark migration 001 as already applied so it is not re-executed.

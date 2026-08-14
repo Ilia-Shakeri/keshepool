@@ -9,6 +9,7 @@ export interface BootstrapProfile {
     lastName?: string | null;
     photoUrl?: string | null;
     role: string;
+    referralCode: string;
   };
   walletBalance: number;
   orderCount: number;
@@ -24,22 +25,8 @@ export interface WalletTransaction {
   gateway?: string | null;
   referenceId?: string | null;
   description?: string | null;
+  hasReceipt?: boolean;
   createdAt: string;
-}
-
-export interface UserOrder {
-  id: string;
-  title: string;
-  brand: string;
-  duration: string;
-  status: "active" | "expired" | "cancelled" | "refunded";
-  createdAt: string;
-  expiresAt?: string | null;
-  credentials: string;
-  assetUrl?: string | null;
-  icon: string;
-  gradient: string;
-  totalAmount: number;
 }
 
 export interface UserNotification {
@@ -52,10 +39,12 @@ export interface UserNotification {
 
 const API_BASE = (process.env.NEXT_PUBLIC_API_URL || "/api").replace(/\/$/, "");
 const REQUEST_TIMEOUT_MS = 12_000;
+export const AUTH_SESSION_EXPIRED_EVENT = "keshepool:auth-session-expired";
 const pendingReads = new Map<string, Promise<unknown>>();
 const cachedReads = new Map<string, { expiresAt: number; value: unknown }>();
+const cacheVersions = new Map<string, number>();
 let bootstrapPromise: Promise<BootstrapProfile> | null = null;
-let activeSessionFingerprint = "";
+let activeSessionInitData: string | null = null;
 let cacheGeneration = 0;
 const READ_TTL_MS: Record<string, number> = {
   "/config": 300_000,
@@ -70,56 +59,59 @@ const READ_TTL_MS: Record<string, number> = {
   "/pay/crypto/deposit-address": 300_000,
 };
 
-function fingerprintSession(initData: string): string {
-  let hash = 2166136261;
-  for (let index = 0; index < initData.length; index += 1) {
-    hash ^= initData.charCodeAt(index);
-    hash = Math.imul(hash, 16777619);
-  }
-  return `${initData.length}:${(hash >>> 0).toString(36)}`;
+function clearSessionState(nextInitData: string): void {
+  activeSessionInitData = nextInitData;
+  cacheGeneration += 1;
+  pendingReads.clear();
+  cachedReads.clear();
+  cacheVersions.clear();
+  bootstrapPromise = null;
 }
 
 function ensureSessionScope(): number {
-  const nextFingerprint = fingerprintSession(getTelegramInitData());
-  if (nextFingerprint !== activeSessionFingerprint) {
-    activeSessionFingerprint = nextFingerprint;
-    cacheGeneration += 1;
-    pendingReads.clear();
-    cachedReads.clear();
-    bootstrapPromise = null;
-  }
+  const nextInitData = getTelegramInitData();
+  if (nextInitData !== activeSessionInitData) clearSessionState(nextInitData);
   return cacheGeneration;
 }
 
 function scopedCacheKey(path: string): string {
-  return `${activeSessionFingerprint}:${path}`;
+  return `${cacheGeneration}:${path}`;
 }
 
-function clearCachedPaths(paths: string[]): void {
-  for (const path of paths) cachedReads.delete(scopedCacheKey(path));
+function invalidateCachedPaths(paths: string[]): void {
+  for (const path of paths) {
+    const cacheKey = scopedCacheKey(path);
+    cachedReads.delete(cacheKey);
+    pendingReads.delete(cacheKey);
+    cacheVersions.set(cacheKey, (cacheVersions.get(cacheKey) || 0) + 1);
+  }
 }
 
 function invalidateAfterWrite(path: string): void {
-  if (path === "/notifications/mark-read") {
-    clearCachedPaths(["/notifications"]);
+  if (path === "/notifications/mark-read" || path.startsWith("/notifications/")) {
+    invalidateCachedPaths(["/notifications"]);
     return;
   }
   if (path === "/checkout") {
-    clearCachedPaths(["/products", "/wallet/balance", "/wallet/transactions", "/orders", "/me"]);
+    invalidateCachedPaths(["/products", "/wallet/balance", "/wallet/transactions", "/orders", "/me"]);
     return;
   }
   if (path === "/cashout") {
-    clearCachedPaths(["/notifications"]);
+    invalidateCachedPaths(["/notifications"]);
     return;
   }
   if (path.startsWith("/pay/")) {
-    clearCachedPaths(["/wallet/balance", "/wallet/transactions", "/me"]);
+    invalidateCachedPaths(["/wallet/balance", "/wallet/transactions", "/me"]);
   }
 }
 
 export function getTelegramInitData(): string {
   if (typeof window === "undefined") return "";
   return window.Telegram?.WebApp?.initData || "";
+}
+
+export function resetApiSession(): void {
+  clearSessionState(getTelegramInitData());
 }
 
 export function getTelegramUserId(): string | null {
@@ -150,8 +142,12 @@ function mapApiError(status: number, detail?: unknown): string {
   return "انجام درخواست ناموفق بود.";
 }
 
-async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
-  ensureSessionScope();
+async function request<T>(
+  path: string,
+  init: RequestInit = {},
+  captureResponse?: (response: Response) => void,
+): Promise<T> {
+  const requestGeneration = ensureSessionScope();
   const initData = getTelegramInitData();
 
   const controller = new AbortController();
@@ -165,7 +161,10 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 
   const headers = new Headers(init.headers);
   if (initData) headers.set("X-Telegram-Init-Data", initData);
-  if (init.body && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
+  const bodyIsFormData = typeof FormData !== "undefined" && init.body instanceof FormData;
+  if (init.body && !bodyIsFormData && !headers.has("Content-Type")) {
+    headers.set("Content-Type", "application/json");
+  }
 
   let response: Response;
   try {
@@ -184,7 +183,15 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     init.signal?.removeEventListener("abort", abortFromCaller);
   }
 
-  if (response.status === 401) {
+  if (
+    response.status === 401
+    && requestGeneration === cacheGeneration
+    && initData === activeSessionInitData
+  ) {
+    resetApiSession();
+    if (typeof window.dispatchEvent === "function") {
+      window.dispatchEvent(new Event(AUTH_SESSION_EXPIRED_EVENT));
+    }
     window.Telegram?.WebApp?.showAlert("نشست شما پایان یافته است. لطفاً برنامه را دوباره باز کنید.");
   }
 
@@ -199,17 +206,25 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     throw new Error(mapApiError(response.status, detail));
   }
 
+  captureResponse?.(response);
   if (response.status === 204) return undefined as T;
   return response.json() as Promise<T>;
 }
 
 export function startBootstrap(): Promise<BootstrapProfile> {
-  ensureSessionScope();
+  const bootstrapGeneration = ensureSessionScope();
   if (bootstrapPromise) return bootstrapPromise;
 
-  const currentPromise = request<BootstrapProfile>("/me/bootstrap", {
+  const requestPromise = request<BootstrapProfile>("/me/bootstrap", {
     method: "POST",
     body: JSON.stringify({}),
+  });
+  const currentPromise: Promise<BootstrapProfile> = requestPromise.then((profile) => {
+    if (bootstrapGeneration !== cacheGeneration) {
+      if (bootstrapPromise === currentPromise) bootstrapPromise = null;
+      return startBootstrap();
+    }
+    return profile;
   });
   bootstrapPromise = currentPromise;
   void currentPromise.catch(() => {
@@ -241,9 +256,14 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
   const existing = pendingReads.get(cacheKey) as Promise<T> | undefined;
   if (existing) return existing;
 
+  const requestCacheVersion = cacheVersions.get(cacheKey) || 0;
   const current = request<T>(path, init).then((value) => {
     const ttl = READ_TTL_MS[path] || 0;
-    if (ttl > 0 && requestGeneration === cacheGeneration) {
+    if (
+      ttl > 0
+      && requestGeneration === cacheGeneration
+      && requestCacheVersion === (cacheVersions.get(cacheKey) || 0)
+    ) {
       cachedReads.set(cacheKey, { expiresAt: Date.now() + ttl, value });
     }
     return value;
@@ -254,6 +274,25 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
   };
   void current.then(removePending, removePending);
   return current;
+}
+
+export async function apiFetchWithHeaders<T>(
+  path: string,
+  init: RequestInit = {},
+): Promise<{ data: T; headers: Headers }> {
+  if ((init.method || "GET").toUpperCase() !== "GET") {
+    throw new Error("Header-aware reads support GET only.");
+  }
+  await startBootstrap();
+  const requestGeneration = ensureSessionScope();
+  let responseHeaders = new Headers();
+  const data = await request<T>(path, init, (response) => {
+    responseHeaders = new Headers(response.headers);
+  });
+  if (requestGeneration !== cacheGeneration) {
+    return apiFetchWithHeaders<T>(path, init);
+  }
+  return { data, headers: responseHeaders };
 }
 
 export function getProfile() {
@@ -272,37 +311,23 @@ export function getWalletTransactions() {
   return apiFetch<WalletTransaction[]>("/wallet/transactions");
 }
 
-export function getOrders() {
-  return apiFetch<UserOrder[]>("/orders");
-}
-
 export function getNotifications() {
   return apiFetch<UserNotification[]>("/notifications");
-}
-
-export function checkoutWithWallet(productId: string, variantId: string, idempotencyKey: string) {
-  return apiFetch<{
-    status: string;
-    order: {
-      id: string;
-      productTitle: string;
-      productBrand: string;
-      variantDuration: string;
-      credentials: string;
-      createdAt: string;
-      totalAmount: number;
-    };
-  }>("/checkout", {
-    method: "POST",
-    headers: { "X-Idempotency-Key": idempotencyKey },
-    body: JSON.stringify({ product_id: productId, variant_id: variantId, idempotencyKey }),
-  });
 }
 
 export interface PublicConfig {
   botUsername: string;
   supportUsername?: string | null;
   supportUrl?: string | null;
+  payments: {
+    tetra98Enabled: boolean;
+    cardToCard: {
+      enabled: boolean;
+      cardNumber: string | null;
+      cardHolder: string | null;
+      maxReceiptBytes: number;
+    };
+  };
 }
 
 export function getPublicConfig() {
@@ -385,4 +410,35 @@ export function createCashoutRequest(
 
 export function markNotificationsRead() {
   return apiFetch<{ marked: number }>("/notifications/mark-read", { method: "POST" });
+}
+
+export function submitCardTransfer(amount: number, receipt: File) {
+  const form = new FormData();
+  form.set("amount", String(amount));
+  form.set("receipt", receipt, receipt.name);
+  return apiFetch<{
+    status: "pending_review";
+    transactionId: number;
+    amount: number;
+    currency: "IRR";
+    adminDelivery: "sent" | "queued";
+    message: string;
+  }>("/pay/card-transfer", {
+    method: "POST",
+    body: form,
+  });
+}
+
+export function markNotificationRead(notificationId: number) {
+  return apiFetch<{ marked: number; notificationId: number }>(
+    `/notifications/${notificationId}/mark-read`,
+    { method: "POST" },
+  );
+}
+
+export function markNotificationsReadThrough(throughId: number) {
+  return apiFetch<{ marked: number; throughId: number }>("/notifications/mark-read-through", {
+    method: "POST",
+    body: JSON.stringify({ throughId }),
+  });
 }

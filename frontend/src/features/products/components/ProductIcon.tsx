@@ -2,6 +2,7 @@
 
 import Image from "next/image";
 import { IconMap, CATEGORY_ICON_MAP } from "@/lib/icons";
+import { resolveProductGradient } from "@/lib/product-gradient";
 import type { ProductCategory } from "@/features/products/types";
 
 interface ProductIconProps {
@@ -30,7 +31,7 @@ export default function ProductIcon({
   }
 
   const categoryDefaults = category ? CATEGORY_ICON_MAP[category] : null;
-  const resolvedGradient = gradient || categoryDefaults?.gradient || "from-gray-600 to-slate-900";
+  const resolvedGradient = resolveProductGradient(gradient, categoryDefaults?.gradient);
   const resolvedIcon = icon !== "Box" ? icon : (categoryDefaults?.icon || icon);
 
   return (

@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, patch
 from aiogram.enums import ChatMemberStatus
 from pydantic import ValidationError
 
-from app.bot.filters import IsAdminFilter
+from app.bot.filters import HasAdminRoleFilter, IsAdminFilter
 from app.core.config import Settings, settings
 
 
@@ -41,6 +41,14 @@ class FakeBot:
 
 
 class AdminSettingsTests(unittest.TestCase):
+    def test_public_bot_username_is_bounded_and_safe(self):
+        configured = Settings(**settings_values(BOT_USERNAME="safe_shop_bot"))
+        self.assertEqual(configured.BOT_USERNAME, "safe_shop_bot")
+        for invalid in ("bad/name", "tiny", "x" * 33, "name with space"):
+            with self.subTest(invalid=invalid):
+                with self.assertRaises(ValidationError):
+                    Settings(**settings_values(BOT_USERNAME=invalid))
+
     def test_admin_ids_have_one_canonical_source(self):
         configured = Settings(**settings_values(ADMIN_TELEGRAM_IDS="123, 456"))
         self.assertEqual(configured.admin_ids, {"123", "456"})
@@ -65,6 +73,8 @@ class AdminSettingsTests(unittest.TestCase):
                 TETRA98_API_KEY="enabled",
                 TETRA98_API_URL="https://payment.example.test",
                 TETRA98_WEBHOOK_SECRET="",
+                ADMIN_GROUP_CHAT_ID="-100123456",
+                ADMIN_REQUIRE_GROUP_ADMIN=True,
             )
         )
         self.assertEqual(configured.TETRA98_API_URL, "https://payment.example.test")
@@ -125,6 +135,55 @@ class AdminSettingsTests(unittest.TestCase):
         with self.assertRaisesRegex(ValidationError, "negative Telegram group chat ID"):
             Settings(**settings_values(ADMIN_GROUP_CHAT_ID="123456"))
 
+    def test_production_group_requires_group_admin_membership(self):
+        with self.assertRaisesRegex(ValidationError, "ADMIN_REQUIRE_GROUP_ADMIN"):
+            Settings(
+                **settings_values(
+                    ENVIRONMENT="production",
+                    ADMIN_GROUP_CHAT_ID="-100123",
+                    ADMIN_REQUIRE_GROUP_ADMIN=False,
+                )
+            )
+
+    def test_dual_approval_requires_configured_group(self):
+        with self.assertRaisesRegex(ValidationError, "ADMIN_GROUP_CHAT_ID"):
+            Settings(
+                **settings_values(
+                    ADMIN_DUAL_APPROVAL_ENABLED=True,
+                    ADMIN_GROUP_CHAT_ID="",
+                )
+            )
+
+    def test_dual_approval_requires_durable_rate_storage(self):
+        with self.assertRaisesRegex(ValidationError, "OPERATIONS_RATE_DB_ENABLED"):
+            Settings(
+                **settings_values(
+                    ADMIN_DUAL_APPROVAL_ENABLED=True,
+                    ADMIN_GROUP_CHAT_ID="-100123",
+                    OPERATIONS_RATE_DB_ENABLED=False,
+                )
+            )
+
+    def test_dual_approval_requires_role_enforcement(self):
+        with self.assertRaisesRegex(ValidationError, "ADMIN_RBAC_ENABLED"):
+            Settings(
+                **settings_values(
+                    ADMIN_DUAL_APPROVAL_ENABLED=True,
+                    ADMIN_GROUP_CHAT_ID="-100123",
+                    OPERATIONS_RATE_DB_ENABLED=True,
+                    ADMIN_RBAC_ENABLED=False,
+                )
+            )
+
+    def test_break_glass_cutover_requires_role_enforcement(self):
+        with self.assertRaisesRegex(ValidationError, "ADMIN_RBAC_ENABLED"):
+            Settings(
+                **settings_values(
+                    ADMIN_ENV_BREAK_GLASS_ENABLED=False,
+                    ADMIN_RBAC_ENABLED=False,
+                )
+            )
+
     def test_cache_namespace_includes_the_environment(self):
         configured = Settings(**settings_values(CACHE_NAMESPACE="keshepool", ENVIRONMENT="staging"))
         self.assertEqual(configured.cache_namespace, "keshepool:staging")
@@ -141,14 +200,19 @@ class AdminFilterTests(unittest.TestCase):
         self.previous_group_id = settings.ADMIN_GROUP_CHAT_ID
         self.previous_require_group_admin = settings.ADMIN_REQUIRE_GROUP_ADMIN
         self.previous_rbac_enabled = settings.ADMIN_RBAC_ENABLED
+        self.previous_break_glass_enabled = settings.ADMIN_ENV_BREAK_GLASS_ENABLED
         settings.__dict__["admin_ids"] = {"42"}
         settings.ADMIN_GROUP_CHAT_ID = "-100123"
         settings.ADMIN_REQUIRE_GROUP_ADMIN = False
         settings.ADMIN_RBAC_ENABLED = False
+        settings.ADMIN_ENV_BREAK_GLASS_ENABLED = True
         self.role_patch = patch("app.bot.filters._has_durable_role", AsyncMock(return_value=False))
         self.role_patch.start()
+        self.audit_patch = patch("app.bot.filters._record_authorization", AsyncMock())
+        self.audit_patch.start()
 
     def tearDown(self):
+        self.audit_patch.stop()
         self.role_patch.stop()
         if self.previous_admin_ids is None:
             settings.__dict__.pop("admin_ids", None)
@@ -157,6 +221,7 @@ class AdminFilterTests(unittest.TestCase):
         settings.ADMIN_GROUP_CHAT_ID = self.previous_group_id
         settings.ADMIN_REQUIRE_GROUP_ADMIN = self.previous_require_group_admin
         settings.ADMIN_RBAC_ENABLED = self.previous_rbac_enabled
+        settings.ADMIN_ENV_BREAK_GLASS_ENABLED = self.previous_break_glass_enabled
 
     def event(self, user_id, chat_id, chat_type, status):
         return SimpleNamespace(
@@ -210,3 +275,24 @@ class AdminFilterTests(unittest.TestCase):
         event = self.event(42, -100999, "supergroup", ChatMemberStatus.ADMINISTRATOR)
         self.assertFalse(self.authorize(event))
         self.assertEqual(event.bot.calls, [])
+
+    def test_role_filter_separates_catalog_and_finance_grants(self):
+        settings.ADMIN_RBAC_ENABLED = True
+        event = self.event(99, 99, "private", ChatMemberStatus.MEMBER)
+        with patch("app.bot.filters._roles_for_admin", AsyncMock(return_value=frozenset({"finance"}))):
+            self.assertTrue(asyncio.run(HasAdminRoleFilter("finance")(event)))
+            self.assertFalse(asyncio.run(HasAdminRoleFilter("catalog")(event)))
+
+    def test_break_glass_admin_passes_role_filter_as_superadmin(self):
+        settings.ADMIN_RBAC_ENABLED = True
+        event = self.event(42, 42, "private", ChatMemberStatus.MEMBER)
+        self.assertTrue(asyncio.run(HasAdminRoleFilter("catalog")(event)))
+
+    def test_disabled_break_glass_env_id_needs_active_durable_role(self):
+        settings.ADMIN_RBAC_ENABLED = True
+        settings.ADMIN_ENV_BREAK_GLASS_ENABLED = False
+        event = self.event(42, 42, "private", ChatMemberStatus.MEMBER)
+        with patch("app.bot.filters._has_durable_role", AsyncMock(return_value=False)):
+            self.assertFalse(self.authorize(event))
+        with patch("app.bot.filters._has_durable_role", AsyncMock(return_value=True)):
+            self.assertTrue(self.authorize(event))

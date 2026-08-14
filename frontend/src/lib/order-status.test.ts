@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { UserOrder } from "./api.ts";
+import type { UserOrder } from "../features/orders/types.ts";
 import { filterOrdersByStatus, getOrderStatusLabel } from "./order-status.ts";
 
 test("each order state has its own Persian label", () => {

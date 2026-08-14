@@ -1,5 +1,7 @@
 import html
+import json
 import logging
+from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -10,31 +12,44 @@ from aiogram.types import BufferedInputFile, CallbackQuery, InlineKeyboardButton
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
-from app.bot.filters import IsAdminFilter
+from app.bot.filters import HasAdminRoleFilter, IsAdminFilter
 from app.bot.locales.translations import get_text
 from app.bot.states import AdminPanelStates
 from app.core.config import settings
 from app.core.database import AsyncSessionLocal
-from app.models import Notification, Transaction, TransactionStatus, TransactionType, User, Wallet
+from app.models import AdminApprovalRequest, Notification, Transaction, TransactionStatus, TransactionType, User, Wallet
 from app.services.admin_audit_service import add_admin_audit, record_admin_audit
 from app.services.admin_authorization_service import (
     AdminAuthorizationError,
+    approve_request,
     consume_action_nonce,
+    consume_approved_request,
+    create_approval_request,
     issue_action_nonce,
     require_action_role,
 )
 from app.services.rate_service import get_usdt_rate
 from app.services.transaction_report_service import make_transaction_pdf
 from app.services.wallet_service import to_decimal
+from app.services.card_transfer_service import refresh_card_transfer_notifications
 
 logger = logging.getLogger(__name__)
 
 transactions_router = Router()
 transactions_router.message.filter(IsAdminFilter())
 transactions_router.callback_query.filter(IsAdminFilter())
+transactions_router.message.filter(HasAdminRoleFilter("finance", "auditor"))
+transactions_router.callback_query.filter(HasAdminRoleFilter("finance", "auditor"))
 
 PAGE_SIZE = 8
 DEPOSIT_TYPES = (TransactionType.DEPOSIT_IRR, TransactionType.DEPOSIT_CRYPTO)
+
+
+@dataclass(frozen=True)
+class PendingWalletApproval:
+    request_id: int
+    transaction_id: int
+    credit: Decimal
 
 
 async def _lang(user_id: int) -> str:
@@ -70,6 +85,27 @@ def _transactions_menu_markup(lang: str) -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text=get_text(lang, "transaction_pdf_btn"), callback_data="transaction_report")],
             [InlineKeyboardButton(text=get_text(lang, "back_to_menu"), callback_data="main_menu")],
         ]
+    )
+
+
+async def _edit_transaction_message(
+    message: Message,
+    text: str,
+    *,
+    reply_markup: InlineKeyboardMarkup | None = None,
+    parse_mode: str = "HTML",
+) -> None:
+    if message.photo:
+        await message.edit_caption(
+            caption=text,
+            reply_markup=reply_markup,
+            parse_mode=parse_mode,
+        )
+        return
+    await message.edit_text(
+        text,
+        reply_markup=reply_markup,
+        parse_mode=parse_mode,
     )
 
 
@@ -243,28 +279,28 @@ async def show_transaction_detail(callback: CallbackQuery):
 async def _confirmation(callback: CallbackQuery, lang: str, transaction_id: int, approve: bool) -> None:
     key = "confirm_approve_transaction" if approve else "confirm_deny_transaction"
     action = "approve" if approve else "deny"
-    callback_value = f"transaction_{action}_confirm_{transaction_id}"
-    if approve:
-        async with AsyncSessionLocal() as session:
-            if settings.ADMIN_RBAC_ENABLED:
-                await require_action_role(session, callback.from_user.id, "wallet.adjust")
-            nonce = await issue_action_nonce(
-                session,
-                actor_telegram_id=callback.from_user.id,
-                chat_id=callback.message.chat.id,
-                action="wallet.adjust",
-                target_type="transaction",
-                target_id=transaction_id,
-            )
-            await session.commit()
-        callback_value = f"txac:{transaction_id}:{nonce}"
+    privileged_action = "wallet.adjust" if approve else "transaction.review"
+    async with AsyncSessionLocal() as session:
+        if settings.ADMIN_RBAC_ENABLED:
+            await require_action_role(session, callback.from_user.id, privileged_action)
+        nonce = await issue_action_nonce(
+            session,
+            actor_telegram_id=callback.from_user.id,
+            chat_id=callback.message.chat.id,
+            action=privileged_action,
+            target_type="transaction",
+            target_id=transaction_id,
+        )
+        await session.commit()
+    callback_value = f"{'txac' if approve else 'txdc'}:{transaction_id}:{nonce}"
     markup = InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text=get_text(lang, f"confirm_{action}_transaction_btn"), callback_data=callback_value)],
             [InlineKeyboardButton(text=get_text(lang, "back"), callback_data=f"transaction_view_{transaction_id}")],
         ]
     )
-    await callback.message.edit_text(
+    await _edit_transaction_message(
+        callback.message,
         get_text(lang, key).format(id=transaction_id),
         reply_markup=markup,
         parse_mode="HTML",
@@ -284,7 +320,63 @@ async def prompt_deny_transaction(callback: CallbackQuery):
     await _confirmation(callback, lang, int(callback.data.removeprefix("transaction_deny_prompt_")), False)
 
 
-async def _approve_transaction(transaction_id: int, actor_id: int, chat_id: int, nonce: str) -> Decimal:
+def _wallet_approval_snapshot(
+    transaction: Transaction,
+    *,
+    rate: Decimal | None,
+    credit: Decimal,
+) -> str:
+    return json.dumps(
+        {
+            "amount": str(transaction.amount),
+            "credit": str(credit),
+            "currency": transaction.currency,
+            "rate": str(rate) if rate is not None else None,
+            "transaction_id": transaction.id,
+        },
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+
+
+async def _apply_wallet_credit(
+    session,
+    *,
+    transaction: Transaction,
+    wallet: Wallet,
+    actor_id: int,
+    credit: Decimal,
+) -> None:
+    wallet.balance = to_decimal(wallet.balance) + credit
+    transaction.status = TransactionStatus.SUCCESS
+    transaction.description = f"{transaction.description or ''} | Admin approved wallet credit: {credit} Toman".strip(" |")
+    user = await session.get(User, wallet.user_id)
+    if user is not None:
+        user_lang = "fa" if (user.language_code or "fa").lower().startswith("fa") else "en"
+        session.add(
+            Notification(
+                user_id=user.id,
+                title=get_text(user_lang, "wallet_charge_result_title"),
+                description=get_text(user_lang, "wallet_charge_approved_user").format(amount=f"{credit:,.0f}"),
+            )
+        )
+    await add_admin_audit(
+        session,
+        actor_telegram_id=actor_id,
+        action="transaction_approve",
+        target_type="transaction",
+        target_id=transaction.id,
+        details={"wallet_credit_toman": credit, "currency": transaction.currency},
+    )
+
+
+async def _approve_transaction(
+    transaction_id: int,
+    actor_id: int,
+    chat_id: int,
+    nonce: str,
+) -> Decimal | PendingWalletApproval:
     async with AsyncSessionLocal() as lookup_session:
         transaction = await lookup_session.get(Transaction, transaction_id)
         if transaction is None or transaction.status != TransactionStatus.PENDING:
@@ -293,6 +385,8 @@ async def _approve_transaction(transaction_id: int, actor_id: int, chat_id: int,
             raise ValueError("not_deposit")
         wallet_id = transaction.wallet_id
         rate = Decimal(str(await get_usdt_rate())) if transaction.type == TransactionType.DEPOSIT_CRYPTO else None
+        credit = to_decimal(Decimal(transaction.amount) * rate if rate is not None else Decimal(transaction.amount))
+        snapshot = _wallet_approval_snapshot(transaction, rate=rate, credit=credit)
 
     async with AsyncSessionLocal() as session:
         if settings.ADMIN_RBAC_ENABLED:
@@ -319,33 +413,106 @@ async def _approve_transaction(transaction_id: int, actor_id: int, chat_id: int,
         if transaction.type not in DEPOSIT_TYPES:
             raise ValueError("not_deposit")
 
-        credit = Decimal(transaction.amount)
-        if rate is not None:
-            credit *= rate
-        credit = to_decimal(credit)
-        wallet.balance = to_decimal(wallet.balance) + credit
-        transaction.status = TransactionStatus.SUCCESS
-        transaction.description = f"{transaction.description or ''} | Admin approved wallet credit: {credit} Toman".strip(" |")
-        user = await session.get(User, wallet.user_id)
-        if user is not None:
-            user_lang = "fa" if (user.language_code or "fa").lower().startswith("fa") else "en"
-            session.add(
-                Notification(
-                    user_id=user.id,
-                    title=get_text(user_lang, "wallet_charge_result_title"),
-                    description=get_text(user_lang, "wallet_charge_approved_user").format(amount=f"{credit:,.0f}"),
-                )
+        if (
+            settings.ADMIN_DUAL_APPROVAL_ENABLED
+            and credit >= Decimal(settings.ADMIN_DUAL_APPROVAL_WALLET_THRESHOLD_TOMAN)
+        ):
+            request = await create_approval_request(
+                session,
+                actor_telegram_id=actor_id,
+                action="wallet.adjust",
+                target_type="transaction",
+                target_id=snapshot,
+                payload=snapshot.encode("ascii"),
             )
-        await add_admin_audit(
+            await add_admin_audit(
+                session,
+                actor_telegram_id=actor_id,
+                action="transaction_approval_requested",
+                target_type="transaction",
+                target_id=transaction_id,
+                details={"approval_request_id": request.id, "wallet_credit_toman": credit},
+            )
+            await session.commit()
+            return PendingWalletApproval(request.id, transaction_id, credit)
+
+        await _apply_wallet_credit(
             session,
-            actor_telegram_id=actor_id,
-            action="transaction_approve",
-            target_type="transaction",
-            target_id=transaction_id,
-            details={"wallet_credit_toman": credit, "currency": transaction.currency},
+            transaction=transaction,
+            wallet=wallet,
+            actor_id=actor_id,
+            credit=credit,
         )
         await session.commit()
     return credit
+
+
+async def _approve_pending_wallet_request(request_id: int, actor_id: int) -> tuple[int, Decimal]:
+    async with AsyncSessionLocal() as session:
+        request = await session.get(AdminApprovalRequest, request_id)
+        if request is None or request.action != "wallet.adjust" or request.target_type != "transaction":
+            raise AdminAuthorizationError("Approval request rejected.")
+        try:
+            snapshot = json.loads(request.target_id)
+            transaction_id = int(snapshot["transaction_id"])
+            expected_amount = Decimal(snapshot["amount"])
+            expected_credit = to_decimal(Decimal(snapshot["credit"]))
+            expected_currency = str(snapshot["currency"])
+            expected_rate = Decimal(snapshot["rate"]) if snapshot["rate"] is not None else None
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+            raise AdminAuthorizationError("Approval payload rejected.") from exc
+        calculated_credit = to_decimal(
+            expected_amount * expected_rate if expected_rate is not None else expected_amount
+        )
+        if calculated_credit != expected_credit:
+            raise AdminAuthorizationError("Approval amount rejected.")
+
+        approved = await approve_request(
+            session,
+            approval_request_id=request_id,
+            actor_telegram_id=actor_id,
+            payload=request.target_id.encode("ascii"),
+        )
+        if not approved:
+            raise AdminAuthorizationError("Second approval required.")
+
+        wallet_id = await session.scalar(
+            select(Transaction.wallet_id).where(Transaction.id == transaction_id)
+        )
+        wallet = (
+            await session.execute(select(Wallet).where(Wallet.id == wallet_id).with_for_update())
+        ).scalars().first()
+        transaction = (
+            await session.execute(select(Transaction).where(Transaction.id == transaction_id).with_for_update())
+        ).scalars().first()
+        if (
+            wallet is None
+            or transaction is None
+            or transaction.status != TransactionStatus.PENDING
+            or transaction.type not in DEPOSIT_TYPES
+            or Decimal(transaction.amount) != expected_amount
+            or transaction.currency != expected_currency
+            or (transaction.type == TransactionType.DEPOSIT_CRYPTO) != (expected_rate is not None)
+        ):
+            raise AdminAuthorizationError("Transaction changed before approval.")
+
+        await consume_approved_request(
+            session,
+            approval_request_id=request_id,
+            action="wallet.adjust",
+            target_type="transaction",
+            target_id=request.target_id,
+            payload=request.target_id.encode("ascii"),
+        )
+        await _apply_wallet_credit(
+            session,
+            transaction=transaction,
+            wallet=wallet,
+            actor_id=actor_id,
+            credit=expected_credit,
+        )
+        await session.commit()
+        return transaction_id, expected_credit
 
 
 @transactions_router.callback_query(F.data.startswith("txac:"))
@@ -354,7 +521,7 @@ async def approve_transaction(callback: CallbackQuery):
     try:
         _, raw_transaction_id, nonce = callback.data.split(":", 2)
         transaction_id = int(raw_transaction_id)
-        credit = await _approve_transaction(
+        result = await _approve_transaction(
             transaction_id,
             callback.from_user.id,
             callback.message.chat.id,
@@ -371,22 +538,96 @@ async def approve_transaction(callback: CallbackQuery):
         logger.error("Transaction approval failed: %s", exc, exc_info=True)
         await callback.answer(get_text(lang, "db_error"), show_alert=True)
         return
-    await callback.message.edit_text(
-        get_text(lang, "transaction_approved").format(id=transaction_id, amount=f"{credit:,.0f}"),
-        reply_markup=InlineKeyboardMarkup(
-            inline_keyboard=[[InlineKeyboardButton(text=get_text(lang, "back"), callback_data="transactions_pending_0")]]
-        ),
-        parse_mode="HTML",
+    if isinstance(result, PendingWalletApproval):
+        await callback.bot.send_message(
+            chat_id=int(settings.ADMIN_GROUP_CHAT_ID),
+            text=get_text(lang, "transaction_dual_group_notice").format(
+                id=result.transaction_id,
+                amount=f"{result.credit:,.0f}",
+            ),
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[[InlineKeyboardButton(
+                    text=get_text(lang, "transaction_dual_approve_btn"),
+                    callback_data=f"txdual:{result.request_id}",
+                )]]
+            ),
+            parse_mode="HTML",
+        )
+        await _edit_transaction_message(
+            callback.message,
+            get_text(lang, "transaction_dual_pending").format(id=result.transaction_id),
+            parse_mode="HTML",
+        )
+        await callback.answer()
+        return
+
+    credit = result
+    card_transfer_updated = await refresh_card_transfer_notifications(
+        callback.bot,
+        transaction_id,
     )
+    if not card_transfer_updated:
+        await _edit_transaction_message(
+            callback.message,
+            get_text(lang, "transaction_approved").format(id=transaction_id, amount=f"{credit:,.0f}"),
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[[InlineKeyboardButton(text=get_text(lang, "back"), callback_data="transactions_pending_0")]]
+            ),
+            parse_mode="HTML",
+        )
     await callback.answer()
 
 
-@transactions_router.callback_query(F.data.startswith("transaction_deny_confirm_"))
+@transactions_router.callback_query(F.data.startswith("txdual:"))
+async def approve_transaction_as_second_admin(callback: CallbackQuery):
+    lang = await _lang(callback.from_user.id)
+    if str(callback.message.chat.id) != str(settings.ADMIN_GROUP_CHAT_ID):
+        await callback.answer(get_text(lang, "transaction_cannot_review"), show_alert=True)
+        return
+    try:
+        request_id = int(callback.data.removeprefix("txdual:"))
+        transaction_id, credit = await _approve_pending_wallet_request(request_id, callback.from_user.id)
+    except (AdminAuthorizationError, ValueError):
+        await record_admin_audit(
+            actor_telegram_id=callback.from_user.id,
+            action="transaction_second_approval_rejected",
+            target_type="approval_request",
+            target_id=callback.data.removeprefix("txdual:")[:20],
+            details={"chat_id": callback.message.chat.id},
+        )
+        await callback.answer(get_text(lang, "transaction_cannot_review"), show_alert=True)
+        return
+    card_transfer_updated = await refresh_card_transfer_notifications(
+        callback.bot,
+        transaction_id,
+    )
+    if not card_transfer_updated:
+        await _edit_transaction_message(
+            callback.message,
+            get_text(lang, "transaction_approved").format(id=transaction_id, amount=f"{credit:,.0f}"),
+            parse_mode="HTML",
+        )
+    await callback.answer()
+
+
+@transactions_router.callback_query(F.data.startswith("txdc:"))
 async def deny_transaction(callback: CallbackQuery):
     lang = await _lang(callback.from_user.id)
-    transaction_id = int(callback.data.removeprefix("transaction_deny_confirm_"))
     try:
+        _, raw_transaction_id, nonce = callback.data.split(":", 2)
+        transaction_id = int(raw_transaction_id)
         async with AsyncSessionLocal() as session:
+            if settings.ADMIN_RBAC_ENABLED:
+                await require_action_role(session, callback.from_user.id, "transaction.review")
+            await consume_action_nonce(
+                session,
+                nonce=nonce,
+                actor_telegram_id=callback.from_user.id,
+                chat_id=callback.message.chat.id,
+                action="transaction.review",
+                target_type="transaction",
+                target_id=transaction_id,
+            )
             initial = await session.get(Transaction, transaction_id)
             if initial is None:
                 raise ValueError("not_found")
@@ -422,6 +663,9 @@ async def deny_transaction(callback: CallbackQuery):
                 target_id=transaction_id,
             )
             await session.commit()
+    except (AdminAuthorizationError, AttributeError):
+        await callback.answer(get_text(lang, "transaction_cannot_review"), show_alert=True)
+        return
     except ValueError as exc:
         key = "transaction_not_pending" if str(exc) == "not_pending" else "transaction_cannot_review"
         await callback.answer(get_text(lang, key), show_alert=True)
@@ -430,13 +674,19 @@ async def deny_transaction(callback: CallbackQuery):
         logger.error("Transaction denial failed: %s", exc, exc_info=True)
         await callback.answer(get_text(lang, "db_error"), show_alert=True)
         return
-    await callback.message.edit_text(
-        get_text(lang, "transaction_denied").format(id=transaction_id),
-        reply_markup=InlineKeyboardMarkup(
-            inline_keyboard=[[InlineKeyboardButton(text=get_text(lang, "back"), callback_data="transactions_pending_0")]]
-        ),
-        parse_mode="HTML",
+    card_transfer_updated = await refresh_card_transfer_notifications(
+        callback.bot,
+        transaction_id,
     )
+    if not card_transfer_updated:
+        await _edit_transaction_message(
+            callback.message,
+            get_text(lang, "transaction_denied").format(id=transaction_id),
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[[InlineKeyboardButton(text=get_text(lang, "back"), callback_data="transactions_pending_0")]]
+            ),
+            parse_mode="HTML",
+        )
     await callback.answer()
 
 
@@ -538,6 +788,58 @@ async def _send_pdf(message: Message, actor_id: int, lang: str, start_utc: datet
     )
 
 
+def _transaction_report_snapshot(start_utc: datetime, end_utc: datetime, lang: str) -> str:
+    return json.dumps(
+        {"end": end_utc.isoformat(), "lang": lang, "start": start_utc.isoformat()},
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+
+
+async def _request_or_send_transaction_report(
+    message: Message,
+    *,
+    actor_id: int,
+    lang: str,
+    start_utc: datetime,
+    end_utc: datetime,
+) -> None:
+    if not settings.ADMIN_DUAL_APPROVAL_ENABLED:
+        await _send_pdf(message, actor_id, lang, start_utc, end_utc)
+        return
+    snapshot = _transaction_report_snapshot(start_utc, end_utc, lang)
+    async with AsyncSessionLocal() as session:
+        request = await create_approval_request(
+            session,
+            actor_telegram_id=actor_id,
+            action="report.bulk_export",
+            target_type="transaction_report",
+            target_id=snapshot,
+            payload=snapshot.encode("ascii"),
+        )
+        await add_admin_audit(
+            session,
+            actor_telegram_id=actor_id,
+            action="transaction_report_requested",
+            target_type="transaction_report",
+            target_id=request.id,
+            details={"start": start_utc, "end": end_utc},
+        )
+        await session.commit()
+    await message.bot.send_message(
+        chat_id=int(settings.ADMIN_GROUP_CHAT_ID),
+        text=get_text(lang, "transaction_report_dual_group_notice"),
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[[InlineKeyboardButton(
+                text=get_text(lang, "transaction_report_dual_approve_btn"),
+                callback_data=f"repdual:{request.id}",
+            )]]
+        ),
+    )
+    await message.answer(get_text(lang, "transaction_report_dual_pending"))
+
+
 @transactions_router.callback_query(F.data.startswith("transaction_report_range_"))
 async def transaction_report_range(callback: CallbackQuery, state: FSMContext):
     lang = await _lang(callback.from_user.id)
@@ -554,7 +856,13 @@ async def transaction_report_range(callback: CallbackQuery, state: FSMContext):
         return
     try:
         start_utc, end_utc = _preset_range(preset)
-        await _send_pdf(callback.message, callback.from_user.id, lang, start_utc, end_utc)
+        await _request_or_send_transaction_report(
+            callback.message,
+            actor_id=callback.from_user.id,
+            lang=lang,
+            start_utc=start_utc,
+            end_utc=end_utc,
+        )
     except Exception as exc:
         logger.error("Transaction PDF failed: %s", exc, exc_info=True)
         await callback.answer(get_text(lang, "transaction_report_failed"), show_alert=True)
@@ -585,7 +893,13 @@ async def custom_transaction_report_range(message: Message, state: FSMContext):
         )
         return
     try:
-        await _send_pdf(message, message.from_user.id, lang, start_utc, end_utc)
+        await _request_or_send_transaction_report(
+            message,
+            actor_id=message.from_user.id,
+            lang=lang,
+            start_utc=start_utc,
+            end_utc=end_utc,
+        )
     except Exception as exc:
         logger.error("Custom transaction PDF failed: %s", exc, exc_info=True)
         await message.answer(
@@ -596,3 +910,64 @@ async def custom_transaction_report_range(message: Message, state: FSMContext):
         )
         return
     await state.clear()
+
+
+@transactions_router.callback_query(F.data.startswith("repdual:"))
+async def approve_transaction_report_export(callback: CallbackQuery):
+    lang = await _lang(callback.from_user.id)
+    if str(callback.message.chat.id) != str(settings.ADMIN_GROUP_CHAT_ID):
+        await callback.answer(get_text(lang, "transaction_report_failed"), show_alert=True)
+        return
+    raw_request_id = callback.data.removeprefix("repdual:")
+    try:
+        request_id = int(raw_request_id)
+        async with AsyncSessionLocal() as session:
+            request = await session.get(AdminApprovalRequest, request_id)
+            if (
+                request is None
+                or request.action != "report.bulk_export"
+                or request.target_type != "transaction_report"
+            ):
+                raise AdminAuthorizationError("Approval request rejected.")
+            snapshot = json.loads(request.target_id)
+            start_utc = datetime.fromisoformat(snapshot["start"])
+            end_utc = datetime.fromisoformat(snapshot["end"])
+            report_lang = snapshot["lang"]
+            if report_lang not in {"fa", "en"} or start_utc.tzinfo is None or end_utc.tzinfo is None:
+                raise AdminAuthorizationError("Report approval payload rejected.")
+            approved = await approve_request(
+                session,
+                approval_request_id=request_id,
+                actor_telegram_id=callback.from_user.id,
+                payload=request.target_id.encode("ascii"),
+            )
+            if not approved:
+                raise AdminAuthorizationError("Second approval required.")
+            await _send_pdf(
+                callback.message,
+                callback.from_user.id,
+                report_lang,
+                start_utc,
+                end_utc,
+            )
+            await consume_approved_request(
+                session,
+                approval_request_id=request_id,
+                action="report.bulk_export",
+                target_type="transaction_report",
+                target_id=request.target_id,
+                payload=request.target_id.encode("ascii"),
+            )
+            await session.commit()
+    except (AdminAuthorizationError, KeyError, TypeError, ValueError, json.JSONDecodeError):
+        await record_admin_audit(
+            actor_telegram_id=callback.from_user.id,
+            action="transaction_report_approval_rejected",
+            target_type="approval_request",
+            target_id=raw_request_id[:20],
+            details={"chat_id": callback.message.chat.id},
+        )
+        await callback.answer(get_text(lang, "transaction_report_failed"), show_alert=True)
+        return
+    await callback.message.edit_text(get_text(report_lang, "transaction_report_ready").format(count="—"))
+    await callback.answer()

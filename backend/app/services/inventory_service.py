@@ -4,7 +4,7 @@ from decimal import Decimal
 from fastapi import HTTPException
 from sqlalchemy import or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import contains_eager
 
 from app.models import (
     InventoryItem,
@@ -12,6 +12,7 @@ from app.models import (
     Notification,
     Order,
     OrderStatus,
+    Product,
     ProductVariant,
     Transaction,
     TransactionStatus,
@@ -20,10 +21,27 @@ from app.models import (
     Wallet,
     utcnow,
 )
+from app.services.catalog_service import canonical_price_label
+from app.core.money import quantized_decimal
+
+
+_WALLET_LIMIT = Decimal("9999999999999999.99")
 
 
 def _money(value) -> Decimal:
-    return Decimal(str(value)).quantize(Decimal("0.01"))
+    return quantized_decimal(
+        value,
+        Decimal("0.01"),
+        minimum=-_WALLET_LIMIT,
+        maximum=_WALLET_LIMIT,
+    )
+
+
+def _snapshot_text(value: object, *, max_length: int) -> str:
+    text_value = str(value or "").strip()
+    if not text_value or len(text_value) > max_length:
+        raise HTTPException(status_code=409, detail="Product data is not ready for sale.")
+    return text_value
 
 
 async def _existing_idempotent_order(
@@ -74,23 +92,7 @@ async def fulfill_wallet_order(
         if existing_order:
             return existing_order
 
-        # Validate the requested product variant
-        variant_result = await db.execute(
-            select(ProductVariant)
-            .options(selectinload(ProductVariant.product))
-            .where(
-                ProductVariant.id == variant_id,
-                ProductVariant.product_id == product_id,
-                ProductVariant.is_active.is_(True),
-            )
-        )
-        variant = variant_result.scalars().first()
-        if not variant or not variant.product or not variant.product.is_active:
-            raise HTTPException(status_code=404, detail="Product variant not found.")
-
-        # DETERMINISTIC LOCKING ORDER: 
-        # Always acquire the lock on the Wallet BEFORE the InventoryItem. 
-        # This prevents transaction deadlocks across concurrent requests.
+        # Lock order is wallet, catalog rows, then inventory.
         wallet_result = await db.execute(
             select(Wallet).where(Wallet.user_id == user.id).with_for_update()
         )
@@ -107,9 +109,32 @@ async def fulfill_wallet_order(
             await db.commit()
             return existing_order
 
+        variant_result = await db.execute(
+            select(ProductVariant)
+            .join(Product, Product.id == ProductVariant.product_id)
+            .options(contains_eager(ProductVariant.product))
+            .where(
+                ProductVariant.id == variant_id,
+                ProductVariant.product_id == product_id,
+                ProductVariant.is_active.is_(True),
+                Product.is_active.is_(True),
+            )
+            .with_for_update(read=True, of=(ProductVariant, Product))
+        )
+        variant = variant_result.scalars().first()
+        if not variant or not variant.product:
+            raise HTTPException(status_code=404, detail="Product variant not found.")
+
         price = _money(variant.raw_price)
+        if price <= 0:
+            raise HTTPException(status_code=409, detail="Product price is not valid.")
         if wallet.balance < price:
             raise HTTPException(status_code=400, detail="Insufficient wallet balance.")
+
+        product_title_snapshot = _snapshot_text(variant.product.title, max_length=180)
+        product_brand_snapshot = _snapshot_text(variant.product.brand, max_length=180)
+        variant_duration_snapshot = _snapshot_text(variant.duration, max_length=120)
+        variant_price_label_snapshot = canonical_price_label(price)
 
         now = utcnow()
         await db.execute(
@@ -136,6 +161,11 @@ async def fulfill_wallet_order(
                     InventoryItem.expires_at > now,
                 ),
             )
+            .order_by(
+                InventoryItem.expires_at.asc().nulls_last(),
+                InventoryItem.created_at.asc(),
+                InventoryItem.id.asc(),
+            )
             .with_for_update(skip_locked=True)
             .limit(1)
         )
@@ -157,6 +187,17 @@ async def fulfill_wallet_order(
             variant_id=variant_id,
             inventory_item_id=item.id,
             total_amount=price,
+            product_title_snapshot=product_title_snapshot,
+            product_brand_snapshot=product_brand_snapshot,
+            variant_duration_snapshot=variant_duration_snapshot,
+            variant_price_label_snapshot=variant_price_label_snapshot,
+            currency_snapshot="IRR",
+            unit_price_amount=price,
+            tax_amount=Decimal("0.00"),
+            fee_amount=Decimal("0.00"),
+            total_amount_snapshot=price,
+            snapshot_state="complete",
+            snapshot_quarantine_reason=None,
             idempotency_key=idempotency_key,
             status=OrderStatus.ACTIVE,
         )
@@ -171,7 +212,7 @@ async def fulfill_wallet_order(
                 type=TransactionType.PURCHASE,
                 status=TransactionStatus.SUCCESS,
                 reference_id=public_id,
-                description=f"Purchase: {variant.product.brand} {variant.duration}",
+                description=f"Purchase: {product_brand_snapshot} {variant_duration_snapshot}",
             )
         )
         
@@ -179,7 +220,7 @@ async def fulfill_wallet_order(
             Notification(
                 user_id=user.id,
                 title="سفارش جدید",
-                description=f"سفارش {variant.product.brand} با موفقیت فعال شد.",
+                description=f"سفارش {product_brand_snapshot} با موفقیت فعال شد.",
             )
         )
 

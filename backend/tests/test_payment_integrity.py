@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 from fastapi import HTTPException
+from sqlalchemy.dialects import postgresql
 
 from app.api import payments
 from app.models import ItemStatus, TransactionStatus, TransactionType
@@ -33,8 +34,10 @@ class FakeSession:
         self.commit_count = 0
         self.rollback_count = 0
         self.added = []
+        self.statements = []
 
     async def execute(self, statement):
+        self.statements.append(statement)
         if not self.results:
             raise AssertionError(f"Unexpected database statement: {statement}")
         return FakeResult(self.results.pop(0))
@@ -56,14 +59,51 @@ class FakeSession:
 
 class FakeRequest:
     def __init__(self, payload, headers=None):
-        self._body = json.dumps(payload).encode()
-        self.headers = headers or {}
+        self._body = payload if isinstance(payload, bytes) else json.dumps(payload).encode()
+        self.headers = headers or {"content-type": "application/json"}
 
     async def body(self):
         return self._body
 
     async def form(self):
         return {}
+
+
+def test_callback_parser_requires_object_json_and_parses_original_form_body():
+    with pytest.raises(HTTPException) as list_error:
+        payments._parse_callback_object(b"[]", "application/json", allow_form=True)
+    assert list_error.value.status_code == 400
+
+    assert payments._parse_callback_object(
+        b"authority=auth_12345678&hashid=9&status=100",
+        "application/x-www-form-urlencoded; charset=utf-8",
+        allow_form=True,
+    ) == {"authority": "auth_12345678", "hashid": "9", "status": "100"}
+
+
+def test_callback_parser_rejects_wrong_type_and_duplicate_form_fields():
+    with pytest.raises(HTTPException) as type_error:
+        payments._parse_callback_object(b"{}", "text/plain", allow_form=True)
+    assert type_error.value.status_code == 415
+    with pytest.raises(HTTPException) as duplicate_error:
+        payments._parse_callback_object(
+            b"status=100&status=failed",
+            "application/x-www-form-urlencoded",
+            allow_form=True,
+        )
+    assert duplicate_error.value.status_code == 400
+
+
+def test_tetra_callback_parses_form_from_already_read_body(monkeypatch):
+    request = FakeRequest(
+        b"authority=auth_12345678&hashid=9&status=cancelled",
+        {"content-type": "application/x-www-form-urlencoded"},
+    )
+    monkeypatch.setattr(payments.settings, "ENVIRONMENT", "test")
+    monkeypatch.setattr(payments.settings, "TETRA98_API_KEY", "test-key")
+    monkeypatch.setattr(payments.settings, "TETRA98_WEBHOOK_SECRET", "")
+    result = run(payments.tetra98_payment_callback(request, FakeSession([])))
+    assert result["status"] == "failed"
 
 
 class FakeHttpResponse:
@@ -536,6 +576,11 @@ def test_checkout_idempotency_returns_same_order_without_second_sale():
         product_id="prod",
         variant_id="variant",
         idempotency_key="checkout-key-123",
+        product_title_snapshot="Frozen Product",
+        product_brand_snapshot="Frozen Brand",
+        variant_duration_snapshot="Frozen Duration",
+        unit_price_amount=Decimal("125.00"),
+        total_amount_snapshot=Decimal("125.00"),
     )
     db = FakeSession([existing])
     user = SimpleNamespace(id=44)
@@ -551,6 +596,11 @@ def test_checkout_idempotency_returns_same_order_without_second_sale():
     )
 
     assert order is existing
+    assert order.product_title_snapshot == "Frozen Product"
+    assert order.product_brand_snapshot == "Frozen Brand"
+    assert order.variant_duration_snapshot == "Frozen Duration"
+    assert order.unit_price_amount == Decimal("125.00")
+    assert order.total_amount_snapshot == Decimal("125.00")
     assert db.commit_count == 0
     assert db.added == []
 
@@ -581,8 +631,13 @@ def test_checkout_rejects_reused_key_for_other_product():
     assert db.rollback_count == 1
 
 
-def test_checkout_assigns_one_live_item_and_uses_long_public_id(monkeypatch):
-    product = SimpleNamespace(id="prod", is_active=True, brand="Brand")
+def test_checkout_assigns_fifo_item_and_freezes_commercial_snapshot(monkeypatch):
+    product = SimpleNamespace(
+        id="prod",
+        is_active=True,
+        title="Product Title",
+        brand="Brand",
+    )
     variant = SimpleNamespace(
         id="variant",
         product_id="prod",
@@ -590,6 +645,7 @@ def test_checkout_assigns_one_live_item_and_uses_long_public_id(monkeypatch):
         product=product,
         raw_price=Decimal("250.00"),
         duration="1 month",
+        price_label="250 Toman",
     )
     wallet = SimpleNamespace(id=2, user_id=44, balance=Decimal("1000.00"))
     item = SimpleNamespace(
@@ -598,7 +654,7 @@ def test_checkout_assigns_one_live_item_and_uses_long_public_id(monkeypatch):
         assigned_to_user_id=None,
         assigned_at=None,
     )
-    db = FakeSession([None, variant, wallet, None, None, item, None])
+    db = FakeSession([None, wallet, None, variant, None, item, None])
     user = SimpleNamespace(id=44)
     monkeypatch.setattr(inventory_service.secrets, "token_hex", lambda size: "a" * (size * 2))
 
@@ -618,3 +674,61 @@ def test_checkout_assigns_one_live_item_and_uses_long_public_id(monkeypatch):
     assert item.assigned_to_user_id == 44
     assert order.idempotency_key == "checkout-key-123"
     assert order.public_id == f"KP-{'A' * 32}"
+    assert order.product_title_snapshot == "Product Title"
+    assert order.product_brand_snapshot == "Brand"
+    assert order.variant_duration_snapshot == "1 month"
+    assert order.variant_price_label_snapshot == "250"
+    assert order.currency_snapshot == "IRR"
+    assert order.unit_price_amount == Decimal("250.00")
+    assert order.tax_amount == Decimal("0.00")
+    assert order.fee_amount == Decimal("0.00")
+    assert order.total_amount_snapshot == Decimal("250.00")
+    assert order.snapshot_state == "complete"
+    assert order.snapshot_quarantine_reason is None
+    wallet_sql = str(db.statements[1].compile(dialect=postgresql.dialect()))
+    catalog_sql = str(db.statements[3].compile(dialect=postgresql.dialect()))
+    inventory_sql = str(db.statements[5].compile(dialect=postgresql.dialect()))
+    assert "FROM wallets" in wallet_sql and "FOR UPDATE" in wallet_sql
+    assert "JOIN products" in catalog_sql
+    assert "FOR SHARE OF product_variants, products" in catalog_sql
+    assert "inventory_items.expires_at ASC NULLS LAST" in inventory_sql
+    assert "inventory_items.created_at ASC" in inventory_sql
+    assert "inventory_items.id ASC" in inventory_sql
+    assert inventory_sql.index("expires_at ASC NULLS LAST") < inventory_sql.index(
+        "created_at ASC"
+    ) < inventory_sql.index("inventory_items.id ASC")
+
+
+def test_checkout_rejects_non_positive_legacy_price() -> None:
+    product = SimpleNamespace(
+        id="prod",
+        is_active=True,
+        title="Product Title",
+        brand="Brand",
+    )
+    variant = SimpleNamespace(
+        id="variant",
+        product_id="prod",
+        is_active=True,
+        product=product,
+        raw_price=Decimal("0.00"),
+        duration="1 month",
+        price_label="0",
+    )
+    wallet = SimpleNamespace(id=2, user_id=44, balance=Decimal("1000.00"))
+    db = FakeSession([None, wallet, None, variant])
+
+    with pytest.raises(HTTPException) as error:
+        run(
+            inventory_service.fulfill_wallet_order(
+                db,
+                SimpleNamespace(id=44),
+                "prod",
+                "variant",
+                idempotency_key="checkout-key-123",
+            )
+        )
+
+    assert error.value.status_code == 409
+    assert wallet.balance == Decimal("1000.00")
+    assert db.rollback_count == 1

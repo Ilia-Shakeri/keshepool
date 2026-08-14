@@ -24,6 +24,8 @@ test("notification panel uses an accessible dialog and explicit mark-read contro
   assert.match(home, /<DialogDescription/);
   assert.match(home, /aria-label="بستن اعلان‌ها"/);
   assert.match(home, /خواندن همه اعلان‌ها/);
+  assert.match(home, /markNotificationsReadThrough\(throughId\)/);
+  assert.doesNotMatch(home, /markNotificationsRead\(\)/);
   assert.match(home, /notificationLoading/);
   assert.match(home, /notificationError/);
 });
