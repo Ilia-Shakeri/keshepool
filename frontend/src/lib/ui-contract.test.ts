@@ -28,6 +28,15 @@ test("notification panel uses an accessible dialog and explicit mark-read contro
   assert.doesNotMatch(home, /markNotificationsRead\(\)/);
   assert.match(home, /notificationLoading/);
   assert.match(home, /notificationError/);
+  assert.doesNotMatch(home, /\{notification\.description\}/);
+  assert.match(home, /\? title : "اعلان جدید"/);
+});
+
+test("bank card keeps only centered card number and icon copy control", () => {
+  const finance = source("../app/finance/page.tsx");
+  assert.match(finance, /items-center justify-center gap-3 text-white/);
+  assert.match(finance, /aria-label=\{copiedCard \? "شماره کارت کپی شد" : "کپی شماره کارت"\}/);
+  assert.doesNotMatch(finance, /BANK CARD|CARD HOLDER|<Wifi|<ShieldCheck/);
 });
 
 test("cashout copy avoids contact promise and warns against secrets", () => {

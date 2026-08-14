@@ -90,7 +90,7 @@ export default function ProductDetailModal({ isOpen, onClose, product, onProceed
           <button
             type="button"
             onClick={onClose}
-            className="p-2 rounded-full transition-colors hover:bg-white/10 active:scale-95"
+            className="grid size-11 place-items-center rounded-full p-0 leading-none transition-colors hover:bg-white/10 active:scale-95"
             style={{ background: "rgba(255,255,255,0.07)", border: "1px solid rgba(255,255,255,0.1)" }}
           >
             <ChevronRight className="w-4 h-4 text-[#F5F5F5]/80" />

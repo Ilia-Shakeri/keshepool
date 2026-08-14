@@ -148,7 +148,7 @@ export default function CheckoutModal({ isOpen, setIsOpen, product, variant, wal
           <DialogDescription className="sr-only">اطلاعات سفارش و دسترسی خریداری‌شده</DialogDescription>
           <DialogHeader className="p-4 sticky top-0 z-20" style={HEADER_STYLE}>
             <div className="flex items-center gap-3">
-              <button type="button" onClick={handleClose} className="p-2 rounded-full hover:bg-white/10 transition-colors" style={BACK_BTN_STYLE} aria-label="بستن نتیجه سفارش">
+              <button type="button" onClick={handleClose} className="grid size-11 place-items-center rounded-full p-0 leading-none transition-colors hover:bg-white/10" style={BACK_BTN_STYLE} aria-label="بستن نتیجه سفارش">
                 <ChevronRight className="w-5 h-5" />
               </button>
               <DialogTitle className="text-lg font-bold">سفارش ثبت شد</DialogTitle>
@@ -217,7 +217,7 @@ export default function CheckoutModal({ isOpen, setIsOpen, product, variant, wal
         <DialogDescription className="sr-only">بررسی محصول، موجودی کیف پول و ثبت سفارش</DialogDescription>
         <DialogHeader className="p-4 sticky top-0 z-20" style={HEADER_STYLE}>
           <div className="flex items-center gap-3">
-            <button type="button" onClick={handleClose} disabled={isSubmitting} className="p-2 rounded-full hover:bg-white/10 transition-colors disabled:opacity-40" style={BACK_BTN_STYLE}>
+            <button type="button" onClick={handleClose} disabled={isSubmitting} className="grid size-11 place-items-center rounded-full p-0 leading-none transition-colors hover:bg-white/10 disabled:opacity-40" style={BACK_BTN_STYLE} aria-label="بستن تسویه حساب">
               <ChevronRight className="w-5 h-5" />
             </button>
             <DialogTitle className="text-lg font-bold">تسویه حساب</DialogTitle>

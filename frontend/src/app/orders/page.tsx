@@ -264,11 +264,11 @@ export default function OrdersPage() {
             className="flex flex-row justify-between items-center px-5 py-4 sticky top-0 z-20"
             style={{ background: "rgba(10,10,11,0.9)", backdropFilter: "blur(20px)", borderBottom: "1px solid rgba(255,255,255,0.07)" }}
           >
-            <button type="button" onClick={closeOrder} className="p-2 rounded-full hover:bg-white/10 transition-colors" style={{ background: "rgba(255,255,255,0.07)" }} aria-label="بستن جزئیات سفارش">
+            <button type="button" onClick={closeOrder} className="grid size-11 place-items-center rounded-full p-0 leading-none transition-colors hover:bg-white/10" style={{ background: "rgba(255,255,255,0.07)", border: "1px solid rgba(255,255,255,0.1)" }} aria-label="بستن جزئیات سفارش">
               <ChevronRight className="w-4 h-4" />
             </button>
             <h2 className="text-base font-bold">جزئیات سفارش</h2>
-            <button type="button" onClick={openSupport} className="p-2 rounded-full hover:bg-white/10 transition-colors" style={{ background: "rgba(255,255,255,0.07)" }} aria-label="ارتباط با پشتیبانی">
+            <button type="button" onClick={openSupport} className="grid size-11 place-items-center rounded-full p-0 leading-none transition-colors hover:bg-white/10" style={{ background: "rgba(255,255,255,0.07)", border: "1px solid rgba(255,255,255,0.1)" }} aria-label="ارتباط با پشتیبانی">
               <Headphones className="w-4 h-4 text-[#F5F5F5]/60" />
             </button>
           </DialogHeader>

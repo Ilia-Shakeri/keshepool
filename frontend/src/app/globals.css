@@ -232,6 +232,11 @@
   button, a {
     -webkit-tap-highlight-color: transparent;
   }
+
+  button > svg:only-child {
+    display: block;
+    margin-inline: auto;
+  }
 }
 
 /* Custom layout utility configurations */

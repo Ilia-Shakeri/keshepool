@@ -67,6 +67,8 @@ export default function Home() {
 
   const hotItems = useMemo(() => products.slice(0, 6), [products]);
   const unreadCount = notifications.filter((n) => !n.isRead).length;
+  const notificationTitle = (title: string) =>
+    /[\u0600-\u06ff]/.test(title) ? title : "اعلان جدید";
 
   const markAllRead = useCallback(async () => {
     if (unreadCount === 0 || isMarkingRead) return;
@@ -148,16 +150,12 @@ export default function Home() {
           className="max-h-[min(82dvh,40rem)] overflow-hidden rounded-3xl border border-white/15 bg-[#111318] p-0 text-[#F5F5F5] shadow-[0_28px_90px_rgba(0,0,0,0.82)] sm:max-w-md"
         >
           <div className="flex items-start justify-between gap-4 border-b border-white/10 px-5 py-4">
-            <div>
+            <div className="min-w-0">
               <DialogTitle className="text-base font-black">اعلان‌ها</DialogTitle>
-              <DialogDescription className="mt-1 text-xs text-[#F5F5F5]/55">
-                {unreadCount > 0
-                  ? `${toPersianDigits(String(unreadCount))} اعلان خوانده‌نشده`
-                  : "همه اعلان‌ها خوانده شده‌اند."}
-              </DialogDescription>
+              <DialogDescription className="sr-only">فهرست اعلان‌های کاربر</DialogDescription>
             </div>
             <DialogClose
-              className="grid size-9 shrink-0 place-items-center rounded-full border border-white/10 bg-white/5"
+              className="grid size-11 shrink-0 place-items-center rounded-full border border-white/10 bg-white/5 p-0 leading-none"
               aria-label="بستن اعلان‌ها"
             >
               <X className="size-4" aria-hidden="true" />
@@ -200,10 +198,7 @@ export default function Home() {
                       <span className="mt-1.5 size-1.5 shrink-0 rounded-full bg-[#E63946]" />
                     )}
                     <div className="min-w-0">
-                      <h3 className="text-sm font-bold">{notification.title}</h3>
-                      <p className="mt-1 text-xs leading-6 text-[#F5F5F5]/65">
-                        {notification.description}
-                      </p>
+                      <h3 className="text-sm font-bold">{notificationTitle(notification.title)}</h3>
                       <time className="mt-2 block text-[10px] text-[#F5F5F5]/35">
                         {new Intl.DateTimeFormat("fa-IR", {
                           dateStyle: "medium",

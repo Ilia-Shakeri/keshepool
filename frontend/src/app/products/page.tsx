@@ -478,7 +478,7 @@ function ProductsContent() {
                 نتیجه‌ها با جستجو و دسته‌بندی فعلی ترکیب می‌شوند.
               </DialogDescription>
             </div>
-            <button type="button" onClick={() => setIsFilterOpen(false)} className="flex size-11 items-center justify-center rounded-full bg-white/[0.06]" aria-label="بستن فیلتر">
+            <button type="button" onClick={() => setIsFilterOpen(false)} className="grid size-11 place-items-center rounded-full border border-white/10 bg-white/[0.06] p-0 leading-none" aria-label="بستن فیلتر">
               <X className="size-4" />
             </button>
           </div>

@@ -1,6 +1,7 @@
 import asyncio
 import hashlib
 import hmac
+import inspect
 import json
 import time
 import urllib.parse
@@ -9,7 +10,13 @@ import pytest
 from fastapi import HTTPException
 
 from app.core import security
+from app.api import products
 from app.services.cache_service import CacheRead
+
+
+def test_checkout_uses_normal_signed_session_window():
+    dependency = inspect.signature(products.checkout_with_wallet).parameters["user"].default
+    assert dependency.dependency is products.current_user
 
 
 def _signed_init_data(auth_date: int) -> str:
